@@ -1,0 +1,198 @@
+{
+  "apartment": [
+    {
+      "url": "https://res.cloudinary.com/dgvteiiku/image/upload/v1778413183/seed/properties/seed/properties/apartment/1502672260266-1c1ef2d93688.jpg",
+      "publicId": "seed/properties/seed/properties/apartment/1502672260266-1c1ef2d93688"
+    },
+    {
+      "url": "https://res.cloudinary.com/dgvteiiku/image/upload/v1778413185/seed/properties/seed/properties/apartment/1560448204-e02f11c3d0e2.jpg",
+      "publicId": "seed/properties/seed/properties/apartment/1560448204-e02f11c3d0e2"
+    },
+    {
+      "url": "https://res.cloudinary.com/dgvteiiku/image/upload/v1778413186/seed/properties/seed/properties/apartment/1522708323590-d24dbb6b0267.jpg",
+      "publicId": "seed/properties/seed/properties/apartment/1522708323590-d24dbb6b0267"
+    },
+    {
+      "url": "https://res.cloudinary.com/dgvteiiku/image/upload/v1778413188/seed/properties/seed/properties/apartment/1484154218962-a197022b5858.jpg",
+      "publicId": "seed/properties/seed/properties/apartment/1484154218962-a197022b5858"
+    },
+    {
+      "url": "https://res.cloudinary.com/dgvteiiku/image/upload/v1778413189/seed/properties/seed/properties/apartment/1493809842364-78817add7ffb.jpg",
+      "publicId": "seed/properties/seed/properties/apartment/1493809842364-78817add7ffb"
+    },
+    {
+      "url": "https://res.cloudinary.com/dgvteiiku/image/upload/v1778413192/seed/properties/seed/properties/apartment/1554995207-c18c203602cb.jpg",
+      "publicId": "seed/properties/seed/properties/apartment/1554995207-c18c203602cb"
+    },
+    {
+      "url": "https://res.cloudinary.com/dgvteiiku/image/upload/v1778413193/seed/properties/seed/properties/apartment/1512917774080-9991f1c4c750.jpg",
+      "publicId": "seed/properties/seed/properties/apartment/1512917774080-9991f1c4c750"
+    }
+  ],
+  "house": [
+    {
+      "url": "https://res.cloudinary.com/dgvteiiku/image/upload/v1778413195/seed/properties/seed/properties/house/1568605114967-8130f3a36994.jpg",
+      "publicId": "seed/properties/seed/properties/house/1568605114967-8130f3a36994"
+    },
+    {
+      "url": "https://res.cloudinary.com/dgvteiiku/image/upload/v1778413197/seed/properties/seed/properties/house/1558618666-fcd25c85cd64.jpg",
+      "publicId": "seed/properties/seed/properties/house/1558618666-fcd25c85cd64"
+    },
+    {
+      "url": "https://res.cloudinary.com/dgvteiiku/image/upload/v1778413200/seed/properties/seed/properties/house/1600585154340-be6161a56a0c.jpg",
+      "publicId": "seed/properties/seed/properties/house/1600585154340-be6161a56a0c"
+    },
+    {
+      "url": "https://res.cloudinary.com/dgvteiiku/image/upload/v1778413202/seed/properties/seed/properties/house/1600596542815-ffad4c1539a9.jpg",
+      "publicId": "seed/properties/seed/properties/house/1600596542815-ffad4c1539a9"
+    },
+    {
+      "url": "https://res.cloudinary.com/dgvteiiku/image/upload/v1778413203/seed/properties/seed/properties/house/1600607687939-ce8a6c25118c.jpg",
+      "publicId": "seed/properties/seed/properties/house/1600607687939-ce8a6c25118c"
+    },
+    {
+      "url": "https://res.cloudinary.com/dgvteiiku/image/upload/v1778413205/seed/properties/seed/properties/house/1583608205776-bfd35f0d9f83.jpg",
+      "publicId": "seed/properties/seed/properties/house/1583608205776-bfd35f0d9f83"
+    },
+    {
+      "url": "https://res.cloudinary.com/dgvteiiku/image/upload/v1778413206/seed/properties/seed/properties/house/1570129477492-45c003edd2be.jpg",
+      "publicId": "seed/properties/seed/properties/house/1570129477492-45c003edd2be"
+    }
+  ],
+  "villa": [
+    {
+      "url": "https://res.cloudinary.com/dgvteiiku/image/upload/v1778413208/seed/properties/seed/properties/villa/1512917774080-9991f1c4c750.jpg",
+      "publicId": "seed/properties/seed/properties/villa/1512917774080-9991f1c4c750"
+    },
+    {
+      "url": "https://res.cloudinary.com/dgvteiiku/image/upload/v1778413212/seed/properties/seed/properties/villa/1600047509807-ba8f99d2cdde.jpg",
+      "publicId": "seed/properties/seed/properties/villa/1600047509807-ba8f99d2cdde"
+    },
+    {
+      "url": "https://res.cloudinary.com/dgvteiiku/image/upload/v1778413215/seed/properties/seed/properties/villa/1582268611958-ebfd161ef9cf.jpg",
+      "publicId": "seed/properties/seed/properties/villa/1582268611958-ebfd161ef9cf"
+    },
+    {
+      "url": "https://res.cloudinary.com/dgvteiiku/image/upload/v1778413217/seed/properties/seed/properties/villa/1600585154526-990dced4db0d.jpg",
+      "publicId": "seed/properties/seed/properties/villa/1600585154526-990dced4db0d"
+    }
+  ],
+  "studio": [
+    {
+      "url": "https://res.cloudinary.com/dgvteiiku/image/upload/v1778413220/seed/properties/seed/properties/studio/1536376072261-38c75010e6c9.jpg",
+      "publicId": "seed/properties/seed/properties/studio/1536376072261-38c75010e6c9"
+    },
+    {
+      "url": "https://res.cloudinary.com/dgvteiiku/image/upload/v1778413222/seed/properties/seed/properties/studio/1505693416388-ac5ce068fe85.jpg",
+      "publicId": "seed/properties/seed/properties/studio/1505693416388-ac5ce068fe85"
+    },
+    {
+      "url": "https://res.cloudinary.com/dgvteiiku/image/upload/v1778413224/seed/properties/seed/properties/studio/1574362848149-11496d93a7c7.jpg",
+      "publicId": "seed/properties/seed/properties/studio/1574362848149-11496d93a7c7"
+    },
+    {
+      "url": "https://res.cloudinary.com/dgvteiiku/image/upload/v1778413225/seed/properties/seed/properties/studio/1631679706909-1844bbd07221.jpg",
+      "publicId": "seed/properties/seed/properties/studio/1631679706909-1844bbd07221"
+    },
+    {
+      "url": "https://res.cloudinary.com/dgvteiiku/image/upload/v1778413226/seed/properties/seed/properties/studio/1598928506311-c55ded91a20c.jpg",
+      "publicId": "seed/properties/seed/properties/studio/1598928506311-c55ded91a20c"
+    }
+  ],
+  "duplex": [
+    {
+      "url": "https://res.cloudinary.com/dgvteiiku/image/upload/v1778413229/seed/properties/seed/properties/duplex/1600566752355-35792bedcfea.jpg",
+      "publicId": "seed/properties/seed/properties/duplex/1600566752355-35792bedcfea"
+    },
+    {
+      "url": "https://res.cloudinary.com/dgvteiiku/image/upload/v1778413236/seed/properties/seed/properties/duplex/1600585154340-be6161a56a0c.jpg",
+      "publicId": "seed/properties/seed/properties/duplex/1600585154340-be6161a56a0c"
+    }
+  ],
+  "land": [
+    {
+      "url": "https://res.cloudinary.com/dgvteiiku/image/upload/v1778413237/seed/properties/seed/properties/land/1500382017468-9049fed747ef.jpg",
+      "publicId": "seed/properties/seed/properties/land/1500382017468-9049fed747ef"
+    },
+    {
+      "url": "https://res.cloudinary.com/dgvteiiku/image/upload/v1778413238/seed/properties/seed/properties/land/1464822759023-fed622ff2c3b.jpg",
+      "publicId": "seed/properties/seed/properties/land/1464822759023-fed622ff2c3b"
+    },
+    {
+      "url": "https://res.cloudinary.com/dgvteiiku/image/upload/v1778413240/seed/properties/seed/properties/land/1416331108676-a22ccb276e35.jpg",
+      "publicId": "seed/properties/seed/properties/land/1416331108676-a22ccb276e35"
+    },
+    {
+      "url": "https://res.cloudinary.com/dgvteiiku/image/upload/v1778413242/seed/properties/seed/properties/land/1500076656116-558758c991c1.jpg",
+      "publicId": "seed/properties/seed/properties/land/1500076656116-558758c991c1"
+    }
+  ],
+  "commercial": [
+    {
+      "url": "https://res.cloudinary.com/dgvteiiku/image/upload/v1778413244/seed/properties/seed/properties/commercial/1497366216548-37526070297c.jpg",
+      "publicId": "seed/properties/seed/properties/commercial/1497366216548-37526070297c"
+    },
+    {
+      "url": "https://res.cloudinary.com/dgvteiiku/image/upload/v1778413245/seed/properties/seed/properties/commercial/1497366754035-f200968a6e72.jpg",
+      "publicId": "seed/properties/seed/properties/commercial/1497366754035-f200968a6e72"
+    },
+    {
+      "url": "https://res.cloudinary.com/dgvteiiku/image/upload/v1778413249/seed/properties/seed/properties/commercial/1504384308090-c894fdcc538d.jpg",
+      "publicId": "seed/properties/seed/properties/commercial/1504384308090-c894fdcc538d"
+    },
+    {
+      "url": "https://res.cloudinary.com/dgvteiiku/image/upload/v1778413251/seed/properties/seed/properties/commercial/1556761175-4b46a572b786.jpg",
+      "publicId": "seed/properties/seed/properties/commercial/1556761175-4b46a572b786"
+    }
+  ],
+  "shortterm": [
+    {
+      "url": "https://res.cloudinary.com/dgvteiiku/image/upload/v1778413257/seed/properties/seed/properties/shortterm/1520250497591-112f2f40a3f4.jpg",
+      "publicId": "seed/properties/seed/properties/shortterm/1520250497591-112f2f40a3f4"
+    },
+    {
+      "url": "https://res.cloudinary.com/dgvteiiku/image/upload/v1778413258/seed/properties/seed/properties/shortterm/1582719508461-905c673771fd.jpg",
+      "publicId": "seed/properties/seed/properties/shortterm/1582719508461-905c673771fd"
+    },
+    {
+      "url": "https://res.cloudinary.com/dgvteiiku/image/upload/v1778413260/seed/properties/seed/properties/shortterm/1571896349842-33c89424de2d.jpg",
+      "publicId": "seed/properties/seed/properties/shortterm/1571896349842-33c89424de2d"
+    },
+    {
+      "url": "https://res.cloudinary.com/dgvteiiku/image/upload/v1778413261/seed/properties/seed/properties/shortterm/1584132967334-10e028bd69f7.jpg",
+      "publicId": "seed/properties/seed/properties/shortterm/1584132967334-10e028bd69f7"
+    },
+    {
+      "url": "https://res.cloudinary.com/dgvteiiku/image/upload/v1778413263/seed/properties/seed/properties/shortterm/1578683010236-d716f9a3f461.jpg",
+      "publicId": "seed/properties/seed/properties/shortterm/1578683010236-d716f9a3f461"
+    }
+  ],
+  "student": [
+    {
+      "url": "https://res.cloudinary.com/dgvteiiku/image/upload/v1778413267/seed/properties/seed/properties/student/1598928506311-c55ded91a20c.jpg",
+      "publicId": "seed/properties/seed/properties/student/1598928506311-c55ded91a20c"
+    },
+    {
+      "url": "https://res.cloudinary.com/dgvteiiku/image/upload/v1778413269/seed/properties/seed/properties/student/1536376072261-38c75010e6c9.jpg",
+      "publicId": "seed/properties/seed/properties/student/1536376072261-38c75010e6c9"
+    },
+    {
+      "url": "https://res.cloudinary.com/dgvteiiku/image/upload/v1778413270/seed/properties/seed/properties/student/1505693416388-ac5ce068fe85.jpg",
+      "publicId": "seed/properties/seed/properties/student/1505693416388-ac5ce068fe85"
+    }
+  ],
+  "exterior": [
+    {
+      "url": "https://res.cloudinary.com/dgvteiiku/image/upload/v1778413273/seed/properties/seed/properties/exterior/1560518883-ce09059eeffa.jpg",
+      "publicId": "seed/properties/seed/properties/exterior/1560518883-ce09059eeffa"
+    },
+    {
+      "url": "https://res.cloudinary.com/dgvteiiku/image/upload/v1778413276/seed/properties/seed/properties/exterior/1600585154340-be6161a56a0c.jpg",
+      "publicId": "seed/properties/seed/properties/exterior/1600585154340-be6161a56a0c"
+    },
+    {
+      "url": "https://res.cloudinary.com/dgvteiiku/image/upload/v1778413278/seed/properties/seed/properties/exterior/1568605114967-8130f3a36994.jpg",
+      "publicId": "seed/properties/seed/properties/exterior/1568605114967-8130f3a36994"
+    }
+  ]
+}

@@ -1,0 +1,67 @@
+import { ConfigService } from '@nestjs/config';
+export declare class EmailService {
+    private readonly configService;
+    private readonly logger;
+    constructor(configService: ConfigService);
+    private get brandName();
+    private get frontendUrl();
+    private get apiUrl();
+    private get supportEmail();
+    private baseParams;
+    sendWelcomeEmail(recipientEmail: string, recipientName?: string): Promise<void>;
+    sendPasswordResetEmail(recipientEmail: string, recipientName: string, resetToken: string): Promise<void>;
+    sendPasswordResetConfirmation(recipientEmail: string, recipientName: string): Promise<void>;
+    sendEmailVerification(recipientEmail: string, recipientName: string, verificationToken: string): Promise<void>;
+    sendOnboardingWelcome(recipientEmail: string, recipientName: string, onboardingUrl: string): Promise<void>;
+    sendOnboardingComplete(recipientEmail: string, recipientName: string, userRole: string): Promise<void>;
+    sendSavedSearchNotification(recipientEmail: string, recipientName: string, searchName: string, newProperties: any[], searchId: string): Promise<void>;
+    sendPropertyRemovedEmail(recipientEmail: string, recipientName: string, propertyTitle: string): Promise<void>;
+    sendPropertyWarningEmail(recipientEmail: string, recipientName: string, propertyTitle: string, warningMessage: string, severity: 'warning' | 'final_warning'): Promise<void>;
+    sendBookingConfirmationEmail(recipientEmail: string, recipientName: string, params: {
+        propertyTitle: string;
+        checkIn: string;
+        checkOut: string;
+        nights: number;
+        totalAmount: number;
+        currency: string;
+        bookingId: string;
+    }): Promise<void>;
+    sendPaymentRequestEmail(recipientEmail: string, recipientName: string, params: {
+        propertyTitle: string;
+        checkIn: string;
+        checkOut: string;
+        totalAmount: number;
+        currency: string;
+        paymentLink: string;
+        expiresInHours: number;
+    }): Promise<void>;
+    sendHostNewBookingEmail(recipientEmail: string, recipientName: string, params: {
+        propertyTitle: string;
+        guestName: string;
+        checkIn: string;
+        checkOut: string;
+        totalAmount: number;
+        currency: string;
+        bookingId: string;
+    }): Promise<void>;
+    private getResendClient;
+    private safeSendMail;
+    private layout;
+    private btn;
+    private display;
+    private buildWelcomeTemplate;
+    private buildPasswordResetTemplate;
+    private buildPasswordResetConfirmationTemplate;
+    private buildVerificationTemplate;
+    private buildOnboardingWelcomeTemplate;
+    private buildOnboardingCompleteTemplate;
+    private buildSavedSearchNotificationTemplate;
+    private buildPropertyRemovedTemplate;
+    private buildPropertyWarningTemplate;
+    private buildBookingConfirmationTemplate;
+    private buildPaymentRequestTemplate;
+    private buildHostNewBookingTemplate;
+    sendNewsletterWelcome(recipientEmail: string): Promise<void>;
+    sendAdminNotificationEmail(recipientEmail: string, recipientName: string, title: string, message: string, link?: string): Promise<void>;
+    private buildAdminNotificationTemplate;
+}
