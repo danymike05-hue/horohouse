@@ -27,6 +27,8 @@ export declare class CreateRoomDto {
     roomType: RoomType;
     maxGuests: number;
     bedCount?: number;
+    quantity?: number;
+    description?: string;
     bedType?: BedType;
     price?: number;
     cleaningFee?: number;

@@ -24,7 +24,7 @@ class SelectRoleDto {
 }
 exports.SelectRoleDto = SelectRoleDto;
 __decorate([
-    (0, class_validator_1.IsEnum)(user_schema_1.UserRole, {
+    (0, class_validator_1.IsIn)(ONBOARDING_ROLES, {
         message: `Role must be one of: ${ONBOARDING_ROLES.join(', ')}`,
     }),
     (0, class_validator_1.IsNotEmpty)(),

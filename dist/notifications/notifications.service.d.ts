@@ -140,6 +140,12 @@ export declare class NotificationsService {
         target: string;
     }>;
     private resolveTargetUsers;
+    notifyAdmins(params: {
+        title: string;
+        message: string;
+        link?: string;
+        metadata?: Record<string, any>;
+    }): Promise<void>;
     getAdminStats(): {
         totalUsers: number;
         totalConnections: number;

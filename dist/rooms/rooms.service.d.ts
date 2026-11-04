@@ -37,7 +37,7 @@ export declare class RoomsService {
     blockRoomDates(roomId: string, dto: BlockRoomDatesDto, user: User): Promise<Room>;
     unblockRoomDates(roomId: string, dto: UnblockRoomDatesDto, user: User): Promise<Room>;
     setIcalUrl(roomId: string, dto: SetIcalUrlDto, user: User): Promise<Room>;
-    syncIcal(roomId: string): Promise<{
+    syncIcal(roomId: string, user?: User): Promise<{
         synced: number;
         roomId: string;
     }>;
@@ -52,6 +52,7 @@ export declare class RoomsService {
         source: string;
     }[]>;
     private fetchUrl;
+    private assertSafeIcalUrl;
     private parseIcalEvents;
     private parseIcalDate;
 }

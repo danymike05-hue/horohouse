@@ -39,6 +39,6 @@ import { NotificationsModule } from '../notifications/notifications.module';
   ],
   controllers: [ChatController],
   providers: [ChatService, CallService, ChatGateway],
-  exports: [ChatService, CallService, ChatGateway],
+  exports: [ChatService],
 })
 export class ChatModule {}

@@ -1,11 +1,15 @@
 import { FastifyRequest } from 'fastify';
 import { PropertiesService } from './properties.service';
+import { UsersService } from '../users/users.service';
 import { CreatePropertyDto, UpdatePropertyDto, BlockDatesDto, UnblockDatesDto, UpdateCalendarSettingsDto, SetCalendarPricesDto, AddExternalCalendarDto } from './dto/property.dto';
 import { User } from '../users/schemas/user.schema';
+import { ListingType } from './schemas/property.schema';
 export declare class PropertiesController {
     private readonly propertiesService;
+    private readonly usersService;
     private readonly logger;
-    constructor(propertiesService: PropertiesService);
+    constructor(propertiesService: PropertiesService, usersService: UsersService);
+    private userIdOf;
     create(createPropertyDto: CreatePropertyDto, req: FastifyRequest & {
         user: User;
     }): Promise<import("./schemas/property.schema").Property>;
@@ -35,7 +39,7 @@ export declare class PropertiesController {
     getMostViewed(limit?: string): Promise<import("./schemas/property.schema").Property[]>;
     getRecent(limit?: string): Promise<import("./schemas/property.schema").Property[]>;
     getFeatured(limit?: string): Promise<import("./schemas/property.schema").Property[]>;
-    getPopularCities(limit?: string): Promise<{
+    getPopularCities(limit?: string, listingType?: ListingType): Promise<{
         city: string;
         count: number;
     }[]>;
@@ -86,6 +90,8 @@ export declare class PropertiesController {
             name: string;
             url: string;
             lastSyncedAt?: Date | null;
+            lastSyncError?: string | null;
+            lastSyncedCount?: number;
         }[];
         exportUrl: string;
     }>;
@@ -104,6 +110,8 @@ export declare class PropertiesController {
             name: string;
             url: string;
             lastSyncedAt?: Date | null;
+            lastSyncError?: string | null;
+            lastSyncedCount?: number;
         }[];
         exportUrl: string;
     }>;
@@ -115,11 +123,21 @@ export declare class PropertiesController {
     addExternalCalendar(id: string, dto: AddExternalCalendarDto, req: FastifyRequest & {
         user: User;
     }): Promise<{
+        lastSyncedAt: Date | null;
+        lastSyncError: string | null;
+        lastSyncedCount: number;
         id: string;
         name: string;
         url: string;
-        lastSyncedAt: Date;
     }>;
+    syncExternalCalendar(id: string, calendarId: string, req: FastifyRequest & {
+        user: User;
+    }): Promise<{
+        lastSyncedAt: Date | null;
+        lastSyncError: string | null;
+        lastSyncedCount: number;
+    }>;
+    getIcalFeed(token: string): Promise<string>;
     removeExternalCalendar(id: string, calendarId: string, req: FastifyRequest & {
         user: User;
     }): Promise<{
@@ -162,18 +180,6 @@ export declare class PropertiesController {
     }, req: FastifyRequest & {
         user: User;
     }): Promise<import("./schemas/property.schema").Property>;
-    addToFavorites(id: string, req: FastifyRequest & {
-        user: User;
-    }): Promise<{
-        message: string;
-        propertyId: string;
-    }>;
-    removeFromFavorites(id: string, req: FastifyRequest & {
-        user: User;
-    }): Promise<{
-        message: string;
-        propertyId: string;
-    }>;
     getMyFavorites(query: any, req: FastifyRequest & {
         user: User;
     }): Promise<{

@@ -27,25 +27,17 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     });
   }
 
+  // Runs on every authenticated request: no logging of emails or ids here
+  // (it used to log three lines with personal data per request).
   async validate(payload: JwtPayload): Promise<any> {
     try {
-      console.log('[JwtStrategy] Validating JWT payload:', {
-        sub: payload.sub,
-        sessionId: payload.sessionId,
-        role: payload.role,
-      });
-
+      // Also checks the session is still active, so signing out a device or
+      // resetting the password takes effect immediately
       const user: UserDocument = await this.authService.validateUser(payload);
-
-      console.log('[JwtStrategy] User validated:', {
-        userId: user._id.toString(),
-        role: user.role,
-        email: user.email,
-      });
 
       // Return a normalized user object with consistent ID fields
       // This ensures req.user.userId is always available in controllers
-      const normalizedUser = {
+      return {
         userId: user._id.toString(),        // Primary ID field for controllers
         _id: user._id,                      // Keep original MongoDB ObjectId
         id: user._id.toString(),            // Alternative ID field
@@ -66,14 +58,9 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
         licenseNumber: user.licenseNumber,
         agency: user.agency,
         googleId: user.googleId,            // Social connection status
-        hasPassword: !!(user as any).password, // Indicates whether a password is set (password is select:false)
+        hasPassword: !!(user as any).password, // password is select:false; validateUser asks for it
       };
-
-      console.log('[JwtStrategy] Returning normalized user with userId:', normalizedUser.userId);
-
-      return normalizedUser;
-    } catch (error) {
-      console.error('[JwtStrategy] Validation error:', error);
+    } catch {
       throw new UnauthorizedException('Invalid token');
     }
   }

@@ -1,4 +1,4 @@
-import { PropertyType, ListingType, PropertyStatus, PricingUnit, CancellationPolicy } from '../schemas/property.schema';
+import { PropertyType, ListingType, PropertyStatus, PricingUnit, CancellationPolicy, CheckInMethod } from '../schemas/property.schema';
 export declare class ShortTermAmenitiesDto {
     hasWifi?: boolean;
     hasBreakfast?: boolean;
@@ -18,9 +18,28 @@ export declare class ShortTermAmenitiesDto {
     airportTransfer?: boolean;
     conciergeService?: boolean;
     dailyHousekeeping?: boolean;
+    hasWorkspace?: boolean;
+    hasSmokeDetector?: boolean;
+    hasFireExtinguisher?: boolean;
+    hasFirstAidKit?: boolean;
+    hasSecurityCameras?: boolean;
     maxGuests?: number;
     checkInTime?: string;
     checkOutTime?: string;
+}
+export declare class HouseRulesDto {
+    childrenAllowed?: boolean;
+    infantsAllowed?: boolean;
+    visitorsAllowed?: boolean;
+    commercialPhotographyAllowed?: boolean;
+    idRequiredAtCheckIn?: boolean;
+    quietHoursStart?: string | null;
+    quietHoursEnd?: string | null;
+    checkInEndTime?: string | null;
+    checkInMethod?: CheckInMethod;
+    securityDeposit?: number;
+    checkoutTasks?: string[];
+    additionalRules?: string;
 }
 export declare class UnavailableDateRangeDto {
     from: string;
@@ -44,6 +63,7 @@ export declare class CreatePropertyDto {
     longitude?: number;
     amenities?: {
         bedrooms?: number;
+        beds?: number;
         bathrooms?: number;
         parkingSpaces?: number;
         hasGarden?: boolean;
@@ -55,6 +75,8 @@ export declare class CreatePropertyDto {
         hasAirConditioning?: boolean;
         hasInternet?: boolean;
         hasGenerator?: boolean;
+        hasWaterTank?: boolean;
+        hasSolarBackup?: boolean;
         furnished?: boolean;
     };
     pricingUnit?: PricingUnit;
@@ -67,6 +89,12 @@ export declare class CreatePropertyDto {
     customDiscountNights?: number;
     customDiscountPercent?: number;
     shortTermAmenities?: ShortTermAmenitiesDto;
+    guestsIncluded?: number | null;
+    extraGuestFee?: number;
+    instantBookRequiresVerifiedGuest?: boolean;
+    houseRules?: HouseRulesDto;
+    noticeDays?: number;
+    windowMonths?: number | null;
     isInstantBookable?: boolean;
     cancellationPolicy?: CancellationPolicy;
     advanceNoticeDays?: number;

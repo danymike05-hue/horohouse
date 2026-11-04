@@ -23,19 +23,22 @@ const mongoose_2 = require("mongoose");
 const call_service_1 = require("./call.service");
 const chat_service_1 = require("./chat.service");
 const user_schema_1 = require("../users/schemas/user.schema");
+const push_notifications_service_1 = require("../notifications/push-notifications.service");
 const call_dto_1 = require("./dto/call.dto");
 let ChatGateway = ChatGateway_1 = class ChatGateway {
     chatService;
     callService;
     jwtService;
+    pushNotificationsService;
     userModel;
     server;
     logger = new common_1.Logger(ChatGateway_1.name);
     userSockets = new Map();
-    constructor(chatService, callService, jwtService, userModel) {
+    constructor(chatService, callService, jwtService, pushNotificationsService, userModel) {
         this.chatService = chatService;
         this.callService = callService;
         this.jwtService = jwtService;
+        this.pushNotificationsService = pushNotificationsService;
         this.userModel = userModel;
     }
     afterInit(server) {
@@ -152,6 +155,31 @@ let ChatGateway = ChatGateway_1 = class ChatGateway {
                     tempId: data.tempId,
                 },
             });
+            const recipientId = message.recipientId?.toString?.();
+            if (recipientId && !this.userSockets.has(recipientId)) {
+                const sender = await this.userModel
+                    .findById(userId)
+                    .select('name')
+                    .lean()
+                    .catch(() => null);
+                const senderName = sender?.name ?? 'Someone';
+                const messageContent = data.type === 'image'
+                    ? `${senderName} sent you a photo`
+                    : data.type === 'audio'
+                        ? `${senderName} sent you a voice message`
+                        : `${senderName}: ${String(data.content ?? '').slice(0, 100)}`;
+                this.pushNotificationsService
+                    .sendToUser(recipientId, {
+                    title: '💬 New message',
+                    body: messageContent,
+                    data: {
+                        type: 'new_message',
+                        conversationId: data.conversationId,
+                        route: `/messages/${data.conversationId}`,
+                    },
+                })
+                    .catch((err) => this.logger.warn(`⚠️ Push notification failed for user ${recipientId}: ${err?.message}`));
+            }
             return { success: true, message };
         }
         catch (error) {
@@ -477,10 +505,11 @@ exports.ChatGateway = ChatGateway = ChatGateway_1 = __decorate([
         transports: ['websocket', 'polling'],
         allowEIO3: true,
     }),
-    __param(3, (0, mongoose_1.InjectModel)(user_schema_1.User.name)),
+    __param(4, (0, mongoose_1.InjectModel)(user_schema_1.User.name)),
     __metadata("design:paramtypes", [chat_service_1.ChatService,
         call_service_1.CallService,
         jwt_1.JwtService,
+        push_notifications_service_1.PushNotificationsService,
         mongoose_2.Model])
 ], ChatGateway);
 //# sourceMappingURL=chat.gateway.js.map

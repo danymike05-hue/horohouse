@@ -33,7 +33,15 @@ export class BookingGuestsDto {
   @IsOptional()
   @IsNumber()
   @Min(0)
+  @Max(10)
   infants?: number;
+
+  @ApiPropertyOptional({ example: 0, description: 'Pets (service animals included)' })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Max(10)
+  pets?: number;
 }
 
 // ─── Create Booking ───────────────────────────────────────────────────────────

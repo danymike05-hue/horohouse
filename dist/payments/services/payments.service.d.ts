@@ -46,7 +46,14 @@ export declare class PaymentsService {
     }>;
     getTransactionById(transactionId: string, userId: string): Promise<Transaction>;
     processSuccessfulPayment(transaction: TransactionDocument): Promise<void>;
+    processBookingRefund(bookingId: string, refundAmount: number, reason?: string): Promise<void>;
+    adminRefundBooking(bookingId: string, amount?: number, reason?: string): Promise<{
+        success: boolean;
+        message: string;
+        refundAmount: number;
+    }>;
     private confirmBookingPayment;
+    private alertRefundFailed;
     private generateTransactionReference;
     private calculateFees;
     private getTransactionDescription;

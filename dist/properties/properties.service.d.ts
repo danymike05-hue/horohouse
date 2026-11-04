@@ -38,6 +38,8 @@ export interface PropertySearchFilters {
     maxArea?: number;
     furnished?: boolean;
     neighborhood?: string;
+    isStudentFriendly?: boolean;
+    isFeatured?: boolean;
 }
 export interface PropertySearchOptions {
     page?: number;
@@ -102,7 +104,7 @@ export declare class PropertiesService implements OnModuleInit {
     getMostViewed(limit?: number): Promise<Property[]>;
     getRecent(limit?: number): Promise<Property[]>;
     getFeatured(limit?: number): Promise<Property[]>;
-    getPopularCities(limit?: number): Promise<Array<{
+    getPopularCities(limit?: number, listingType?: ListingType): Promise<Array<{
         city: string;
         count: number;
     }>>;
@@ -158,6 +160,7 @@ export declare class PropertiesService implements OnModuleInit {
         page: number;
         totalPages: number;
     }>;
+    private attachStayQuotes;
     blockDates(propertyId: string, dto: BlockDatesDto, user: User): Promise<Property>;
     unblockDates(propertyId: string, dto: UnblockDatesDto, user: User): Promise<Property>;
     getBlockedDates(propertyId: string): Promise<{
@@ -176,6 +179,8 @@ export declare class PropertiesService implements OnModuleInit {
             name: string;
             url: string;
             lastSyncedAt?: Date | null;
+            lastSyncError?: string | null;
+            lastSyncedCount?: number;
         }[];
         exportUrl: string;
     }>;
@@ -192,6 +197,8 @@ export declare class PropertiesService implements OnModuleInit {
             name: string;
             url: string;
             lastSyncedAt?: Date | null;
+            lastSyncError?: string | null;
+            lastSyncedCount?: number;
         }[];
         exportUrl: string;
     }>;
@@ -199,11 +206,25 @@ export declare class PropertiesService implements OnModuleInit {
         priceOverrides: any;
     }>;
     addExternalCalendar(propertyId: string, dto: AddExternalCalendarDto, user: User): Promise<{
+        lastSyncedAt: Date | null;
+        lastSyncError: string | null;
+        lastSyncedCount: number;
         id: string;
         name: string;
         url: string;
-        lastSyncedAt: Date;
     }>;
+    syncExternalCalendar(propertyId: string, calendarId: string): Promise<{
+        lastSyncedAt: Date | null;
+        lastSyncError: string | null;
+        lastSyncedCount: number;
+    }>;
+    syncExternalCalendarForHost(propertyId: string, calendarId: string, user: User): Promise<{
+        lastSyncedAt: Date | null;
+        lastSyncError: string | null;
+        lastSyncedCount: number;
+    }>;
+    syncAllExternalCalendars(): Promise<number>;
+    getIcalFeed(token: string): Promise<string>;
     removeExternalCalendar(propertyId: string, calendarId: string, user: User): Promise<{
         success: boolean;
     }>;
@@ -215,6 +236,10 @@ export declare class PropertiesService implements OnModuleInit {
     private fireAnalytics;
     private updateRecentlyViewed;
     private getBookedPropertyIds;
+    private notHostBlockedFilter;
+    private assertListingLocation;
+    private toMergeSet;
+    private countActiveBookings;
     private isValidCoordinate;
     private generateSlug;
     private generateKeywords;

@@ -37,18 +37,8 @@ let JwtStrategy = class JwtStrategy extends (0, passport_1.PassportStrategy)(pas
     }
     async validate(payload) {
         try {
-            console.log('[JwtStrategy] Validating JWT payload:', {
-                sub: payload.sub,
-                sessionId: payload.sessionId,
-                role: payload.role,
-            });
             const user = await this.authService.validateUser(payload);
-            console.log('[JwtStrategy] User validated:', {
-                userId: user._id.toString(),
-                role: user.role,
-                email: user.email,
-            });
-            const normalizedUser = {
+            return {
                 userId: user._id.toString(),
                 _id: user._id,
                 id: user._id.toString(),
@@ -71,11 +61,8 @@ let JwtStrategy = class JwtStrategy extends (0, passport_1.PassportStrategy)(pas
                 googleId: user.googleId,
                 hasPassword: !!user.password,
             };
-            console.log('[JwtStrategy] Returning normalized user with userId:', normalizedUser.userId);
-            return normalizedUser;
         }
-        catch (error) {
-            console.error('[JwtStrategy] Validation error:', error);
+        catch {
             throw new common_1.UnauthorizedException('Invalid token');
         }
     }

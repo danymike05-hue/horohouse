@@ -17,6 +17,7 @@ exports.PropertiesController = void 0;
 const common_1 = require("@nestjs/common");
 const swagger_1 = require("@nestjs/swagger");
 const properties_service_1 = require("./properties.service");
+const users_service_1 = require("../users/users.service");
 const property_dto_1 = require("./dto/property.dto");
 const jwt_auth_guard_1 = require("../auth/guards/jwt.auth.guard");
 const roles_guard_1 = require("../auth/guards/roles.guard");
@@ -52,11 +53,17 @@ class UpdatePropertyRequestDto extends CreatePropertyRequestDto {
 }
 let PropertiesController = PropertiesController_1 = class PropertiesController {
     propertiesService;
+    usersService;
     logger = new common_1.Logger(PropertiesController_1.name);
-    constructor(propertiesService) {
+    constructor(propertiesService, usersService) {
         this.propertiesService = propertiesService;
+        this.usersService = usersService;
+    }
+    userIdOf(user) {
+        return String(user?._id ?? user?.id ?? '');
     }
     async create(createPropertyDto, req) {
+        await this.usersService.assertHostCanPublish(this.userIdOf(req.user));
         return this.propertiesService.create(createPropertyDto, req.user);
     }
     async findAll(query, req) {
@@ -84,6 +91,8 @@ let PropertiesController = PropertiesController_1 = class PropertiesController {
             maxArea: query.maxArea ? parseFloat(query.maxArea) : undefined,
             furnished: query.furnished !== undefined ? query.furnished === 'true' : undefined,
             neighborhood: query.neighborhood,
+            isStudentFriendly: query.isStudentFriendly === 'true' ? true : undefined,
+            isFeatured: query.isFeatured === 'true' || query.isPromoted === 'true' ? true : undefined,
         };
         if (query.bounds) {
             try {
@@ -139,9 +148,9 @@ let PropertiesController = PropertiesController_1 = class PropertiesController {
         const maxResults = limit ? parseInt(limit) : 10;
         return this.propertiesService.getFeatured(maxResults);
     }
-    async getPopularCities(limit) {
+    async getPopularCities(limit, listingType) {
         const maxResults = limit ? parseInt(limit) : 10;
-        return this.propertiesService.getPopularCities(maxResults);
+        return this.propertiesService.getPopularCities(maxResults, listingType);
     }
     async adminGetAllProperties(query, req) {
         const filters = {
@@ -216,6 +225,15 @@ let PropertiesController = PropertiesController_1 = class PropertiesController {
     async addExternalCalendar(id, dto, req) {
         return this.propertiesService.addExternalCalendar(id, dto, req.user);
     }
+    async syncExternalCalendar(id, calendarId, req) {
+        return this.propertiesService.syncExternalCalendarForHost(id, calendarId, req.user);
+    }
+    async getIcalFeed(token) {
+        const clean = String(token ?? '').replace(/\.ics$/i, '');
+        if (!clean)
+            throw new common_1.NotFoundException('Calendar not found');
+        return this.propertiesService.getIcalFeed(clean);
+    }
     async removeExternalCalendar(id, calendarId, req) {
         return this.propertiesService.removeExternalCalendar(id, calendarId, req.user);
     }
@@ -228,6 +246,16 @@ let PropertiesController = PropertiesController_1 = class PropertiesController {
         return this.propertiesService.findOne(id, req.user);
     }
     async update(id, updatePropertyDto, req) {
+        if (req.user?.role !== user_schema_1.UserRole.ADMIN) {
+            if (updatePropertyDto.isVerified !== undefined || updatePropertyDto.isFeatured !== undefined) {
+                this.logger.warn(`Ignored isVerified/isFeatured from non-admin ${this.userIdOf(req.user)} on ${id}`);
+            }
+            delete updatePropertyDto.isVerified;
+            delete updatePropertyDto.isFeatured;
+            if (updatePropertyDto.isActive === true) {
+                await this.usersService.assertHostCanPublish(this.userIdOf(req.user));
+            }
+        }
         return this.propertiesService.update(id, updatePropertyDto, req.user);
     }
     async remove(id, req) {
@@ -263,13 +291,10 @@ let PropertiesController = PropertiesController_1 = class PropertiesController {
         return this.propertiesService.update(id, { isVerified: body.isVerified }, req.user);
     }
     async toggleActive(id, body, req) {
+        if (body?.isActive === true && req.user?.role !== user_schema_1.UserRole.ADMIN) {
+            await this.usersService.assertHostCanPublish(this.userIdOf(req.user));
+        }
         return this.propertiesService.update(id, { isActive: body.isActive }, req.user);
-    }
-    async addToFavorites(id, req) {
-        return { message: 'Property added to favorites', propertyId: id };
-    }
-    async removeFromFavorites(id, req) {
-        return { message: 'Property removed from favorites', propertyId: id };
     }
     async getMyFavorites(query, req) {
         const options = {
@@ -453,10 +478,12 @@ __decorate([
     (0, roles_guard_1.Public)(),
     (0, swagger_1.ApiOperation)({ summary: 'Get popular cities with property counts' }),
     (0, swagger_1.ApiQuery)({ name: 'limit', required: false, type: Number, description: 'Maximum results (default: 10)' }),
+    (0, swagger_1.ApiQuery)({ name: 'listingType', required: false, enum: property_schema_1.ListingType, description: 'Only count this listing type' }),
     (0, swagger_1.ApiResponse)({ status: 200, description: 'Popular cities' }),
     __param(0, (0, common_1.Query)('limit')),
+    __param(1, (0, common_1.Query)('listingType')),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [String]),
+    __metadata("design:paramtypes", [String, String]),
     __metadata("design:returntype", Promise)
 ], PropertiesController.prototype, "getPopularCities", null);
 __decorate([
@@ -644,6 +671,30 @@ __decorate([
     __metadata("design:returntype", Promise)
 ], PropertiesController.prototype, "addExternalCalendar", null);
 __decorate([
+    (0, common_1.Post)(':id/calendar/external/:calendarId/sync'),
+    (0, roles_guard_1.Roles)(user_schema_1.UserRole.HOST, user_schema_1.UserRole.AGENT, user_schema_1.UserRole.LANDLORD, user_schema_1.UserRole.ADMIN),
+    (0, swagger_1.ApiBearerAuth)(),
+    (0, common_1.HttpCode)(common_1.HttpStatus.OK),
+    (0, swagger_1.ApiOperation)({ summary: 'Re-import an external iCal calendar now' }),
+    __param(0, (0, common_1.Param)('id')),
+    __param(1, (0, common_1.Param)('calendarId')),
+    __param(2, (0, common_1.Req)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, String, Object]),
+    __metadata("design:returntype", Promise)
+], PropertiesController.prototype, "syncExternalCalendar", null);
+__decorate([
+    (0, common_1.Get)('ical/:token'),
+    (0, roles_guard_1.Public)(),
+    (0, common_1.Header)('Content-Type', 'text/calendar; charset=utf-8'),
+    (0, common_1.Header)('Cache-Control', 'no-cache, max-age=0'),
+    (0, swagger_1.ApiOperation)({ summary: 'iCal export feed for other platforms (secret token link)' }),
+    __param(0, (0, common_1.Param)('token')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String]),
+    __metadata("design:returntype", Promise)
+], PropertiesController.prototype, "getIcalFeed", null);
+__decorate([
     (0, common_1.Delete)(':id/calendar/external/:calendarId'),
     (0, roles_guard_1.Roles)(user_schema_1.UserRole.HOST, user_schema_1.UserRole.AGENT, user_schema_1.UserRole.LANDLORD, user_schema_1.UserRole.ADMIN),
     (0, swagger_1.ApiBearerAuth)(),
@@ -776,34 +827,6 @@ __decorate([
     __metadata("design:returntype", Promise)
 ], PropertiesController.prototype, "toggleActive", null);
 __decorate([
-    (0, common_1.Post)(':id/favorite'),
-    (0, roles_guard_1.Roles)(user_schema_1.UserRole.REGISTERED_USER, user_schema_1.UserRole.HOST, user_schema_1.UserRole.AGENT, user_schema_1.UserRole.LANDLORD, user_schema_1.UserRole.ADMIN),
-    (0, swagger_1.ApiOperation)({ summary: 'Add property to favorites' }),
-    (0, swagger_1.ApiBearerAuth)(),
-    (0, swagger_1.ApiParam)({ name: 'id', description: 'Property ID' }),
-    (0, swagger_1.ApiResponse)({ status: 200, description: 'Property added to favorites' }),
-    (0, swagger_1.ApiResponse)({ status: 404, description: 'Property not found' }),
-    __param(0, (0, common_1.Param)('id')),
-    __param(1, (0, common_1.Req)()),
-    __metadata("design:type", Function),
-    __metadata("design:paramtypes", [String, Object]),
-    __metadata("design:returntype", Promise)
-], PropertiesController.prototype, "addToFavorites", null);
-__decorate([
-    (0, common_1.Delete)(':id/favorite'),
-    (0, roles_guard_1.Roles)(user_schema_1.UserRole.REGISTERED_USER, user_schema_1.UserRole.HOST, user_schema_1.UserRole.AGENT, user_schema_1.UserRole.LANDLORD, user_schema_1.UserRole.ADMIN),
-    (0, swagger_1.ApiOperation)({ summary: 'Remove property from favorites' }),
-    (0, swagger_1.ApiBearerAuth)(),
-    (0, swagger_1.ApiParam)({ name: 'id', description: 'Property ID' }),
-    (0, swagger_1.ApiResponse)({ status: 200, description: 'Property removed from favorites' }),
-    (0, swagger_1.ApiResponse)({ status: 404, description: 'Property not found' }),
-    __param(0, (0, common_1.Param)('id')),
-    __param(1, (0, common_1.Req)()),
-    __metadata("design:type", Function),
-    __metadata("design:paramtypes", [String, Object]),
-    __metadata("design:returntype", Promise)
-], PropertiesController.prototype, "removeFromFavorites", null);
-__decorate([
     (0, common_1.Get)('my/favorites'),
     (0, roles_guard_1.Roles)(user_schema_1.UserRole.REGISTERED_USER, user_schema_1.UserRole.HOST, user_schema_1.UserRole.AGENT, user_schema_1.UserRole.LANDLORD, user_schema_1.UserRole.ADMIN),
     (0, swagger_1.ApiOperation)({ summary: 'Get current user\'s favorite properties' }),
@@ -883,6 +906,8 @@ exports.PropertiesController = PropertiesController = PropertiesController_1 = _
     (0, swagger_1.ApiTags)('Properties'),
     (0, common_1.Controller)('properties'),
     (0, common_1.UseGuards)(jwt_auth_guard_1.JwtAuthGuard, roles_guard_1.RolesGuard),
-    __metadata("design:paramtypes", [properties_service_1.PropertiesService])
+    __param(1, (0, common_1.Inject)((0, common_1.forwardRef)(() => users_service_1.UsersService))),
+    __metadata("design:paramtypes", [properties_service_1.PropertiesService,
+        users_service_1.UsersService])
 ], PropertiesController);
 //# sourceMappingURL=properties.controller.js.map

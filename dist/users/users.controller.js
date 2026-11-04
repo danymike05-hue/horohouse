@@ -50,6 +50,13 @@ let UsersController = class UsersController {
     async removeFromFavorites(req, propertyId) {
         return this.usersService.removeFromFavorites(req.user.id, propertyId);
     }
+    async recordRecentlyViewed(req, propertyId) {
+        await this.usersService.addToRecentlyViewed(req.user.id, propertyId);
+        return { ok: true };
+    }
+    async clearRecentlyViewed(req) {
+        return this.usersService.clearViewingHistory(req.user.id);
+    }
     async getRecentlyViewed(req, limit) {
         return this.usersService.getRecentlyViewed(req.user.id, limit ? parseInt(limit.toString()) : 10);
     }
@@ -60,7 +67,6 @@ let UsersController = class UsersController {
         return this.usersService.updatePreferences(req.user.id, preferences);
     }
     async uploadProfilePicture(req) {
-        console.log('Content-Type header:', req.headers['content-type']);
         const data = await req.file();
         if (!data) {
             throw new common_1.BadRequestException('No file uploaded');
@@ -83,6 +89,26 @@ let UsersController = class UsersController {
             throw new common_1.BadRequestException('role is required in request body');
         }
         return this.usersService.setRole(req.user.id, body.role);
+    }
+    async getMyHostVerification(req) {
+        return this.usersService.getMyHostVerification(req.user.id);
+    }
+    async uploadGovernmentId(req) {
+        const data = await req.file();
+        if (!data)
+            throw new common_1.BadRequestException('No file uploaded');
+        if (!users_service_1.GOVERNMENT_ID_MIME_TYPES.includes(String(data.mimetype).toLowerCase())) {
+            throw new common_1.BadRequestException('Upload a photo of your ID (JPG, PNG, WEBP or HEIC)');
+        }
+        const buffer = await data.toBuffer();
+        if (buffer.length > users_service_1.GOVERNMENT_ID_MAX_BYTES) {
+            throw new common_1.BadRequestException('The photo is too large (10 MB maximum)');
+        }
+        await this.usersService.updateHostProfile(req.user.id, { governmentIdBuffer: buffer });
+        return this.usersService.getMyHostVerification(req.user.id);
+    }
+    async removeProfilePicture(req) {
+        return this.usersService.removeProfilePicture(req.user.id);
     }
     async getMyTenants(req) {
         const user = await this.usersService.findOne(req.user.id);
@@ -150,17 +176,29 @@ let UsersController = class UsersController {
             limit: limit ? parseInt(limit.toString()) : 100,
         });
     }
+    async getPendingHostVerifications(page, limit) {
+        return this.usersService.getPendingHostVerifications(page ? parseInt(page.toString()) : 1, limit ? parseInt(limit.toString()) : 20);
+    }
     async getHosts(page, limit) {
         return this.usersService.getHosts(page ? parseInt(page.toString()) : 1, limit ? parseInt(limit.toString()) : 10);
     }
     async getHostById(id) {
         return this.usersService.getHostById(id);
     }
-    async getHostStats(id) {
+    async getHostStats(id, req) {
+        if (req.user.role !== user_schema_1.UserRole.ADMIN && String(req.user.id) !== id) {
+            throw new common_1.ForbiddenException('You can only view your own host stats');
+        }
         return this.usersService.getHostStats(id);
     }
-    async updateHostProfile(id, body) {
+    async updateHostProfile(id, body, req) {
+        if (req.user.role !== user_schema_1.UserRole.ADMIN && String(req.user.id) !== id) {
+            throw new common_1.ForbiddenException('You can only edit your own host profile');
+        }
         return this.usersService.updateHostProfile(id, body);
+    }
+    async getHostGovernmentId(id) {
+        return this.usersService.getGovernmentIdViewUrl(id);
     }
     async verifyHost(id, body) {
         return this.usersService.verifyHost(id, body.decision, body.rejectionReason);
@@ -253,6 +291,25 @@ __decorate([
     __metadata("design:returntype", Promise)
 ], UsersController.prototype, "removeFromFavorites", null);
 __decorate([
+    (0, common_1.Post)('me/recently-viewed/:propertyId'),
+    (0, common_1.HttpCode)(common_1.HttpStatus.OK),
+    (0, swagger_1.ApiOperation)({ summary: 'Record that I viewed a property' }),
+    __param(0, (0, common_1.Req)()),
+    __param(1, (0, common_1.Param)('propertyId')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object, String]),
+    __metadata("design:returntype", Promise)
+], UsersController.prototype, "recordRecentlyViewed", null);
+__decorate([
+    (0, common_1.Delete)('me/recently-viewed'),
+    (0, common_1.HttpCode)(common_1.HttpStatus.OK),
+    (0, swagger_1.ApiOperation)({ summary: 'Clear my recently viewed history' }),
+    __param(0, (0, common_1.Req)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object]),
+    __metadata("design:returntype", Promise)
+], UsersController.prototype, "clearRecentlyViewed", null);
+__decorate([
     (0, common_1.Get)('me/recently-viewed'),
     (0, swagger_1.ApiOperation)({ summary: 'Get recently viewed properties' }),
     (0, swagger_1.ApiQuery)({ name: 'limit', required: false, type: Number, description: 'Number of items to return' }),
@@ -315,6 +372,34 @@ __decorate([
     __metadata("design:paramtypes", [Object, dto_1.SetRoleDto]),
     __metadata("design:returntype", Promise)
 ], UsersController.prototype, "setMyRole", null);
+__decorate([
+    (0, common_1.Get)('me/host/verification'),
+    (0, roles_guard_1.Roles)(user_schema_1.UserRole.HOST, user_schema_1.UserRole.ADMIN),
+    (0, swagger_1.ApiOperation)({ summary: 'Current host ID verification status (and whether an ID is required to publish)' }),
+    __param(0, (0, common_1.Req)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object]),
+    __metadata("design:returntype", Promise)
+], UsersController.prototype, "getMyHostVerification", null);
+__decorate([
+    (0, common_1.Post)('me/host/government-id'),
+    (0, roles_guard_1.Roles)(user_schema_1.UserRole.HOST),
+    (0, swagger_1.ApiConsumes)('multipart/form-data'),
+    (0, swagger_1.ApiOperation)({ summary: 'Upload a government ID photo for review (sets status to pending)' }),
+    __param(0, (0, common_1.Req)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object]),
+    __metadata("design:returntype", Promise)
+], UsersController.prototype, "uploadGovernmentId", null);
+__decorate([
+    (0, common_1.Delete)('me/profile-picture'),
+    (0, common_1.HttpCode)(common_1.HttpStatus.OK),
+    (0, swagger_1.ApiOperation)({ summary: 'Remove profile picture' }),
+    __param(0, (0, common_1.Req)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object]),
+    __metadata("design:returntype", Promise)
+], UsersController.prototype, "removeProfilePicture", null);
 __decorate([
     (0, common_1.Get)('me/tenants'),
     (0, roles_guard_1.Roles)(user_schema_1.UserRole.LANDLORD, user_schema_1.UserRole.ADMIN),
@@ -532,6 +617,18 @@ __decorate([
     __metadata("design:returntype", Promise)
 ], UsersController.prototype, "getLandlordProperties", null);
 __decorate([
+    (0, common_1.Get)('hosts/verifications/pending'),
+    (0, roles_guard_1.Roles)(user_schema_1.UserRole.ADMIN),
+    (0, swagger_1.ApiOperation)({ summary: 'Hosts waiting for an ID review, oldest first (Admin only)' }),
+    (0, swagger_1.ApiQuery)({ name: 'page', required: false, type: Number }),
+    (0, swagger_1.ApiQuery)({ name: 'limit', required: false, type: Number }),
+    __param(0, (0, common_1.Query)('page')),
+    __param(1, (0, common_1.Query)('limit')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Number, Number]),
+    __metadata("design:returntype", Promise)
+], UsersController.prototype, "getPendingHostVerifications", null);
+__decorate([
     (0, common_1.Get)('hosts'),
     (0, roles_guard_2.Public)(),
     (0, swagger_1.ApiOperation)({ summary: 'Get all active hosts with short-term listing stats' }),
@@ -557,26 +654,34 @@ __decorate([
 ], UsersController.prototype, "getHostById", null);
 __decorate([
     (0, common_1.Get)('hosts/:id/stats'),
-    (0, swagger_1.ApiOperation)({ summary: 'Get live dashboard stats for a host' }),
-    (0, swagger_1.ApiResponse)({ status: 200, description: 'Host stats retrieved successfully' }),
+    (0, roles_guard_1.Roles)(user_schema_1.UserRole.HOST, user_schema_1.UserRole.ADMIN),
+    (0, swagger_1.ApiOperation)({ summary: 'Get live dashboard stats for a host (owner or admin)' }),
     __param(0, (0, common_1.Param)('id')),
+    __param(1, (0, common_1.Req)()),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [String]),
+    __metadata("design:paramtypes", [String, Object]),
     __metadata("design:returntype", Promise)
 ], UsersController.prototype, "getHostStats", null);
 __decorate([
     (0, common_1.Patch)('hosts/:id/profile'),
     (0, roles_guard_1.Roles)(user_schema_1.UserRole.HOST, user_schema_1.UserRole.ADMIN),
-    (0, swagger_1.ApiOperation)({
-        summary: 'Update host profile fields — preferences, house rules, payout accounts, co-hosts, bio',
-    }),
-    (0, swagger_1.ApiResponse)({ status: 200, description: 'Host profile updated' }),
+    (0, swagger_1.ApiOperation)({ summary: 'Update host profile (owner or admin)' }),
     __param(0, (0, common_1.Param)('id')),
     __param(1, (0, common_1.Body)()),
+    __param(2, (0, common_1.Req)()),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [String, dto_1.UpdateHostProfileDto]),
+    __metadata("design:paramtypes", [String, dto_1.UpdateHostProfileDto, Object]),
     __metadata("design:returntype", Promise)
 ], UsersController.prototype, "updateHostProfile", null);
+__decorate([
+    (0, common_1.Get)('hosts/:id/government-id'),
+    (0, roles_guard_1.Roles)(user_schema_1.UserRole.ADMIN),
+    (0, swagger_1.ApiOperation)({ summary: 'Signed link to view a host ID document (Admin only)' }),
+    __param(0, (0, common_1.Param)('id')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String]),
+    __metadata("design:returntype", Promise)
+], UsersController.prototype, "getHostGovernmentId", null);
 __decorate([
     (0, common_1.Patch)('hosts/:id/verify'),
     (0, roles_guard_1.Roles)(user_schema_1.UserRole.ADMIN),

@@ -20,12 +20,35 @@ export declare class UsersController {
     getFavorites(req: any): Promise<User>;
     addToFavorites(req: any, propertyId: string): Promise<User>;
     removeFromFavorites(req: any, propertyId: string): Promise<User>;
+    recordRecentlyViewed(req: any, propertyId: string): Promise<{
+        ok: boolean;
+    }>;
+    clearRecentlyViewed(req: any): Promise<{
+        message: string;
+    }>;
     getRecentlyViewed(req: any, limit?: number): Promise<any[]>;
     getSearchHistory(req: any, limit?: number): Promise<any[]>;
     updatePreferences(req: any, preferences: UpdatePreferencesDto): Promise<User>;
     uploadProfilePicture(req: any): Promise<User>;
     updateMe(req: any, updateUserDto: UpdateOwnProfileDto): Promise<User>;
     setMyRole(req: any, body: SetRoleDto): Promise<User>;
+    getMyHostVerification(req: any): Promise<{
+        status: import("./schemas/user.schema").HostVerificationStatus;
+        submittedAt: Date | null;
+        reviewedAt: Date | null;
+        rejectionReason: string | null;
+        hasDocument: boolean;
+        idRequired: boolean;
+    }>;
+    uploadGovernmentId(req: any): Promise<{
+        status: import("./schemas/user.schema").HostVerificationStatus;
+        submittedAt: Date | null;
+        reviewedAt: Date | null;
+        rejectionReason: string | null;
+        hasDocument: boolean;
+        idRequired: boolean;
+    }>;
+    removeProfilePicture(req: any): Promise<User>;
     getMyTenants(req: any): Promise<{
         tenants: import("./schemas/user.schema").TenantRecord[];
     }>;
@@ -52,10 +75,14 @@ export declare class UsersController {
     getLandlordById(id: string): Promise<any>;
     getLandlordStats(id: string): Promise<any>;
     getLandlordProperties(id: string, status?: string, page?: number, limit?: number): Promise<any>;
+    getPendingHostVerifications(page?: number, limit?: number): Promise<any>;
     getHosts(page?: number, limit?: number): Promise<any>;
     getHostById(id: string): Promise<any>;
-    getHostStats(id: string): Promise<any>;
-    updateHostProfile(id: string, body: UpdateHostProfileDto): Promise<any>;
+    getHostStats(id: string, req: any): Promise<any>;
+    updateHostProfile(id: string, body: UpdateHostProfileDto, req: any): Promise<any>;
+    getHostGovernmentId(id: string): Promise<{
+        url: string;
+    }>;
     verifyHost(id: string, body: VerifyHostDto): Promise<any>;
     recalculateSuperhostStatus(id: string): Promise<{
         isSuperhost: boolean;

@@ -30,6 +30,7 @@ export interface BookingGuest {
     adults: number;
     children?: number;
     infants?: number;
+    pets?: number;
 }
 export interface BookingPriceBreakdown {
     pricePerNight: number;
@@ -40,6 +41,8 @@ export interface BookingPriceBreakdown {
     taxAmount: number;
     discountAmount: number;
     totalAmount: number;
+    extraGuests?: number;
+    extraGuestFee?: number;
 }
 export interface BookingCancellation {
     cancelledBy: CancelledBy;
@@ -50,6 +53,7 @@ export interface BookingCancellation {
 }
 export declare class Booking {
     _id: Types.ObjectId;
+    checkInGuideNotifiedAt?: Date;
     propertyId: Types.ObjectId;
     roomId?: Types.ObjectId;
     guestId: Types.ObjectId;

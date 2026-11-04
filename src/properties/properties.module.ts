@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { PropertiesService } from './properties.service';
 import { PropertiesController } from './properties.controller';
@@ -13,7 +13,9 @@ import { User, UserSchema } from '../users/schemas/user.schema';
 import { HistoryModule } from '../history/history.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { UserInteractionsModule } from '../user-interactions/user-interactions.module';
+import { UsersModule } from '../users/users.module';
 import { WatermarkService } from 'src/watermark/watermark.service';
+import { PropertyCalendarScheduler } from './property-calendar.scheduler';
 
 @Module({
   imports: [
@@ -26,9 +28,12 @@ import { WatermarkService } from 'src/watermark/watermark.service';
     HistoryModule,
     NotificationsModule,
     UserInteractionsModule,
+    // PropertiesController uses UsersService for the host ID check.
+    // forwardRef keeps this safe if UsersModule ever imports PropertiesModule.
+    forwardRef(() => UsersModule),
   ],
   controllers: [PropertiesController, InquiryController, ComparisonController],
-  providers: [PropertiesService, InquiryService, ComparisonService, WatermarkService],
+  providers: [PropertiesService, InquiryService, ComparisonService, WatermarkService, PropertyCalendarScheduler],
   exports: [PropertiesService, InquiryService, ComparisonService],
 })
 export class PropertiesModule {}

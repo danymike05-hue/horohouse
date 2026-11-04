@@ -89,3 +89,7 @@ export declare class TransactionQueryDto {
     startDate?: string;
     endDate?: string;
 }
+export declare class AdminRefundBookingDto {
+    amount?: number;
+    reason?: string;
+}

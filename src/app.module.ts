@@ -40,6 +40,12 @@ import { NewsletterModule } from './newsletter/newsletter.module';
 import { InsightsModule } from './insights/insights.module';
 import { CommunityModule } from './community/community.module';
 import { DevicesModule } from './devices/devices.module';
+import { CheckoutModule } from './checkout/checkout.module';
+import { GeocodingModule } from './geocoding/geocoding.module';
+import { ShareModule } from './share/share.module';
+import { TrustModule } from './trust/trust.module';
+import { HostMessagesModule } from './host-messages/host-messages.module';
+import { WishlistsModule } from './wishlists/wishlists.module';
 
 @Module({
   imports: [
@@ -116,6 +122,12 @@ import { DevicesModule } from './devices/devices.module';
     InsightsModule,
     CommunityModule,
     DevicesModule,
+    CheckoutModule,
+    GeocodingModule,
+    ShareModule,
+    TrustModule,
+    HostMessagesModule,
+    WishlistsModule,
   ],
 
   controllers: [AppController],

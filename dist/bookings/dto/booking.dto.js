@@ -17,6 +17,7 @@ class BookingGuestsDto {
     adults;
     children;
     infants;
+    pets;
 }
 exports.BookingGuestsDto = BookingGuestsDto;
 __decorate([
@@ -38,8 +39,17 @@ __decorate([
     (0, class_validator_1.IsOptional)(),
     (0, class_validator_1.IsNumber)(),
     (0, class_validator_1.Min)(0),
+    (0, class_validator_1.Max)(10),
     __metadata("design:type", Number)
 ], BookingGuestsDto.prototype, "infants", void 0);
+__decorate([
+    (0, swagger_1.ApiPropertyOptional)({ example: 0, description: 'Pets (service animals included)' }),
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsNumber)(),
+    (0, class_validator_1.Min)(0),
+    (0, class_validator_1.Max)(10),
+    __metadata("design:type", Number)
+], BookingGuestsDto.prototype, "pets", void 0);
 class CreateBookingDto {
     propertyId;
     checkIn;

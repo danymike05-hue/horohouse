@@ -11,6 +11,15 @@ export declare class BookingsController {
     getMyBookings(req: FastifyRequest & {
         user: User;
     }, query: BookingQueryDto): Promise<import("./bookings.service").PaginatedBookings>;
+    getCancellationPreview(id: string, req: FastifyRequest & {
+        user: User;
+    }): Promise<{
+        canCancel: boolean;
+        cancelledBy: import("./schema/booking.schema").CancelledBy;
+        paidAmount: number;
+        refundAmount: number;
+        policy: string;
+    }>;
     cancelBooking(id: string, dto: CancelBookingDto, req: FastifyRequest & {
         user: User;
     }): Promise<import("./schema/booking.schema").Booking>;
@@ -26,15 +35,20 @@ export declare class BookingsController {
     completeBooking(id: string, req: FastifyRequest & {
         user: User;
     }): Promise<import("./schema/booking.schema").Booking>;
+    getHostAvailability(propertyId: string, query: AvailabilityQueryDto, req: FastifyRequest & {
+        user: User;
+    }): Promise<import("./bookings.service").AvailabilityResult>;
     getAvailability(propertyId: string, query: AvailabilityQueryDto): Promise<import("./bookings.service").AvailabilityResult>;
-    getPropertyBookings(propertyId: string, query: BookingQueryDto): Promise<import("./bookings.service").PaginatedBookings>;
+    getPropertyBookings(propertyId: string, query: BookingQueryDto, req: FastifyRequest & {
+        user: User;
+    }): Promise<import("./bookings.service").PaginatedBookings>;
+    getHostStats(req: FastifyRequest & {
+        user: User;
+    }): Promise<import("./dto/host-stats.dto").HostStatsDto>;
     getAllBookings(query: BookingQueryDto): Promise<import("./bookings.service").PaginatedBookings>;
     getBookingStats(): Promise<any>;
     updatePayment(id: string, dto: UpdatePaymentDto): Promise<import("./schema/booking.schema").Booking>;
     getBookingById(id: string, req: FastifyRequest & {
         user: User;
     }): Promise<import("./schema/booking.schema").Booking>;
-    getHostStats(req: FastifyRequest & {
-        user: User;
-    }): Promise<import("./dto/host-stats.dto").HostStatsDto>;
 }

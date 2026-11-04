@@ -9,11 +9,9 @@ import {
     Query,
     UseGuards,
     Request,
-    UseInterceptors,
-    UploadedFiles,
     BadRequestException,
 } from '@nestjs/common';
-import { FilesInterceptor } from '@nestjs/platform-express';
+import { Types } from 'mongoose';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes } from '@nestjs/swagger';
 import { JwtAuthGuard } from 'src/auth/guards/jwt.auth.guard';
 
@@ -121,12 +119,38 @@ export class ChatController {
     /**
      * Send message with attachments
      */
+    // The server runs on Fastify: the Express FilesInterceptor used here before never
+    // received the files, so photos in chat failed. Parts are read with @fastify/multipart.
     @Post('messages/with-attachments')
-    @ApiOperation({ summary: 'Send message with file attachments' })
+    @ApiOperation({ summary: 'Send message with file attachments (fields: conversationId, content; files: up to 5)' })
     @ApiConsumes('multipart/form-data')
-    @UseInterceptors(FilesInterceptor('files', 5)) // Max 5 files
-    async sendMessageWithAttachments(@Request() req, @Body() dto: SendMessageDto, @UploadedFiles() files: Express.Multer.File[]) {
-        if (!files || files.length === 0) {
+    async sendMessageWithAttachments(@Request() req) {
+        const MAX_FILES = 5;
+        const MAX_BYTES = 15 * 1024 * 1024;
+        const ALLOWED = /^(image|video|audio)\//;
+        const ALLOWED_DOCS = ['application/pdf'];
+        const files: { buffer: Buffer; originalname: string; mimetype: string; size: number }[] = [];
+        const dto: Partial<SendMessageDto> = {};
+
+        for await (const part of req.parts()) {
+            if (part.type === 'file') {
+                if (files.length >= MAX_FILES) { await part.toBuffer(); continue; }
+                const mimetype = String(part.mimetype || '').toLowerCase();
+                if (!ALLOWED.test(mimetype) && !ALLOWED_DOCS.includes(mimetype)) {
+                    throw new BadRequestException('Only photos, videos, audio and PDF files can be sent');
+                }
+                const buffer: Buffer = await part.toBuffer();
+                if (buffer.length > MAX_BYTES) throw new BadRequestException('File too large (15 MB maximum)');
+                files.push({ buffer, originalname: part.filename || 'file', mimetype, size: buffer.length });
+            } else if (part.fieldname === 'conversationId' || part.fieldname === 'content') {
+                (dto as any)[part.fieldname] = String(part.value ?? '').slice(0, 5000);
+            }
+        }
+
+        if (!dto.conversationId || !Types.ObjectId.isValid(dto.conversationId)) {
+            throw new BadRequestException('conversationId is required');
+        }
+        if (files.length === 0) {
             throw new BadRequestException('No files uploaded');
         }
 

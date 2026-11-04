@@ -12,6 +12,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.ValidateResetTokenDto = exports.ResetPasswordDto = exports.ForgotPasswordDto = void 0;
 const class_validator_1 = require("class-validator");
 const swagger_1 = require("@nestjs/swagger");
+const auth_dto_1 = require("./auth.dto");
 class ForgotPasswordDto {
     email;
 }
@@ -23,6 +24,7 @@ __decorate([
     }),
     (0, class_validator_1.IsEmail)(),
     (0, class_validator_1.IsNotEmpty)(),
+    (0, class_validator_1.MaxLength)(254),
     __metadata("design:type", String)
 ], ForgotPasswordDto.prototype, "email", void 0);
 class ResetPasswordDto {
@@ -37,16 +39,18 @@ __decorate([
     }),
     (0, class_validator_1.IsString)(),
     (0, class_validator_1.IsNotEmpty)(),
+    (0, class_validator_1.MaxLength)(256),
     __metadata("design:type", String)
 ], ResetPasswordDto.prototype, "token", void 0);
 __decorate([
     (0, swagger_1.ApiProperty)({
         example: 'newPassword123',
-        description: 'New password (minimum 8 characters)'
+        description: 'New password (8 to 72 characters)'
     }),
     (0, class_validator_1.IsString)(),
     (0, class_validator_1.IsNotEmpty)(),
-    (0, class_validator_1.MinLength)(8, { message: 'Password must be at least 8 characters long' }),
+    (0, class_validator_1.MinLength)(auth_dto_1.PASSWORD_MIN, { message: `Password must be at least ${auth_dto_1.PASSWORD_MIN} characters long` }),
+    (0, class_validator_1.MaxLength)(auth_dto_1.PASSWORD_MAX, { message: `Password must be at most ${auth_dto_1.PASSWORD_MAX} characters long` }),
     __metadata("design:type", String)
 ], ResetPasswordDto.prototype, "newPassword", void 0);
 class ValidateResetTokenDto {
@@ -60,6 +64,7 @@ __decorate([
     }),
     (0, class_validator_1.IsString)(),
     (0, class_validator_1.IsNotEmpty)(),
+    (0, class_validator_1.MaxLength)(256),
     __metadata("design:type", String)
 ], ValidateResetTokenDto.prototype, "token", void 0);
 //# sourceMappingURL=password-reset.dto.js.map

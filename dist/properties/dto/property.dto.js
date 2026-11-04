@@ -9,11 +9,12 @@ var __metadata = (this && this.__metadata) || function (k, v) {
     if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.AddExternalCalendarDto = exports.SetCalendarPricesDto = exports.UpdateCalendarSettingsDto = exports.UnblockDatesDto = exports.BlockDatesDto = exports.UpdatePropertyDto = exports.CreatePropertyDto = exports.UnavailableDateRangeDto = exports.ShortTermAmenitiesDto = void 0;
+exports.AddExternalCalendarDto = exports.SetCalendarPricesDto = exports.UpdateCalendarSettingsDto = exports.UnblockDatesDto = exports.BlockDatesDto = exports.UpdatePropertyDto = exports.CreatePropertyDto = exports.UnavailableDateRangeDto = exports.HouseRulesDto = exports.ShortTermAmenitiesDto = void 0;
 const class_validator_1 = require("class-validator");
 const class_transformer_1 = require("class-transformer");
 const swagger_1 = require("@nestjs/swagger");
 const property_schema_1 = require("../schemas/property.schema");
+const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
 class ShortTermAmenitiesDto {
     hasWifi;
     hasBreakfast;
@@ -33,6 +34,11 @@ class ShortTermAmenitiesDto {
     airportTransfer;
     conciergeService;
     dailyHousekeeping;
+    hasWorkspace;
+    hasSmokeDetector;
+    hasFireExtinguisher;
+    hasFirstAidKit;
+    hasSecurityCameras;
     maxGuests;
     checkInTime;
     checkOutTime;
@@ -147,6 +153,36 @@ __decorate([
     __metadata("design:type", Boolean)
 ], ShortTermAmenitiesDto.prototype, "dailyHousekeeping", void 0);
 __decorate([
+    (0, swagger_1.ApiPropertyOptional)(),
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsBoolean)(),
+    __metadata("design:type", Boolean)
+], ShortTermAmenitiesDto.prototype, "hasWorkspace", void 0);
+__decorate([
+    (0, swagger_1.ApiPropertyOptional)(),
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsBoolean)(),
+    __metadata("design:type", Boolean)
+], ShortTermAmenitiesDto.prototype, "hasSmokeDetector", void 0);
+__decorate([
+    (0, swagger_1.ApiPropertyOptional)(),
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsBoolean)(),
+    __metadata("design:type", Boolean)
+], ShortTermAmenitiesDto.prototype, "hasFireExtinguisher", void 0);
+__decorate([
+    (0, swagger_1.ApiPropertyOptional)(),
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsBoolean)(),
+    __metadata("design:type", Boolean)
+], ShortTermAmenitiesDto.prototype, "hasFirstAidKit", void 0);
+__decorate([
+    (0, swagger_1.ApiPropertyOptional)(),
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsBoolean)(),
+    __metadata("design:type", Boolean)
+], ShortTermAmenitiesDto.prototype, "hasSecurityCameras", void 0);
+__decorate([
     (0, swagger_1.ApiPropertyOptional)({ example: 4, description: 'Maximum number of guests allowed' }),
     (0, class_validator_1.IsOptional)(),
     (0, class_validator_1.IsNumber)(),
@@ -157,17 +193,107 @@ __decorate([
 __decorate([
     (0, swagger_1.ApiPropertyOptional)({ example: '14:00', description: 'Check-in time (HH:mm)' }),
     (0, class_validator_1.IsOptional)(),
-    (0, class_validator_1.IsString)(),
-    (0, class_validator_1.Length)(5, 5),
+    (0, class_validator_1.Matches)(HHMM, { message: 'checkInTime must be HH:mm' }),
     __metadata("design:type", String)
 ], ShortTermAmenitiesDto.prototype, "checkInTime", void 0);
 __decorate([
     (0, swagger_1.ApiPropertyOptional)({ example: '11:00', description: 'Check-out time (HH:mm)' }),
     (0, class_validator_1.IsOptional)(),
-    (0, class_validator_1.IsString)(),
-    (0, class_validator_1.Length)(5, 5),
+    (0, class_validator_1.Matches)(HHMM, { message: 'checkOutTime must be HH:mm' }),
     __metadata("design:type", String)
 ], ShortTermAmenitiesDto.prototype, "checkOutTime", void 0);
+class HouseRulesDto {
+    childrenAllowed;
+    infantsAllowed;
+    visitorsAllowed;
+    commercialPhotographyAllowed;
+    idRequiredAtCheckIn;
+    quietHoursStart;
+    quietHoursEnd;
+    checkInEndTime;
+    checkInMethod;
+    securityDeposit;
+    checkoutTasks;
+    additionalRules;
+}
+exports.HouseRulesDto = HouseRulesDto;
+__decorate([
+    (0, swagger_1.ApiPropertyOptional)(),
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsBoolean)(),
+    __metadata("design:type", Boolean)
+], HouseRulesDto.prototype, "childrenAllowed", void 0);
+__decorate([
+    (0, swagger_1.ApiPropertyOptional)(),
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsBoolean)(),
+    __metadata("design:type", Boolean)
+], HouseRulesDto.prototype, "infantsAllowed", void 0);
+__decorate([
+    (0, swagger_1.ApiPropertyOptional)(),
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsBoolean)(),
+    __metadata("design:type", Boolean)
+], HouseRulesDto.prototype, "visitorsAllowed", void 0);
+__decorate([
+    (0, swagger_1.ApiPropertyOptional)(),
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsBoolean)(),
+    __metadata("design:type", Boolean)
+], HouseRulesDto.prototype, "commercialPhotographyAllowed", void 0);
+__decorate([
+    (0, swagger_1.ApiPropertyOptional)(),
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsBoolean)(),
+    __metadata("design:type", Boolean)
+], HouseRulesDto.prototype, "idRequiredAtCheckIn", void 0);
+__decorate([
+    (0, swagger_1.ApiPropertyOptional)({ example: '22:00', nullable: true }),
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.Matches)(HHMM, { message: 'quietHoursStart must be HH:mm' }),
+    __metadata("design:type", Object)
+], HouseRulesDto.prototype, "quietHoursStart", void 0);
+__decorate([
+    (0, swagger_1.ApiPropertyOptional)({ example: '07:00', nullable: true }),
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.Matches)(HHMM, { message: 'quietHoursEnd must be HH:mm' }),
+    __metadata("design:type", Object)
+], HouseRulesDto.prototype, "quietHoursEnd", void 0);
+__decorate([
+    (0, swagger_1.ApiPropertyOptional)({ example: '22:00', nullable: true, description: 'Latest check-in; null = flexible' }),
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.Matches)(HHMM, { message: 'checkInEndTime must be HH:mm' }),
+    __metadata("design:type", Object)
+], HouseRulesDto.prototype, "checkInEndTime", void 0);
+__decorate([
+    (0, swagger_1.ApiPropertyOptional)({ enum: property_schema_1.CheckInMethod }),
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsEnum)(property_schema_1.CheckInMethod),
+    __metadata("design:type", String)
+], HouseRulesDto.prototype, "checkInMethod", void 0);
+__decorate([
+    (0, swagger_1.ApiPropertyOptional)({ example: 20000, description: 'Refundable caution paid on arrival (FCFA)' }),
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsNumber)(),
+    (0, class_validator_1.Min)(0),
+    (0, class_validator_1.Max)(5_000_000),
+    __metadata("design:type", Number)
+], HouseRulesDto.prototype, "securityDeposit", void 0);
+__decorate([
+    (0, swagger_1.ApiPropertyOptional)({ type: [String], enum: property_schema_1.CHECKOUT_TASKS }),
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsArray)(),
+    (0, class_validator_1.ArrayMaxSize)(property_schema_1.CHECKOUT_TASKS.length),
+    (0, class_validator_1.IsIn)(property_schema_1.CHECKOUT_TASKS, { each: true }),
+    __metadata("design:type", Array)
+], HouseRulesDto.prototype, "checkoutTasks", void 0);
+__decorate([
+    (0, swagger_1.ApiPropertyOptional)({ maxLength: 1000 }),
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.MaxLength)(1000),
+    __metadata("design:type", String)
+], HouseRulesDto.prototype, "additionalRules", void 0);
 class UnavailableDateRangeDto {
     from;
     to;
@@ -217,6 +343,12 @@ class CreatePropertyDto {
     customDiscountNights;
     customDiscountPercent;
     shortTermAmenities;
+    guestsIncluded;
+    extraGuestFee;
+    instantBookRequiresVerifiedGuest;
+    houseRules;
+    noticeDays;
+    windowMonths;
     isInstantBookable;
     cancellationPolicy;
     advanceNoticeDays;
@@ -405,6 +537,52 @@ __decorate([
     (0, class_transformer_1.Type)(() => ShortTermAmenitiesDto),
     __metadata("design:type", ShortTermAmenitiesDto)
 ], CreatePropertyDto.prototype, "shortTermAmenities", void 0);
+__decorate([
+    (0, swagger_1.ApiPropertyOptional)({ example: 2, nullable: true, description: 'Guests included in the nightly price (null = all)' }),
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsNumber)(),
+    (0, class_validator_1.Min)(1),
+    (0, class_validator_1.Max)(50),
+    __metadata("design:type", Object)
+], CreatePropertyDto.prototype, "guestsIncluded", void 0);
+__decorate([
+    (0, swagger_1.ApiPropertyOptional)({ example: 5000, description: 'Per extra guest per night (FCFA)' }),
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsNumber)(),
+    (0, class_validator_1.Min)(0),
+    (0, class_validator_1.Max)(1_000_000),
+    __metadata("design:type", Number)
+], CreatePropertyDto.prototype, "extraGuestFee", void 0);
+__decorate([
+    (0, swagger_1.ApiPropertyOptional)({ description: 'Instant Book only for guests with a verified ID' }),
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsBoolean)(),
+    __metadata("design:type", Boolean)
+], CreatePropertyDto.prototype, "instantBookRequiresVerifiedGuest", void 0);
+__decorate([
+    (0, swagger_1.ApiPropertyOptional)({ type: HouseRulesDto }),
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsObject)(),
+    (0, class_validator_1.ValidateNested)(),
+    (0, class_transformer_1.Type)(() => HouseRulesDto),
+    __metadata("design:type", HouseRulesDto)
+], CreatePropertyDto.prototype, "houseRules", void 0);
+__decorate([
+    (0, swagger_1.ApiPropertyOptional)({ example: 1, description: 'Days of notice before check-in (0 = same day)' }),
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsNumber)(),
+    (0, class_validator_1.Min)(0),
+    (0, class_validator_1.Max)(30),
+    __metadata("design:type", Number)
+], CreatePropertyDto.prototype, "noticeDays", void 0);
+__decorate([
+    (0, swagger_1.ApiPropertyOptional)({ example: 12, nullable: true, description: 'How many months ahead guests can book (null = no limit)' }),
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsNumber)(),
+    (0, class_validator_1.Min)(1),
+    (0, class_validator_1.Max)(24),
+    __metadata("design:type", Object)
+], CreatePropertyDto.prototype, "windowMonths", void 0);
 __decorate([
     (0, swagger_1.ApiPropertyOptional)({
         example: false,
@@ -700,11 +878,13 @@ exports.AddExternalCalendarDto = AddExternalCalendarDto;
 __decorate([
     (0, swagger_1.ApiProperty)({ example: 'Airbnb', description: 'Calendar feed name' }),
     (0, class_validator_1.IsString)(),
+    (0, class_validator_1.Length)(1, 60),
     __metadata("design:type", String)
 ], AddExternalCalendarDto.prototype, "name", void 0);
 __decorate([
-    (0, swagger_1.ApiProperty)({ example: 'https://airbnb.com/calendar/ical/...', description: 'iCal URL' }),
+    (0, swagger_1.ApiProperty)({ example: 'https://airbnb.com/calendar/ical/...', description: 'iCal URL (https:// or webcal://)' }),
     (0, class_validator_1.IsString)(),
+    (0, class_validator_1.Length)(10, 2048),
     __metadata("design:type", String)
 ], AddExternalCalendarDto.prototype, "url", void 0);
 //# sourceMappingURL=property.dto.js.map

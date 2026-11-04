@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { ReviewsService } from './reviews.service';
 import { ReviewsController } from './reviews.controller';
+import { ReviewsScheduler } from './reviews.scheduler';
 import { Review, ReviewSchema } from './schemas/review.schema';
 import { Property, PropertySchema } from '../properties/schemas/property.schema';
 import { User, UserSchema } from '../users/schemas/user.schema';
@@ -17,7 +18,7 @@ import { Booking, BookingSchema } from '../bookings/schema/booking.schema';
     ]),
   ],
   controllers: [ReviewsController],
-  providers: [ReviewsService],
+  providers: [ReviewsService, ReviewsScheduler],
   exports: [ReviewsService],
 })
 export class ReviewsModule {}

@@ -22,7 +22,9 @@ const user_schema_1 = require("../users/schemas/user.schema");
 const history_module_1 = require("../history/history.module");
 const notifications_module_1 = require("../notifications/notifications.module");
 const user_interactions_module_1 = require("../user-interactions/user-interactions.module");
+const users_module_1 = require("../users/users.module");
 const watermark_service_1 = require("../watermark/watermark.service");
+const property_calendar_scheduler_1 = require("./property-calendar.scheduler");
 let PropertiesModule = class PropertiesModule {
 };
 exports.PropertiesModule = PropertiesModule;
@@ -38,9 +40,10 @@ exports.PropertiesModule = PropertiesModule = __decorate([
             history_module_1.HistoryModule,
             notifications_module_1.NotificationsModule,
             user_interactions_module_1.UserInteractionsModule,
+            (0, common_1.forwardRef)(() => users_module_1.UsersModule),
         ],
         controllers: [properties_controller_1.PropertiesController, inquiry_controller_1.InquiryController, comparison_controller_1.ComparisonController],
-        providers: [properties_service_1.PropertiesService, inquiry_service_1.InquiryService, comparison_service_1.ComparisonService, watermark_service_1.WatermarkService],
+        providers: [properties_service_1.PropertiesService, inquiry_service_1.InquiryService, comparison_service_1.ComparisonService, watermark_service_1.WatermarkService, property_calendar_scheduler_1.PropertyCalendarScheduler],
         exports: [properties_service_1.PropertiesService, inquiry_service_1.InquiryService, comparison_service_1.ComparisonService],
     })
 ], PropertiesModule);

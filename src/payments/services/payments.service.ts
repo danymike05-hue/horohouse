@@ -640,6 +640,7 @@ async reconcileTransaction(transaction: TransactionDocument): Promise<'success' 
       await this.bookingModel.findByIdAndUpdate(bookingId, {
         'cancellation.refundStatus': 'failed',
       });
+      await this.alertRefundFailed(bookingId, refundAmount, 'no successful payment transaction on record (it may have been paid through the checkout flow — check CamerPay)');
       return;
     }
 
@@ -651,6 +652,7 @@ async reconcileTransaction(transaction: TransactionDocument): Promise<'success' 
       await this.bookingModel.findByIdAndUpdate(bookingId, {
         'cancellation.refundStatus': 'failed',
       });
+      await this.alertRefundFailed(bookingId, refundAmount, `no CamerPay reference on transaction ${originalTx._id}`);
       return;
     }
 
@@ -682,6 +684,7 @@ async reconcileTransaction(transaction: TransactionDocument): Promise<'success' 
       await this.bookingModel.findByIdAndUpdate(bookingId, {
         'cancellation.refundStatus': 'failed',
       });
+      await this.alertRefundFailed(bookingId, refundAmount, `CamerPay refund call failed: ${err?.message ?? err}`);
       // Re-throw so cancelBooking() can surface the error to the caller
       throw err;
     }
@@ -747,6 +750,11 @@ async reconcileTransaction(transaction: TransactionDocument): Promise<'success' 
           `(host: ${booking.hostId}, amount: ${hostPaidPortion} XAF). ` +
           `Manual recovery required. Error: ${walletErr.message}`,
       );
+      await this.notificationsService.notifyAdmins({
+        title: 'Host wallet not debited after a refund',
+        message: `The guest was refunded ${refundAmount} XAF for booking ${bookingId}, but ${hostPaidPortion} XAF couldn't be taken back from host ${booking.hostId}'s wallet (${walletErr.message}). Recover it manually.`,
+        metadata: { bookingId, hostId: String(booking.hostId), amount: hostPaidPortion },
+      });
     }
 
     // ── 9. Notify guest ───────────────────────────────────────────────────────
@@ -811,7 +819,7 @@ async reconcileTransaction(transaction: TransactionDocument): Promise<'success' 
 
     const booking = await this.bookingModel
       .findById(transaction.bookingId)
-      .populate('propertyId', 'isInstantBookable')
+      .populate('propertyId', 'isInstantBookable title')
       .exec();
 
     if (!booking) {
@@ -824,6 +832,28 @@ async reconcileTransaction(transaction: TransactionDocument): Promise<'success' 
       return;
     }
 
+    // Money arrived for a booking that is already closed (the hold expired, the host
+    // declined, the guest cancelled). Its dates may belong to someone else now, so don't
+    // confirm it or pay the host: flag the transaction so support refunds the guest.
+    // Before, this path confirmed nothing but still credited the host's wallet.
+    if ([BookingStatus.CANCELLED, BookingStatus.REJECTED].includes(booking.status)) {
+      this.logger.error(
+        `Payment ${transaction._id} received for closed booking ${booking._id} (${booking.status}) — refund the guest`,
+      );
+      await this.transactionModel.findByIdAndUpdate(transaction._id, {
+        $set: {
+          'metadata.needsReview': true,
+          'metadata.reviewReason': `paid_after_booking_${booking.status}`,
+        },
+      });
+      await this.notificationsService.notifyAdmins({
+        title: 'Refund needed: paid after the booking closed',
+        message: `${transaction.amount} ${transaction.currency ?? 'XAF'} arrived for booking ${booking._id}, which is ${booking.status}. The host was not paid. Refund the guest (txRef ${transaction.flutterwaveReference ?? transaction._id}).`,
+        metadata: { bookingId: String(booking._id), transactionId: String(transaction._id), reason: `paid_after_booking_${booking.status}` },
+      });
+      return;
+    }
+
     const update: Partial<BookingDocument> = {
       paymentStatus: PaymentStatus.PAID,
       paymentReference: transaction.flutterwaveReference,
@@ -831,18 +861,17 @@ async reconcileTransaction(transaction: TransactionDocument): Promise<'success' 
       paidAt: transaction.completedAt ?? new Date(),
     };
 
-    // Paid, so no more expiration
-    update.expiresAt = undefined;
-
     const isInstantBookable = (booking.propertyId as any)?.isInstantBookable ?? false;
-    if (isInstantBookable && booking.status === BookingStatus.PENDING) {
+    const instantConfirmed = isInstantBookable && booking.status === BookingStatus.PENDING;
+    if (instantConfirmed) {
       update.status = BookingStatus.CONFIRMED;
       update.confirmedAt = new Date();
       update.isInstantBook = true;
       this.logger.log(`Auto-confirmed instant booking: ${booking._id}`);
     }
 
-    await this.bookingModel.findByIdAndUpdate(booking._id, update);
+    // Paid, so the payment deadline no longer applies.
+    await this.bookingModel.findByIdAndUpdate(booking._id, { $set: update, $unset: { expiresAt: 1 } });
 
     const totalPaid = booking.priceBreakdown.totalAmount;
     const platformCut = Math.round(totalPaid * this.BOOKING_PLATFORM_FEE_RATE);
@@ -891,13 +920,43 @@ async reconcileTransaction(transaction: TransactionDocument): Promise<'success' 
       `Host payout | host: ${hostIdStr} | payout: ${hostPayout} ${currency} | platform fee: ${platformCut}`,
     );
 
-    const guest = await this.userModel.findById(booking.guestId).select('name').lean();
-    await this.notificationsService.notifyPaymentReceived(hostIdStr, {
-      bookingId: booking._id.toString(),
-      propertyTitle,
-      guestName: (guest as any)?.name ?? 'A guest',
-      amount: hostPayout,
-      currency,
+    const fmt = (d: Date) => new Date(d).toISOString().split('T')[0];
+    const [guest, host] = await Promise.all([
+      this.userModel.findById(booking.guestId).select('name').lean(),
+      this.userModel.findById(booking.hostId).select('name').lean(),
+    ]);
+    // Notifications never fail the payment: the money and wallet credit are already saved.
+    try {
+      await this.notificationsService.notifyPaymentReceived(hostIdStr, {
+        bookingId: booking._id.toString(),
+        propertyTitle,
+        guestName: (guest as any)?.name ?? 'A guest',
+        amount: hostPayout,
+        currency,
+      });
+      // Instant book: this payment is what confirms the stay, so tell the guest now.
+      // (A request was already confirmed to the guest when the host accepted it.)
+      if (instantConfirmed) {
+        await this.notificationsService.notifyBookingConfirmed(booking.guestId.toString(), {
+          bookingId: booking._id.toString(),
+          propertyId: String((booking.propertyId as any)?._id ?? booking.propertyId),
+          propertyTitle,
+          hostName: (host as any)?.name ?? 'Your host',
+          checkIn: fmt(booking.checkIn),
+          checkOut: fmt(booking.checkOut),
+        });
+      }
+    } catch (err: any) {
+      this.logger.warn(`confirmBookingPayment: notification failed for booking ${booking._id}: ${err?.message}`);
+    }
+  }
+
+  /** A guest is owed money and the automatic refund didn't go through. */
+  private async alertRefundFailed(bookingId: string, amount: number, why: string): Promise<void> {
+    await this.notificationsService.notifyAdmins({
+      title: 'Refund failed — guest still owed money',
+      message: `Refund of ${amount} XAF for booking ${bookingId} did not go through: ${why}. Retry it from the admin refund action or refund in CamerPay.`,
+      metadata: { bookingId, amount, reason: why },
     });
   }
 

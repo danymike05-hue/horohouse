@@ -173,6 +173,8 @@ export interface UserSession {
     lastActive: Date;
     createdAt: Date;
     expiresAt: Date;
+    prevRefreshToken?: string;
+    rotatedAt?: Date;
 }
 export declare class User {
     name: string;
@@ -193,18 +195,32 @@ export declare class User {
     serviceAreas?: string[];
     emailVerified: boolean;
     phoneVerified: boolean;
+    identityVerification?: {
+        status: 'unverified' | 'pending' | 'verified' | 'rejected';
+        documentType?: 'national_id' | 'passport' | 'residence_permit' | 'driving_licence';
+        documentPublicId?: string;
+        submittedAt?: Date;
+        reviewedAt?: Date;
+        rejectionReason?: string;
+    };
     googleId?: string;
     password?: string;
     averageRating?: number;
     reviewCount?: number;
     phoneVerificationCode?: string;
     phoneVerificationExpires?: Date;
+    phoneVerificationSentAt?: Date;
+    phoneVerificationAttempts?: number;
     emailVerificationToken?: string;
     emailVerificationExpires?: Date;
     resetPasswordToken?: string;
     resetPasswordExpires?: Date;
     twoFactorEnabled?: boolean;
     twoFactorSecret?: string;
+    oauthCodeHash?: string;
+    oauthCodeChallenge?: string;
+    oauthCodeExpires?: Date;
+    oauthCodeNewUser?: boolean;
     sessions: UserSession[];
     licenseNumber?: string;
     agency?: string;

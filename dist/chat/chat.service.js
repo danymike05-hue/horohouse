@@ -203,6 +203,9 @@ let ChatService = ChatService_1 = class ChatService {
         }
     }
     async getConversation(conversationId, userId) {
+        if (!mongoose_2.Types.ObjectId.isValid(conversationId)) {
+            throw new common_1.NotFoundException('Conversation not found');
+        }
         const conversation = await this.conversationModel
             .findById(conversationId)
             .populate('participants.userId', 'name profilePicture email phoneNumber')
@@ -211,7 +214,7 @@ let ChatService = ChatService_1 = class ChatService {
         if (!conversation) {
             throw new common_1.NotFoundException('Conversation not found');
         }
-        const isParticipant = conversation.participants.some(p => p.userId._id.toString() === userId);
+        const isParticipant = conversation.participants.some(p => String(p.userId?._id ?? p.userId ?? '') === userId);
         if (!isParticipant) {
             throw new common_1.ForbiddenException('You are not a participant in this conversation');
         }
@@ -221,7 +224,7 @@ let ChatService = ChatService_1 = class ChatService {
         try {
             const { conversationId, content, type = message_schema_1.MessageType.TEXT, attachments = [], propertyId, replyTo } = dto;
             const conversation = await this.getConversation(conversationId, userId);
-            let recipient = conversation.participants.find(p => p.userId._id.toString() !== userId);
+            let recipient = conversation.participants.find(p => !!p.userId && String(p.userId?._id ?? p.userId) !== userId);
             if (!recipient && conversation.participants.length > 0) {
                 recipient = conversation.participants[0];
             }
@@ -245,7 +248,7 @@ let ChatService = ChatService_1 = class ChatService {
             const message = await this.messageModel.create({
                 conversationId: new mongoose_2.Types.ObjectId(conversationId),
                 senderId: new mongoose_2.Types.ObjectId(userId),
-                recipientId: recipient.userId._id,
+                recipientId: recipient.userId?._id ?? recipient.userId,
                 type,
                 content,
                 attachments: attachments || [],
@@ -267,7 +270,7 @@ let ChatService = ChatService_1 = class ChatService {
                     [`participants.$[elem].unreadCount`]: 1,
                 },
             }, {
-                arrayFilters: [{ 'elem.userId': recipient.userId._id }],
+                arrayFilters: [{ 'elem.userId': recipient.userId?._id ?? recipient.userId }],
             });
             this.logger.log(`Message sent: ${message._id} in conversation ${conversationId}`);
             await message.populate('senderId', 'name profilePicture');
@@ -322,6 +325,7 @@ let ChatService = ChatService_1 = class ChatService {
     async markMessagesAsRead(conversationId, userId, messageIds) {
         try {
             await this.getConversation(conversationId, userId);
+            messageIds = (messageIds ?? []).filter((id) => mongoose_2.Types.ObjectId.isValid(id));
             const now = new Date();
             await this.messageModel.updateMany({
                 _id: { $in: messageIds.map(id => new mongoose_2.Types.ObjectId(id)) },

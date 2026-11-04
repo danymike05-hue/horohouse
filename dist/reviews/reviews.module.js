@@ -11,6 +11,7 @@ const common_1 = require("@nestjs/common");
 const mongoose_1 = require("@nestjs/mongoose");
 const reviews_service_1 = require("./reviews.service");
 const reviews_controller_1 = require("./reviews.controller");
+const reviews_scheduler_1 = require("./reviews.scheduler");
 const review_schema_1 = require("./schemas/review.schema");
 const property_schema_1 = require("../properties/schemas/property.schema");
 const user_schema_1 = require("../users/schemas/user.schema");
@@ -29,7 +30,7 @@ exports.ReviewsModule = ReviewsModule = __decorate([
             ]),
         ],
         controllers: [reviews_controller_1.ReviewsController],
-        providers: [reviews_service_1.ReviewsService],
+        providers: [reviews_service_1.ReviewsService, reviews_scheduler_1.ReviewsScheduler],
         exports: [reviews_service_1.ReviewsService],
     })
 ], ReviewsModule);

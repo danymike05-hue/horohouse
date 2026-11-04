@@ -61,6 +61,12 @@ export interface GoogleAuthDto {
     picture?: string;
     deviceInfo?: any;
 }
+export interface OAuthRedirectTarget {
+    kind: 'app' | 'web' | 'rejected';
+    reason?: string;
+    url: string;
+    challenge?: string;
+}
 export declare class AuthService {
     private userModel;
     private smsService;
@@ -68,6 +74,7 @@ export declare class AuthService {
     private jwtService;
     private configService;
     private readonly logger;
+    private static readonly DUMMY_HASH;
     private static readonly SELF_ASSIGNABLE_ROLES;
     private resolveSelfAssignableRole;
     constructor(userModel: Model<UserDocument>, smsService: SmsService, emailService: EmailService, jwtService: JwtService, configService: ConfigService);
@@ -78,14 +85,31 @@ export declare class AuthService {
     registerWithEmail(dto: RegisterWithEmailDto, req?: any): Promise<AuthTokens>;
     loginWithPhone(dto: LoginWithPhoneDto, req?: any): Promise<AuthTokens>;
     loginWithEmail(dto: LoginWithEmailDto, req?: any): Promise<AuthTokens>;
-    googleAuth(dto: GoogleAuthDto, req?: any): Promise<AuthTokens>;
+    googleSignIn(dto: GoogleAuthDto & {
+        emailVerified?: boolean;
+    }): Promise<{
+        user: UserDocument;
+        isNewUser: boolean;
+    }>;
+    googleAuth(dto: GoogleAuthDto & {
+        emailVerified?: boolean;
+    }, req?: any): Promise<AuthTokens>;
+    resolveOAuthRedirect(state?: string): OAuthRedirectTarget;
+    issueOAuthCode(user: UserDocument, challenge: string, isNewUser: boolean): Promise<string>;
+    exchangeOAuthCode(code: string, codeVerifier: string, req?: any): Promise<AuthTokens>;
+    checkEmail(email: string): Promise<{
+        exists: boolean;
+        hasPassword: boolean;
+        hasGoogle: boolean;
+    }>;
     verifyPhone(dto: VerifyPhoneDto): Promise<{
         message: string;
     }>;
+    private checkPhoneCode;
     refreshToken(refreshToken: string, req?: any): Promise<AuthTokens>;
     validateUser(payload: JwtPayload): Promise<UserDocument>;
     logout(userId: string, sessionId?: string): Promise<void>;
-    changePassword(userId: string, currentPassword: string, newPassword: string): Promise<{
+    changePassword(userId: string, currentPassword: string, newPassword: string, currentSessionId?: string): Promise<{
         message: string;
     }>;
     enable2FA(user: User): Promise<{
@@ -150,5 +174,5 @@ export declare class AuthService {
         onboardingStatus: OnboardingStatus;
         phoneNumber: string;
     }>;
-    completeGoogleOnboarding(userId: string): Promise<AuthTokens>;
+    completeGoogleOnboarding(userId: string, req?: any, currentSessionId?: string): Promise<AuthTokens>;
 }

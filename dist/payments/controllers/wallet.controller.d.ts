@@ -4,6 +4,7 @@ declare class CreditDebitDto {
     amount: number;
     description: string;
     reference?: string;
+    userId?: string;
 }
 declare class BankDetailsDto {
     accountName: string;

@@ -1,4 +1,4 @@
-import { IsString, IsNotEmpty, IsEnum, Matches, IsOptional } from 'class-validator';
+import { IsString, IsNotEmpty, IsIn, Matches } from 'class-validator';
 import { UserRole } from '../../users/schemas/user.schema';
 
 /**
@@ -14,7 +14,8 @@ const ONBOARDING_ROLES: UserRole[] = [
 ];
 
 export class SelectRoleDto {
-  @IsEnum(UserRole, {
+  // IsIn (not IsEnum): the request is rejected before it reaches the service
+  @IsIn(ONBOARDING_ROLES, {
     message: `Role must be one of: ${ONBOARDING_ROLES.join(', ')}`,
   })
   @IsNotEmpty()

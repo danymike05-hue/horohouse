@@ -650,6 +650,40 @@ let NotificationsService = NotificationsService_1 = class NotificationsService {
                 throw new common_1.BadRequestException(`Unknown target: ${dto.target}`);
         }
     }
+    async notifyAdmins(params) {
+        try {
+            const admins = await this.userModel
+                .find({ role: user_schema_1.UserRole.ADMIN, isActive: { $ne: false } }, { _id: 1, email: 1, name: 1 })
+                .lean()
+                .exec();
+            if (!admins.length) {
+                this.logger.error(`[AdminAlert] No admin account to alert: ${params.title} — ${params.message}`);
+                return;
+            }
+            const ids = admins.map((a) => String(a._id));
+            await this.createBulk(ids, {
+                type: notification_schema_1.NotificationType.SYSTEM,
+                title: params.title,
+                message: params.message,
+                link: params.link,
+                metadata: { ...(params.metadata ?? {}), adminAlert: true },
+            });
+            for (const a of admins) {
+                this.pushNotificationsService
+                    .sendToUser(String(a._id), { title: params.title, body: params.message, data: { route: params.link } })
+                    .catch(() => undefined);
+                if (a.email) {
+                    this.emailService
+                        .sendAdminNotificationEmail(a.email, a.name || a.email, params.title, params.message, params.link)
+                        .catch((e) => this.logger.warn(`[AdminAlert] email to ${a.email} failed: ${e?.message}`));
+                }
+            }
+            this.logger.warn(`[AdminAlert] ${params.title} — sent to ${ids.length} admin(s)`);
+        }
+        catch (err) {
+            this.logger.error(`[AdminAlert] failed (${params.title}): ${err?.message}`);
+        }
+    }
     getAdminStats() {
         return this.notificationsGateway.getGatewayStats();
     }

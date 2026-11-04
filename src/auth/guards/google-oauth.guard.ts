@@ -6,11 +6,18 @@ import { FastifyRequest, FastifyReply } from 'fastify';
 export class GoogleOAuthGuard extends AuthGuard('google') {
   getAuthenticateOptions(context: ExecutionContext) {
     const request = context.switchToHttp().getRequest<FastifyRequest>();
-    // Read the redirectUri from the query params if provided
-    const redirectUri = (request.query as any)?.redirectUri;
-    return {
-      state: redirectUri,
-    };
+    const q = (request.query as any) || {};
+
+    // On the callback Google sends ?code=…&state=…; passport reads that itself.
+    if (q.code) return {};
+
+    // Start of sign-in: the app's return link (deep link with its PKCE
+    // challenge). The app sends it as ?state=; older builds used ?redirectUri=.
+    // It is only passed through here — the callback checks it against the
+    // allowlist (AuthService.resolveOAuthRedirect) before using it.
+    const raw = typeof q.state === 'string' ? q.state : typeof q.redirectUri === 'string' ? q.redirectUri : undefined;
+    const state = raw && raw.length <= 2048 ? raw : undefined;
+    return state ? { state } : {};
   }
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -46,6 +53,7 @@ export class GoogleOAuthGuard extends AuthGuard('google') {
       };
     }
 
+    void request;
     const activate = (await super.canActivate(context)) as boolean;
     return activate;
   }

@@ -44,6 +44,7 @@ var CancelledBy;
 })(CancelledBy || (exports.CancelledBy = CancelledBy = {}));
 let Booking = class Booking {
     _id;
+    checkInGuideNotifiedAt;
     propertyId;
     roomId;
     guestId;
@@ -73,6 +74,10 @@ let Booking = class Booking {
     updatedAt;
 };
 exports.Booking = Booking;
+__decorate([
+    (0, mongoose_1.Prop)({ type: Date }),
+    __metadata("design:type", Date)
+], Booking.prototype, "checkInGuideNotifiedAt", void 0);
 __decorate([
     (0, mongoose_1.Prop)({ type: mongoose_2.Types.ObjectId, ref: 'Property', required: true, index: true }),
     __metadata("design:type", mongoose_2.Types.ObjectId)
@@ -107,6 +112,7 @@ __decorate([
             adults: { type: Number, required: true, min: 1, default: 1 },
             children: { type: Number, default: 0 },
             infants: { type: Number, default: 0 },
+            pets: { type: Number, default: 0 },
         },
         required: true,
     }),

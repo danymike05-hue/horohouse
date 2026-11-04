@@ -66,14 +66,23 @@ let CamerPayService = CamerPayService_1 = class CamerPayService {
             };
         }
         catch (error) {
+            const resData = error.response?.data;
+            const rawMsg = resData?.message ?? error.message ?? '';
             this.logger.error(`CamerPay initializePayment error | status: ${error.response?.status} | ` +
-                `data: ${JSON.stringify(error.response?.data)} | ` +
+                `data: ${JSON.stringify(resData)} | ` +
                 `payment_method sent: ${payload.payment_method} | ` +
                 `phone sent: ${this.formatPhone(payload.customer_phone)}`);
-            throw new common_1.BadRequestException(error.response?.data?.message ||
-                error.response?.data?.detail ||
-                error.message ||
-                'Failed to initiate payment with CamerPay');
+            const isProviderOutage = resData?.failure_code === 'PROVIDER_BUSINESS_ERROR' &&
+                /timed out|cURL error 28|could not resolve|connection refused/i.test(rawMsg);
+            const isOurTimeout = error.code === 'ECONNABORTED' || error.code === 'ETIMEDOUT';
+            if (isProviderOutage || isOurTimeout) {
+                const operator = payload.payment_method === 'orange_money' ? 'Orange Money' : 'MTN MoMo';
+                throw new common_1.ServiceUnavailableException({
+                    code: 'PROVIDER_UNAVAILABLE',
+                    message: `${operator} est momentanément indisponible. Réessayez dans quelques minutes ou choisissez un autre moyen de paiement.`,
+                });
+            }
+            throw new common_1.BadRequestException(resData?.message || resData?.detail || error.message || 'Failed to initiate payment with CamerPay');
         }
     }
     async verifyPayment(uuid) {
@@ -151,6 +160,34 @@ let CamerPayService = CamerPayService_1 = class CamerPayService {
     async initiatePayout(_payload) {
         this.logger.warn('CamerPay payout not yet implemented');
         return { success: false };
+    }
+    async refundPayment(uuid, amount, reason = 'Booking cancellation refund') {
+        try {
+            this.logger.log(`Initiating CamerPay refund | uuid: ${uuid} | amount: ${amount} XAF | reason: ${reason}`);
+            const body = {
+                amount: Math.round(amount),
+                currency: 'XAF',
+                reason,
+            };
+            this.logger.log(`CamerPay refund request body: ${JSON.stringify(body)}`);
+            const response = await this.axiosInstance.post(`/api/payment/${uuid}/refund`, body);
+            const data = response.data;
+            this.logger.log(`CamerPay refund response: ${JSON.stringify(data)}`);
+            return {
+                success: true,
+                refundId: data.refund_id ?? data.id ?? undefined,
+                status: data.status ?? 'refunded',
+                _raw: data,
+            };
+        }
+        catch (error) {
+            this.logger.error(`CamerPay refundPayment error | uuid: ${uuid} | status: ${error.response?.status} | ` +
+                `data: ${JSON.stringify(error.response?.data)} | message: ${error.message}`);
+            throw new common_1.BadRequestException(error.response?.data?.message ||
+                error.response?.data?.detail ||
+                error.message ||
+                'Failed to initiate refund with CamerPay');
+        }
     }
 };
 exports.CamerPayService = CamerPayService;

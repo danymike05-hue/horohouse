@@ -9,7 +9,7 @@ var __metadata = (this && this.__metadata) || function (k, v) {
     if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.TransactionQueryDto = exports.FlutterwaveWebhookDto = exports.InitiateBookingPaymentDto = exports.WithdrawFundsDto = exports.CancelSubscriptionDto = exports.CreateListingBoostDto = exports.CreateSubscriptionDto = exports.VerifyPaymentDto = exports.InitializePaymentDto = void 0;
+exports.AdminRefundBookingDto = exports.TransactionQueryDto = exports.FlutterwaveWebhookDto = exports.InitiateBookingPaymentDto = exports.WithdrawFundsDto = exports.CancelSubscriptionDto = exports.CreateListingBoostDto = exports.CreateSubscriptionDto = exports.VerifyPaymentDto = exports.InitializePaymentDto = void 0;
 const class_validator_1 = require("class-validator");
 const swagger_1 = require("@nestjs/swagger");
 const transaction_schema_1 = require("../schemas/transaction.schema");
@@ -339,4 +339,21 @@ __decorate([
     (0, class_validator_1.IsOptional)(),
     __metadata("design:type", String)
 ], TransactionQueryDto.prototype, "endDate", void 0);
+class AdminRefundBookingDto {
+    amount;
+    reason;
+}
+exports.AdminRefundBookingDto = AdminRefundBookingDto;
+__decorate([
+    (0, swagger_1.ApiPropertyOptional)({ description: 'Amount to refund in XAF. Defaults to full refundable or cancellation amount.' }),
+    (0, class_validator_1.IsNumber)(),
+    (0, class_validator_1.IsOptional)(),
+    __metadata("design:type", Number)
+], AdminRefundBookingDto.prototype, "amount", void 0);
+__decorate([
+    (0, swagger_1.ApiPropertyOptional)({ description: 'Reason for the refund' }),
+    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.IsOptional)(),
+    __metadata("design:type", String)
+], AdminRefundBookingDto.prototype, "reason", void 0);
 //# sourceMappingURL=payment.dto.js.map

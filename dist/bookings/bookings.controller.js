@@ -31,6 +31,9 @@ let BookingsController = class BookingsController {
     async getMyBookings(req, query) {
         return this.bookingsService.getGuestBookings(req.user._id.toString(), query);
     }
+    async getCancellationPreview(id, req) {
+        return this.bookingsService.getCancellationPreview(id, req.user);
+    }
     async cancelBooking(id, dto, req) {
         return this.bookingsService.cancelBooking(id, dto, req.user);
     }
@@ -46,14 +49,24 @@ let BookingsController = class BookingsController {
     async completeBooking(id, req) {
         return this.bookingsService.completeBooking(id, req.user);
     }
+    async getHostAvailability(propertyId, query, req) {
+        if (!query.from || !query.to) {
+            throw new common_1.BadRequestException('Both "from" and "to" query params are required');
+        }
+        await this.bookingsService.assertCanManageProperty(propertyId, req.user);
+        return this.bookingsService.getAvailability(propertyId, new Date(query.from), new Date(query.to), query.roomId, { includeGuestDetails: true });
+    }
     async getAvailability(propertyId, query) {
         if (!query.from || !query.to) {
             throw new common_1.BadRequestException('Both "from" and "to" query params are required');
         }
         return this.bookingsService.getAvailability(propertyId, new Date(query.from), new Date(query.to), query.roomId);
     }
-    async getPropertyBookings(propertyId, query) {
-        return this.bookingsService.getPropertyBookings(propertyId, query);
+    async getPropertyBookings(propertyId, query, req) {
+        return this.bookingsService.getPropertyBookings(propertyId, query, req.user);
+    }
+    async getHostStats(req) {
+        return this.bookingsService.getHostStats(req.user._id.toString());
     }
     async getAllBookings(query) {
         return this.bookingsService.getAllBookings(query);
@@ -66,9 +79,6 @@ let BookingsController = class BookingsController {
     }
     async getBookingById(id, req) {
         return this.bookingsService.getBookingById(id, req.user);
-    }
-    async getHostStats(req) {
-        return this.bookingsService.getHostStats(req.user._id.toString());
     }
 };
 exports.BookingsController = BookingsController;
@@ -104,6 +114,18 @@ __decorate([
     __metadata("design:paramtypes", [Object, booking_dto_1.BookingQueryDto]),
     __metadata("design:returntype", Promise)
 ], BookingsController.prototype, "getMyBookings", null);
+__decorate([
+    (0, common_1.Get)(':id/cancellation-preview'),
+    (0, roles_guard_1.Roles)(user_schema_1.UserRole.REGISTERED_USER, user_schema_1.UserRole.GUEST, user_schema_1.UserRole.HOST, user_schema_1.UserRole.AGENT, user_schema_1.UserRole.LANDLORD, user_schema_1.UserRole.ADMIN),
+    (0, swagger_1.ApiBearerAuth)(),
+    (0, swagger_1.ApiOperation)({ summary: 'What cancelling now would refund (same rules as cancel)' }),
+    (0, swagger_1.ApiParam)({ name: 'id', description: 'Booking ID' }),
+    __param(0, (0, common_1.Param)('id')),
+    __param(1, (0, common_1.Req)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, Object]),
+    __metadata("design:returntype", Promise)
+], BookingsController.prototype, "getCancellationPreview", null);
 __decorate([
     (0, common_1.Patch)(':id/cancel'),
     (0, roles_guard_1.Roles)(user_schema_1.UserRole.REGISTERED_USER, user_schema_1.UserRole.GUEST, user_schema_1.UserRole.HOST, user_schema_1.UserRole.AGENT, user_schema_1.UserRole.LANDLORD, user_schema_1.UserRole.ADMIN),
@@ -186,9 +208,25 @@ __decorate([
     __metadata("design:returntype", Promise)
 ], BookingsController.prototype, "completeBooking", null);
 __decorate([
+    (0, common_1.Get)('availability/:propertyId/details'),
+    (0, roles_guard_1.Roles)(user_schema_1.UserRole.HOST, user_schema_1.UserRole.AGENT, user_schema_1.UserRole.LANDLORD, user_schema_1.UserRole.ADMIN),
+    (0, swagger_1.ApiBearerAuth)(),
+    (0, swagger_1.ApiOperation)({ summary: 'Host calendar: booked ranges WITH guest name, photo and total (owner / admin only)' }),
+    (0, swagger_1.ApiParam)({ name: 'propertyId', description: 'Property ID' }),
+    (0, swagger_1.ApiQuery)({ name: 'from', required: true, type: String }),
+    (0, swagger_1.ApiQuery)({ name: 'to', required: true, type: String }),
+    (0, swagger_1.ApiResponse)({ status: 403, description: 'You do not manage this property' }),
+    __param(0, (0, common_1.Param)('propertyId')),
+    __param(1, (0, common_1.Query)()),
+    __param(2, (0, common_1.Req)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, booking_dto_1.AvailabilityQueryDto, Object]),
+    __metadata("design:returntype", Promise)
+], BookingsController.prototype, "getHostAvailability", null);
+__decorate([
     (0, common_1.Get)('availability/:propertyId'),
     (0, roles_guard_1.Public)(),
-    (0, swagger_1.ApiOperation)({ summary: 'Get blocked/booked date ranges for a property (calendar widget)' }),
+    (0, swagger_1.ApiOperation)({ summary: 'Get blocked/booked date ranges for a property (calendar widget, dates only)' }),
     (0, swagger_1.ApiParam)({ name: 'propertyId', description: 'Property ID' }),
     (0, swagger_1.ApiQuery)({ name: 'from', required: true, type: String, description: 'Range start (ISO date)' }),
     (0, swagger_1.ApiQuery)({ name: 'to', required: true, type: String, description: 'Range end (ISO date)' }),
@@ -211,10 +249,22 @@ __decorate([
     (0, swagger_1.ApiResponse)({ status: 200, description: 'Paginated bookings for the property' }),
     __param(0, (0, common_1.Param)('propertyId')),
     __param(1, (0, common_1.Query)()),
+    __param(2, (0, common_1.Req)()),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [String, booking_dto_1.BookingQueryDto]),
+    __metadata("design:paramtypes", [String, booking_dto_1.BookingQueryDto, Object]),
     __metadata("design:returntype", Promise)
 ], BookingsController.prototype, "getPropertyBookings", null);
+__decorate([
+    (0, common_1.Get)('host-stats'),
+    (0, roles_guard_1.Roles)(user_schema_1.UserRole.HOST, user_schema_1.UserRole.AGENT, user_schema_1.UserRole.LANDLORD, user_schema_1.UserRole.ADMIN),
+    (0, swagger_1.ApiBearerAuth)(),
+    (0, swagger_1.ApiOperation)({ summary: 'Get aggregated dashboard stats for the authenticated host' }),
+    (0, swagger_1.ApiResponse)({ status: 200, description: 'Host dashboard stats' }),
+    __param(0, (0, common_1.Req)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object]),
+    __metadata("design:returntype", Promise)
+], BookingsController.prototype, "getHostStats", null);
 __decorate([
     (0, common_1.Get)('admin/all'),
     (0, roles_guard_1.Roles)(user_schema_1.UserRole.ADMIN),
@@ -270,17 +320,6 @@ __decorate([
     __metadata("design:paramtypes", [String, Object]),
     __metadata("design:returntype", Promise)
 ], BookingsController.prototype, "getBookingById", null);
-__decorate([
-    (0, common_1.Get)('host-stats'),
-    (0, roles_guard_1.Roles)(user_schema_1.UserRole.HOST, user_schema_1.UserRole.AGENT, user_schema_1.UserRole.LANDLORD, user_schema_1.UserRole.ADMIN),
-    (0, swagger_1.ApiBearerAuth)(),
-    (0, swagger_1.ApiOperation)({ summary: 'Get aggregated dashboard stats for the authenticated host' }),
-    (0, swagger_1.ApiResponse)({ status: 200, description: 'Host dashboard stats' }),
-    __param(0, (0, common_1.Req)()),
-    __metadata("design:type", Function),
-    __metadata("design:paramtypes", [Object]),
-    __metadata("design:returntype", Promise)
-], BookingsController.prototype, "getHostStats", null);
 exports.BookingsController = BookingsController = __decorate([
     (0, swagger_1.ApiTags)('Bookings'),
     (0, common_1.Controller)('bookings'),

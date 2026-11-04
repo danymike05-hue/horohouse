@@ -1,9 +1,12 @@
 import { Model } from 'mongoose';
 import { ConfigService } from '@nestjs/config';
-import { User, UserDocument, UserRole, PayoutMethod, HostPayoutRecord } from './schemas/user.schema';
+import { User, UserDocument, UserRole, HostVerificationStatus, PayoutMethod, HostPayoutRecord } from './schemas/user.schema';
 import { CreateUserDto, UpdateUserDto, UpdatePreferencesDto, CreateTenantDto, UpdateTenantDto } from './dto';
 import { PropertyDocument } from 'src/properties/schemas/property.schema';
 import { ReviewsService } from 'src/reviews/reviews.service';
+export declare const HOST_COMMISSION_RATE = 0.1;
+export declare const GOVERNMENT_ID_MIME_TYPES: string[];
+export declare const GOVERNMENT_ID_MAX_BYTES: number;
 export declare class UsersService {
     private userModel;
     private propertyModel;
@@ -30,6 +33,7 @@ export declare class UsersService {
     uploadProfilePicture(userId: string, file: {
         buffer: Buffer;
     }): Promise<User>;
+    removeProfilePicture(userId: string): Promise<User>;
     addToFavorites(userId: string, propertyId: string): Promise<User>;
     removeFromFavorites(userId: string, propertyId: string): Promise<User>;
     addToRecentlyViewed(userId: string, propertyId: string): Promise<void>;
@@ -120,6 +124,20 @@ export declare class UsersService {
         hostLanguages?: string[];
         operatingCity?: string;
     }): Promise<any>;
+    isHostIdRequired(): boolean;
+    getMyHostVerification(id: string): Promise<{
+        status: HostVerificationStatus;
+        submittedAt: Date | null;
+        reviewedAt: Date | null;
+        rejectionReason: string | null;
+        hasDocument: boolean;
+        idRequired: boolean;
+    }>;
+    assertHostCanPublish(userId: string): Promise<void>;
+    getPendingHostVerifications(page?: number, limit?: number): Promise<any>;
+    getGovernmentIdViewUrl(id: string): Promise<{
+        url: string;
+    }>;
     verifyHost(id: string, decision: 'approve' | 'reject', rejectionReason?: string): Promise<any>;
     recalculateSuperhostStatus(id: string): Promise<{
         isSuperhost: boolean;

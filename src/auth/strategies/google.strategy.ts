@@ -1,4 +1,4 @@
-import { Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
+import { Injectable, Logger, ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
 import { PassportStrategy } from '@nestjs/passport';
 import { ConfigService } from '@nestjs/config';
 import { Strategy, VerifyCallback } from 'passport-google-oauth20';
@@ -56,15 +56,25 @@ export class GoogleStrategy extends PassportStrategy(Strategy, 'google') {
         );
       }
 
+      const email: string | undefined = profile?.emails?.[0]?.value;
+      if (!email) {
+        return done(new UnauthorizedException('Google did not share an email address'), false);
+      }
+
+      // Google tells us whether it has verified the address. Accounts are linked
+      // by email, so an unverified Google email must never be trusted.
+      const emailVerified =
+        profile?._json?.email_verified !== false && profile?.emails?.[0]?.verified !== false;
+
       const googleUser = {
         id: profile.id,
-        email: profile.emails[0].value,
-        displayName: profile.displayName,
-        firstName: profile.name.givenName,
-        lastName: profile.name.familyName,
-        picture: profile.photos[0].value,
-        accessToken,
-        refreshToken,
+        email,
+        emailVerified,
+        displayName: profile.displayName || [profile?.name?.givenName, profile?.name?.familyName].filter(Boolean).join(' ') || email.split('@')[0],
+        firstName: profile?.name?.givenName,
+        lastName: profile?.name?.familyName,
+        picture: profile?.photos?.[0]?.value,
+        // Google's own tokens are not used or stored
       };
 
       // Just pass the Google user data to the controller

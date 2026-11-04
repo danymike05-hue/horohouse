@@ -8,7 +8,7 @@ import { QueryNotificationDto } from './dto/query-notification.dto';
 import { NotificationsGateway } from './notifications.gateway';
 import { PushNotificationsService } from './push-notifications.service';
 import { EmailService } from '../email/email.service';
-import { User, UserDocument } from '../users/schemas/user.schema';
+import { User, UserDocument, UserRole } from '../users/schemas/user.schema';
 
 @Injectable()
 export class NotificationsService {
@@ -1027,6 +1027,46 @@ export class NotificationsService {
 
       default:
         throw new BadRequestException(`Unknown target: ${dto.target}`);
+    }
+  }
+
+  /**
+   * Tells every active admin (in-app, push and email) that something needs a person:
+   * a payment to refund, a failed refund, a host wallet that couldn't be debited…
+   * These were only written to the server log, where nobody would see them.
+   * Never throws: an alert must not break the payment flow that raised it.
+   */
+  async notifyAdmins(params: { title: string; message: string; link?: string; metadata?: Record<string, any> }): Promise<void> {
+    try {
+      const admins = await this.userModel
+        .find({ role: UserRole.ADMIN, isActive: { $ne: false } }, { _id: 1, email: 1, name: 1 })
+        .lean()
+        .exec();
+      if (!admins.length) {
+        this.logger.error(`[AdminAlert] No admin account to alert: ${params.title} — ${params.message}`);
+        return;
+      }
+      const ids = admins.map((a: any) => String(a._id));
+      await this.createBulk(ids, {
+        type: NotificationType.SYSTEM,
+        title: params.title,
+        message: params.message,
+        link: params.link,
+        metadata: { ...(params.metadata ?? {}), adminAlert: true },
+      } as any);
+      for (const a of admins as any[]) {
+        this.pushNotificationsService
+          .sendToUser(String(a._id), { title: params.title, body: params.message, data: { route: params.link } })
+          .catch(() => undefined);
+        if (a.email) {
+          this.emailService
+            .sendAdminNotificationEmail(a.email, a.name || a.email, params.title, params.message, params.link)
+            .catch((e: any) => this.logger.warn(`[AdminAlert] email to ${a.email} failed: ${e?.message}`));
+        }
+      }
+      this.logger.warn(`[AdminAlert] ${params.title} — sent to ${ids.length} admin(s)`);
+    } catch (err: any) {
+      this.logger.error(`[AdminAlert] failed (${params.title}): ${err?.message}`);
     }
   }
 

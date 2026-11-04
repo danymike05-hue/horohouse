@@ -167,7 +167,7 @@ export interface HostProfile {
   currentMonthEarnings: number;
   /** Number of completed stays (bookings that checked out successfully). */
   completedStays: number;
-  /** Platform commission rate applied to this host's payouts (0–1, e.g. 0.12 = 12 %). */
+  /** Platform commission rate applied to this host's payouts (0–1, e.g. 0.10 = 10 %). */
   commissionRate: number;
   /** Registered payout destinations. */
   payoutAccounts: HostPayoutAccount[];
@@ -323,6 +323,9 @@ export interface UserSession {
   lastActive: Date;
   createdAt: Date;
   expiresAt: Date;
+  /** Hash of the refresh token this session had before its last rotation */
+  prevRefreshToken?: string;
+  rotatedAt?: Date;
 }
 
 // ─── Schema ───────────────────────────────────────────────────────────────────
@@ -388,10 +391,37 @@ export class User {
   @Prop({ default: false })
   phoneVerified: boolean;
 
+  /**
+   * Identity check for every user (guests included). Hosts verified through
+   * hostProfile.verificationStatus count as verified too (see TrustService.isVerified).
+   * The document is stored on Cloudinary as "authenticated" — only admins get a signed link.
+   */
+  @Prop({
+    type: {
+      status: { type: String, enum: ['unverified', 'pending', 'verified', 'rejected'], default: 'unverified' },
+      documentType: { type: String, enum: ['national_id', 'passport', 'residence_permit', 'driving_licence'] },
+      documentPublicId: { type: String },
+      submittedAt: { type: Date },
+      reviewedAt: { type: Date },
+      rejectionReason: { type: String },
+    },
+    default: { status: 'unverified' },
+    _id: false,
+  })
+  identityVerification?: {
+    status: 'unverified' | 'pending' | 'verified' | 'rejected';
+    documentType?: 'national_id' | 'passport' | 'residence_permit' | 'driving_licence';
+    documentPublicId?: string;
+    submittedAt?: Date;
+    reviewedAt?: Date;
+    rejectionReason?: string;
+  };
+
   @Prop({ unique: true, sparse: true })
   googleId?: string;
 
-  @Prop()
+  // Never returned by queries unless asked for with .select('+password')
+  @Prop({ select: false })
   password?: string;
 
   @Prop({ default: 0 })
@@ -400,19 +430,28 @@ export class User {
   @Prop({ default: 0 })
   reviewCount?: number;
 
-  @Prop()
+  /** sha256 of the SMS code */
+  @Prop({ select: false })
   phoneVerificationCode?: string;
 
   @Prop()
   phoneVerificationExpires?: Date;
 
+  /** When the last SMS code was sent (60 s cooldown per number) */
   @Prop()
+  phoneVerificationSentAt?: Date;
+
+  /** Wrong codes entered for the current SMS code (locked after 5) */
+  @Prop({ default: 0, select: false })
+  phoneVerificationAttempts?: number;
+
+  @Prop({ select: false })
   emailVerificationToken?: string;
 
   @Prop()
   emailVerificationExpires?: Date;
 
-  @Prop()
+  @Prop({ select: false })
   resetPasswordToken?: string;
 
   @Prop()
@@ -421,8 +460,21 @@ export class User {
   @Prop({ default: false })
   twoFactorEnabled?: boolean;
 
-  @Prop()
+  @Prop({ select: false })
   twoFactorSecret?: string;
+
+  // ── One-time Google sign-in code (app swaps it for tokens with PKCE) ─────
+  @Prop({ select: false })
+  oauthCodeHash?: string;
+
+  @Prop({ select: false })
+  oauthCodeChallenge?: string;
+
+  @Prop({ select: false })
+  oauthCodeExpires?: Date;
+
+  @Prop({ select: false })
+  oauthCodeNewUser?: boolean;
 
   @Prop({
     type: [
@@ -437,6 +489,8 @@ export class User {
         lastActive: { type: Date, default: Date.now },
         createdAt: { type: Date, default: Date.now },
         expiresAt: { type: Date, required: true },
+        prevRefreshToken: { type: String },
+        rotatedAt: { type: Date },
       },
     ],
     default: [],
@@ -531,7 +585,7 @@ export class User {
       totalEarnings: { type: Number, default: 0 },
       currentMonthEarnings: { type: Number, default: 0 },
       completedStays: { type: Number, default: 0 },
-      commissionRate: { type: Number, default: 0.12 }, // 12 % platform cut
+      commissionRate: { type: Number, default: 0.10 }, // 10 % platform cut (matches HOST_COMMISSION_RATE)
       payoutAccounts: {
         type: [
           {
@@ -699,6 +753,7 @@ UserSchema.index({ 'preferences.preferredLocation': '2dsphere' });
 // Existing indexes
 UserSchema.index({ 'recentlyViewed.propertyId': 1 });
 UserSchema.index({ 'sessions.id': 1 });
+UserSchema.index({ oauthCodeHash: 1 }, { sparse: true });
 UserSchema.index({ 'sessions.refreshToken': 1 });
 UserSchema.index({ 'sessions.expiresAt': 1 });
 UserSchema.index({ 'sessions.isActive': 1 });
@@ -739,6 +794,16 @@ UserSchema.set('toJSON', {
     delete ret.phoneVerificationCode;
     delete ret.emailVerificationToken;
     delete ret.resetPasswordToken;
+    delete ret.twoFactorSecret;
+    delete ret.phoneVerificationAttempts;
+    delete ret.oauthCodeHash;
+    delete ret.oauthCodeChallenge;
+    delete ret.oauthCodeExpires;
+    delete ret.oauthCodeNewUser;
+    // Strip the identity document id (admins get a signed link through TrustService)
+    if (ret.identityVerification?.documentPublicId) {
+      delete ret.identityVerification.documentPublicId;
+    }
     // Strip host government ID Cloudinary public_id
     if (ret.hostProfile?.governmentIdPublicId) {
       delete ret.hostProfile.governmentIdPublicId;
@@ -750,7 +815,7 @@ UserSchema.set('toJSON', {
     // Strip refresh tokens from sessions
     if (ret.sessions && Array.isArray(ret.sessions)) {
       ret.sessions = ret.sessions.map((session: any) => {
-        const { refreshToken, ...sessionWithoutToken } = session;
+        const { refreshToken, prevRefreshToken, ...sessionWithoutToken } = session;
         return sessionWithoutToken;
       });
     }

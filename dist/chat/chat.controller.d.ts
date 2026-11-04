@@ -1,3 +1,4 @@
+import { Types } from 'mongoose';
 import { ChatService } from './chat.service';
 import { CallService } from './call.service';
 import { CreateConversationDto, SendMessageDto, GetMessagesQueryDto, GetConversationsQueryDto, EditMessageDto, MarkAsReadDto, ArchiveConversationDto } from './dto/chat.dto';
@@ -16,10 +17,10 @@ export declare class ChatController {
         message: string;
     }>;
     sendMessage(req: any, dto: SendMessageDto): Promise<import("./schemas/message.schema").Message>;
-    sendMessageWithAttachments(req: any, dto: SendMessageDto, files: Express.Multer.File[]): Promise<import("./schemas/message.schema").Message>;
+    sendMessageWithAttachments(req: any): Promise<import("./schemas/message.schema").Message>;
     getMessages(req: any, conversationId: string, query: GetMessagesQueryDto): Promise<{
         messages: (import("mongoose").FlattenMaps<import("./schemas/message.schema").MessageDocument> & Required<{
-            _id: import("mongoose").Types.ObjectId;
+            _id: Types.ObjectId;
         }> & {
             __v: number;
         })[];

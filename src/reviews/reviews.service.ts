@@ -296,6 +296,9 @@ export class ReviewsService {
     // ── 7. If other review was waiting, publish it now too ────────────────────
     if (shouldPublishNow && otherReview) {
       await this.reviewModel.findByIdAndUpdate(otherReview._id, { isPublished: true });
+      if (otherReview.reviewType === ReviewType.STAY && otherReview.propertyId) {
+        await this.updatePropertyStayRating(otherReview.propertyId.toString());
+      }
     }
 
     // ── 8. Update Booking flags ───────────────────────────────────────────────
@@ -510,34 +513,35 @@ export class ReviewsService {
   /**
    * NEW — All reviews (both sides) associated with a single booking.
    */
+  /**
+   * Public route: only published reviews. Booking reviews stay hidden until both sides
+   * have written theirs (or the 14-day window ends). This used to return hidden ones
+   * too, so either side could read the other's review before writing their own.
+   * The flags tell the app whether each side has already submitted.
+   */
   async getBookingReviews(bookingId: string): Promise<{
     stayReview: Review | null;
     guestReview: Review | null;
+    stayReviewSubmitted: boolean;
+    guestReviewSubmitted: boolean;
   }> {
     if (!Types.ObjectId.isValid(bookingId)) {
       throw new BadRequestException('Invalid booking ID');
     }
 
-    const [stayReview, guestReview] = await Promise.all([
+    const find = (reviewerRole: ReviewerRole) =>
       this.reviewModel
-        .findOne({
-          bookingId: new Types.ObjectId(bookingId),
-          reviewerRole: ReviewerRole.GUEST,
-          isActive: true,
-        })
+        .findOne({ bookingId: new Types.ObjectId(bookingId), reviewerRole, isActive: true })
         .populate('userId', 'name profilePicture')
-        .exec(),
-      this.reviewModel
-        .findOne({
-          bookingId: new Types.ObjectId(bookingId),
-          reviewerRole: ReviewerRole.HOST,
-          isActive: true,
-        })
-        .populate('userId', 'name profilePicture')
-        .exec(),
-    ]);
+        .exec();
+    const [stay, guest] = await Promise.all([find(ReviewerRole.GUEST), find(ReviewerRole.HOST)]);
 
-    return { stayReview, guestReview };
+    return {
+      stayReview: stay?.isPublished ? stay : null,
+      guestReview: guest?.isPublished ? guest : null,
+      stayReviewSubmitted: !!stay,
+      guestReviewSubmitted: !!guest,
+    };
   }
 
   async findOne(id: string): Promise<Review> {
@@ -554,7 +558,8 @@ export class ReviewsService {
       .populate('reviewedUserId', 'name profilePicture')
       .exec();
 
-    if (!review) throw new NotFoundException('Review not found');
+    // A booking review that isn't published yet is hidden like it doesn't exist.
+    if (!review || !review.isActive || !review.isPublished) throw new NotFoundException('Review not found');
     return review;
   }
 
@@ -588,6 +593,9 @@ export class ReviewsService {
 
     if (review.userId.toString() !== user._id.toString()) {
       throw new ForbiddenException('You can only update your own reviews');
+    }
+    if (review.bookingId && review.isPublished) {
+      throw new BadRequestException('Stay reviews can no longer be edited once they are published');
     }
 
     if (dto.rating) review.rating = dto.rating;
@@ -683,19 +691,25 @@ export class ReviewsService {
    * has passed. Call this from a scheduled task (e.g. every hour via @Cron).
    */
   async publishExpiredReviews(): Promise<number> {
-    const result = await this.reviewModel.updateMany(
-      {
-        isPublished: false,
-        publishDeadline: { $lte: new Date() },
-        isActive: true,
-        bookingId: { $exists: true },
-      },
-      { $set: { isPublished: true } },
-    );
+    const filter = {
+      isPublished: false,
+      publishDeadline: { $lte: new Date() },
+      isActive: true,
+      bookingId: { $exists: true },
+    };
+    // Which listings need their rating recomputed once these go public.
+    const affected = await this.reviewModel
+      .find({ ...filter, reviewType: ReviewType.STAY })
+      .distinct('propertyId');
+
+    const result = await this.reviewModel.updateMany(filter, { $set: { isPublished: true } });
 
     const published = result.modifiedCount;
     if (published > 0) {
       this.logger.log(`Force-published ${published} expired booking review(s)`);
+      for (const propertyId of affected) {
+        if (propertyId) await this.updatePropertyStayRating(String(propertyId));
+      }
     }
     return published;
   }

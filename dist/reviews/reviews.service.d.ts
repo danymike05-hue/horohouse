@@ -68,6 +68,8 @@ export declare class ReviewsService {
     getBookingReviews(bookingId: string): Promise<{
         stayReview: Review | null;
         guestReview: Review | null;
+        stayReviewSubmitted: boolean;
+        guestReviewSubmitted: boolean;
     }>;
     findOne(id: string): Promise<Review>;
     getUserReviews(userId: string, options?: ReviewOptions): Promise<any>;

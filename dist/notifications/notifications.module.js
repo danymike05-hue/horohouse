@@ -68,6 +68,7 @@ exports.NotificationsModule = NotificationsModule = __decorate([
         exports: [
             notifications_service_1.NotificationsService,
             notifications_gateway_1.NotificationsGateway,
+            push_notifications_service_1.PushNotificationsService,
         ],
     })
 ], NotificationsModule);

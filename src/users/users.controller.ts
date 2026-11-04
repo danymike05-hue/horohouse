@@ -23,7 +23,7 @@ import {
   ApiBearerAuth,
 } from '@nestjs/swagger';
 
-import { UsersService } from './users.service';
+import { UsersService, GOVERNMENT_ID_MIME_TYPES, GOVERNMENT_ID_MAX_BYTES } from './users.service';
 import { CreateUserDto, UpdateUserDto, UpdatePreferencesDto, CreateTenantDto, UpdateTenantDto, SetRoleDto, UpdateHostProfileDto, VerifyHostDto, RecordHostPayoutDto, UpdateOwnProfileDto } from './dto';
 import { User, UserRole } from './schemas/user.schema';
 import { Roles, RolesGuard } from '../auth/guards/roles.guard';
@@ -110,6 +110,22 @@ export class UsersController {
     return this.usersService.removeFromFavorites(req.user.id, propertyId);
   }
 
+  // The app records views and clears history here; these two routes were missing (404).
+  @Post('me/recently-viewed/:propertyId')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Record that I viewed a property' })
+  async recordRecentlyViewed(@Req() req: any, @Param('propertyId') propertyId: string) {
+    await this.usersService.addToRecentlyViewed(req.user.id, propertyId);
+    return { ok: true };
+  }
+
+  @Delete('me/recently-viewed')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Clear my recently viewed history' })
+  async clearRecentlyViewed(@Req() req: any) {
+    return this.usersService.clearViewingHistory(req.user.id);
+  }
+
   @Get('me/recently-viewed')
   @ApiOperation({ summary: 'Get recently viewed properties' })
   @ApiQuery({ name: 'limit', required: false, type: Number, description: 'Number of items to return' })
@@ -154,7 +170,6 @@ export class UsersController {
   @ApiResponse({ status: 200, description: 'Profile picture uploaded successfully' })
   async uploadProfilePicture(@Req() req: any): Promise<User> {
     // Await the multipart file (Fastify multipart)
-    console.log('Content-Type header:', req.headers['content-type']);
     const data = await req.file();
 
     if (!data) {
@@ -199,6 +214,33 @@ export class UsersController {
       throw new BadRequestException('role is required in request body');
     }
     return this.usersService.setRole(req.user.id, body.role);
+  }
+
+  // ── Host identity verification ─────────────────────────────────────────────
+
+  @Get('me/host/verification')
+  @Roles(UserRole.HOST, UserRole.ADMIN)
+  @ApiOperation({ summary: 'Current host ID verification status (and whether an ID is required to publish)' })
+  async getMyHostVerification(@Req() req: any) {
+    return this.usersService.getMyHostVerification(req.user.id);
+  }
+
+  @Post('me/host/government-id')
+  @Roles(UserRole.HOST)
+  @ApiConsumes('multipart/form-data')
+  @ApiOperation({ summary: 'Upload a government ID photo for review (sets status to pending)' })
+  async uploadGovernmentId(@Req() req: any) {
+    const data = await req.file();
+    if (!data) throw new BadRequestException('No file uploaded');
+    if (!GOVERNMENT_ID_MIME_TYPES.includes(String(data.mimetype).toLowerCase())) {
+      throw new BadRequestException('Upload a photo of your ID (JPG, PNG, WEBP or HEIC)');
+    }
+    const buffer: Buffer = await data.toBuffer();
+    if (buffer.length > GOVERNMENT_ID_MAX_BYTES) {
+      throw new BadRequestException('The photo is too large (10 MB maximum)');
+    }
+    await this.usersService.updateHostProfile(req.user.id, { governmentIdBuffer: buffer });
+    return this.usersService.getMyHostVerification(req.user.id);
   }
 
   @Delete('me/profile-picture')
@@ -452,6 +494,21 @@ export class UsersController {
   // HOST PUBLIC ROUTES
   // ==========================================
 
+  @Get('hosts/verifications/pending')
+  @Roles(UserRole.ADMIN)
+  @ApiOperation({ summary: 'Hosts waiting for an ID review, oldest first (Admin only)' })
+  @ApiQuery({ name: 'page', required: false, type: Number })
+  @ApiQuery({ name: 'limit', required: false, type: Number })
+  async getPendingHostVerifications(
+    @Query('page') page?: number,
+    @Query('limit') limit?: number,
+  ) {
+    return this.usersService.getPendingHostVerifications(
+      page ? parseInt(page.toString()) : 1,
+      limit ? parseInt(limit.toString()) : 20,
+    );
+  }
+
   @Get('hosts')
   @Public()
   @ApiOperation({ summary: 'Get all active hosts with short-term listing stats' })
@@ -508,6 +565,13 @@ export class UsersController {
   // ==========================================
   // HOST ADMIN ROUTES
   // ==========================================
+
+  @Get('hosts/:id/government-id')
+  @Roles(UserRole.ADMIN)
+  @ApiOperation({ summary: 'Signed link to view a host ID document (Admin only)' })
+  async getHostGovernmentId(@Param('id') id: string) {
+    return this.usersService.getGovernmentIdViewUrl(id);
+  }
 
   @Patch('hosts/:id/verify')
   @Roles(UserRole.ADMIN)

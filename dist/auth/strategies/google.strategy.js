@@ -45,15 +45,19 @@ let GoogleStrategy = GoogleStrategy_1 = class GoogleStrategy extends (0, passpor
             if (isDisabled) {
                 return done(new common_1.ServiceUnavailableException('Google OAuth is not configured on this server.'));
             }
+            const email = profile?.emails?.[0]?.value;
+            if (!email) {
+                return done(new common_1.UnauthorizedException('Google did not share an email address'), false);
+            }
+            const emailVerified = profile?._json?.email_verified !== false && profile?.emails?.[0]?.verified !== false;
             const googleUser = {
                 id: profile.id,
-                email: profile.emails[0].value,
-                displayName: profile.displayName,
-                firstName: profile.name.givenName,
-                lastName: profile.name.familyName,
-                picture: profile.photos[0].value,
-                accessToken,
-                refreshToken,
+                email,
+                emailVerified,
+                displayName: profile.displayName || [profile?.name?.givenName, profile?.name?.familyName].filter(Boolean).join(' ') || email.split('@')[0],
+                firstName: profile?.name?.givenName,
+                lastName: profile?.name?.familyName,
+                picture: profile?.photos?.[0]?.value,
             };
             done(null, googleUser);
         }

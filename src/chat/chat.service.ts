@@ -273,6 +273,9 @@ export class ChatService implements OnModuleInit {
      * Get single conversation by ID
      */
     async getConversation(conversationId: string, userId: string): Promise<Conversation> {
+        if (!Types.ObjectId.isValid(conversationId)) {
+            throw new NotFoundException('Conversation not found');
+        }
         const conversation = await this.conversationModel
             .findById(conversationId)
             .populate('participants.userId', 'name profilePicture email phoneNumber')
@@ -283,9 +286,9 @@ export class ChatService implements OnModuleInit {
             throw new NotFoundException('Conversation not found');
         }
 
-        // Check if user is participant
+        // Check if user is participant (a deleted account leaves userId null after populate)
         const isParticipant = conversation.participants.some(
-            p => p.userId._id.toString() === userId,
+            p => String((p.userId as any)?._id ?? p.userId ?? '') === userId,
         );
 
         if (!isParticipant) {
@@ -316,7 +319,7 @@ export class ChatService implements OnModuleInit {
 
             // Get recipient
             let recipient = conversation.participants.find(
-                p => p.userId._id.toString() !== userId,
+                p => !!p.userId && String((p.userId as any)?._id ?? p.userId) !== userId,
             );
 
             // Allow self-messaging (mostly for testing and developers)
@@ -348,7 +351,7 @@ export class ChatService implements OnModuleInit {
             const message = await this.messageModel.create({
                 conversationId: new Types.ObjectId(conversationId),
                 senderId: new Types.ObjectId(userId),
-                recipientId: recipient.userId._id,
+                recipientId: (recipient.userId as any)?._id ?? recipient.userId,
                 type,
                 content,
                 attachments: attachments || [],   // ← ajouté
@@ -372,7 +375,7 @@ export class ChatService implements OnModuleInit {
                     [`participants.$[elem].unreadCount`]: 1,
                 },
             }, {
-                arrayFilters: [{ 'elem.userId': recipient.userId._id }],
+                arrayFilters: [{ 'elem.userId': (recipient.userId as any)?._id ?? recipient.userId }],
             });
 
             this.logger.log(`Message sent: ${message._id} in conversation ${conversationId}`);
@@ -453,6 +456,8 @@ export class ChatService implements OnModuleInit {
         try {
             // Validate user is participant
             await this.getConversation(conversationId, userId);
+            // Bad ids used to crash the request with a 500
+            messageIds = (messageIds ?? []).filter((id) => Types.ObjectId.isValid(id));
 
             const now = new Date();
 

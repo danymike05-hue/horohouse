@@ -77,6 +77,18 @@ export class BookingsController {
     return this.bookingsService.getGuestBookings(req.user._id.toString(), query);
   }
 
+  @Get(':id/cancellation-preview')
+  @Roles(UserRole.REGISTERED_USER, UserRole.GUEST, UserRole.HOST, UserRole.AGENT, UserRole.LANDLORD, UserRole.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'What cancelling now would refund (same rules as cancel)' })
+  @ApiParam({ name: 'id', description: 'Booking ID' })
+  async getCancellationPreview(
+    @Param('id') id: string,
+    @Req() req: FastifyRequest & { user: User },
+  ) {
+    return this.bookingsService.getCancellationPreview(id, req.user);
+  }
+
   @Patch(':id/cancel')
   @Roles(UserRole.REGISTERED_USER, UserRole.GUEST, UserRole.HOST, UserRole.AGENT, UserRole.LANDLORD, UserRole.ADMIN)
   @ApiBearerAuth()
@@ -166,9 +178,35 @@ export class BookingsController {
   // PROPERTY — AVAILABILITY (PUBLIC)
   // ════════════════════════════════════════════════════════════════════════════
 
+  @Get('availability/:propertyId/details')
+  @Roles(UserRole.HOST, UserRole.AGENT, UserRole.LANDLORD, UserRole.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Host calendar: booked ranges WITH guest name, photo and total (owner / admin only)' })
+  @ApiParam({ name: 'propertyId', description: 'Property ID' })
+  @ApiQuery({ name: 'from', required: true, type: String })
+  @ApiQuery({ name: 'to', required: true, type: String })
+  @ApiResponse({ status: 403, description: 'You do not manage this property' })
+  async getHostAvailability(
+    @Param('propertyId') propertyId: string,
+    @Query() query: AvailabilityQueryDto,
+    @Req() req: FastifyRequest & { user: User },
+  ) {
+    if (!query.from || !query.to) {
+      throw new BadRequestException('Both "from" and "to" query params are required');
+    }
+    await this.bookingsService.assertCanManageProperty(propertyId, req.user);
+    return this.bookingsService.getAvailability(
+      propertyId,
+      new Date(query.from),
+      new Date(query.to),
+      query.roomId,
+      { includeGuestDetails: true },
+    );
+  }
+
   @Get('availability/:propertyId')
   @Public()
-  @ApiOperation({ summary: 'Get blocked/booked date ranges for a property (calendar widget)' })
+  @ApiOperation({ summary: 'Get blocked/booked date ranges for a property (calendar widget, dates only)' })
   @ApiParam({ name: 'propertyId', description: 'Property ID' })
   @ApiQuery({ name: 'from', required: true, type: String, description: 'Range start (ISO date)' })
   @ApiQuery({ name: 'to', required: true, type: String, description: 'Range end (ISO date)' })
@@ -200,8 +238,20 @@ export class BookingsController {
   async getPropertyBookings(
     @Param('propertyId') propertyId: string,
     @Query() query: BookingQueryDto,
+    @Req() req: FastifyRequest & { user: User },
   ) {
-    return this.bookingsService.getPropertyBookings(propertyId, query);
+    return this.bookingsService.getPropertyBookings(propertyId, query, req.user);
+  }
+
+  // Must stay ABOVE @Get(':id'): routes match in order, so ':id' used to swallow
+  // "/bookings/host-stats" and the host dashboard stats never loaded.
+  @Get('host-stats')
+  @Roles(UserRole.HOST, UserRole.AGENT, UserRole.LANDLORD, UserRole.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Get aggregated dashboard stats for the authenticated host' })
+  @ApiResponse({ status: 200, description: 'Host dashboard stats' })
+  async getHostStats(@Req() req: FastifyRequest & { user: User }) {
+    return this.bookingsService.getHostStats(req.user._id.toString());
   }
 
   // ════════════════════════════════════════════════════════════════════════════
@@ -262,14 +312,5 @@ export class BookingsController {
     @Req() req: FastifyRequest & { user: User },
   ) {
     return this.bookingsService.getBookingById(id, req.user);
-  }
-
-  @Get('host-stats')
-  @Roles(UserRole.HOST, UserRole.AGENT, UserRole.LANDLORD, UserRole.ADMIN)
-  @ApiBearerAuth()
-  @ApiOperation({ summary: 'Get aggregated dashboard stats for the authenticated host' })
-  @ApiResponse({ status: 200, description: 'Host dashboard stats' })
-  async getHostStats(@Req() req: FastifyRequest & { user: User }) {
-    return this.bookingsService.getHostStats(req.user._id.toString());
   }
 }

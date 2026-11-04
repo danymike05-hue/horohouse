@@ -24,6 +24,20 @@ const crypto = require("crypto");
 const sms_service_1 = require("./sms.service");
 const email_service_1 = require("../email/email.service");
 const user_schema_1 = require("../users/schemas/user.schema");
+const sha256 = (v) => crypto.createHash('sha256').update(v).digest('hex');
+const sha256b64url = (v) => crypto.createHash('sha256').update(v).digest('base64url');
+const escapeRegex = (v) => v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const emailQuery = (email) => ({ $regex: `^${escapeRegex(email.trim().toLowerCase())}$`, $options: 'i' });
+const safeEqual = (a, b) => {
+    const x = Buffer.from(a);
+    const y = Buffer.from(b);
+    return x.length === y.length && crypto.timingSafeEqual(x, y);
+};
+const isPlaceholderPhone = (p) => !p || p.startsWith('google_') || p.startsWith('temp_');
+const onboardingDone = (u) => u.onboardingStatus === user_schema_1.OnboardingStatus.COMPLETED && !(u.phoneNumber || '').startsWith('google_');
+const MAX_CODE_ATTEMPTS = 5;
+const OAUTH_CODE_TTL_MS = 2 * 60 * 1000;
+const ROTATION_GRACE_MS = 30 * 1000;
 let AuthService = class AuthService {
     static { AuthService_1 = this; }
     userModel;
@@ -32,6 +46,7 @@ let AuthService = class AuthService {
     jwtService;
     configService;
     logger = new common_1.Logger(AuthService_1.name);
+    static DUMMY_HASH = bcrypt.hashSync('horohouse-timing-placeholder', 12);
     static SELF_ASSIGNABLE_ROLES = [
         user_schema_1.UserRole.REGISTERED_USER,
         user_schema_1.UserRole.AGENT,
@@ -69,18 +84,23 @@ let AuthService = class AuthService {
                 Date.now() - new Date(existing.phoneVerificationSentAt).getTime() < COOLDOWN_MS) {
                 throw new common_1.BadRequestException('A verification code was already sent recently. Please wait before requesting another.');
             }
+            if (!existing) {
+                this.logger.log(`Phone code requested for unknown number ${formattedPhone.slice(0, 5)}…`);
+                return { message: 'Verification code sent successfully' };
+            }
             const verificationCode = this.smsService.generateVerificationCode();
             const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
-            await this.userModel.updateOne({ phoneNumber: formattedPhone }, {
-                phoneVerificationCode: verificationCode,
+            await this.userModel.updateOne({ _id: existing._id }, {
+                phoneVerificationCode: sha256(String(verificationCode)),
                 phoneVerificationExpires: expiresAt,
                 phoneVerificationSentAt: new Date(),
-            }, { upsert: true, setDefaultsOnInsert: true });
+                phoneVerificationAttempts: 0,
+            });
             const smsSent = await this.smsService.sendVerificationCode(formattedPhone, verificationCode);
             if (!smsSent) {
                 throw new common_1.BadRequestException('Failed to send verification code');
             }
-            this.logger.log(`Verification code sent to ${formattedPhone}`);
+            this.logger.log(`Verification code sent to ${formattedPhone.slice(0, 5)}…`);
             return { message: 'Verification code sent successfully' };
         }
         catch (error) {
@@ -90,12 +110,13 @@ let AuthService = class AuthService {
     }
     async registerWithPhone(dto, req) {
         try {
-            const { name, phoneNumber, email, role } = dto;
+            const { name, phoneNumber, role } = dto;
+            const email = dto.email ? dto.email.trim().toLowerCase() : undefined;
             const formattedPhone = this.smsService.formatPhoneNumber(phoneNumber);
             const existingUser = await this.userModel.findOne({
                 $or: [
                     { phoneNumber: formattedPhone },
-                    ...(email ? [{ email }] : [])
+                    ...(email ? [{ email: emailQuery(email) }] : [])
                 ]
             });
             if (existingUser) {
@@ -111,7 +132,7 @@ let AuthService = class AuthService {
                 onboardingCompleted: true,
                 onboardingStatus: user_schema_1.OnboardingStatus.COMPLETED,
             });
-            this.logger.log(`New user registered with phone: ${formattedPhone}`);
+            this.logger.log(`New user registered with phone: ${formattedPhone.slice(0, 5)}…`);
             if (user.email) {
                 const verificationToken = crypto.randomBytes(32).toString('hex');
                 const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
@@ -137,21 +158,23 @@ let AuthService = class AuthService {
         try {
             const { name, email, password, phoneNumber, role } = dto;
             const normalizedEmail = email.trim().toLowerCase();
-            const existingUser = await this.userModel.findOne({
-                $or: [
-                    { email: { $regex: `^${normalizedEmail}$`, $options: 'i' } },
-                    ...(phoneNumber ? [{ phoneNumber }] : [])
-                ]
-            });
-            if (existingUser) {
-                throw new common_1.ConflictException('User already exists with this email or phone number');
+            const formattedPhone = phoneNumber ? this.smsService.formatPhoneNumber(phoneNumber) : undefined;
+            const [emailTaken, phoneTaken] = await Promise.all([
+                this.userModel.exists({ email: emailQuery(normalizedEmail) }),
+                formattedPhone ? this.userModel.exists({ phoneNumber: formattedPhone }) : Promise.resolve(null),
+            ]);
+            if (emailTaken) {
+                throw new common_1.ConflictException({ message: 'An account already exists with this email', field: 'email', code: 'EMAIL_TAKEN' });
+            }
+            if (phoneTaken) {
+                throw new common_1.ConflictException({ message: 'This phone number is already used by another account', field: 'phone', code: 'PHONE_TAKEN' });
             }
             const hashedPassword = await bcrypt.hash(password, 12);
             const user = await this.userModel.create({
                 name,
                 email: normalizedEmail,
                 password: hashedPassword,
-                phoneNumber: phoneNumber || `temp_${Date.now()}`,
+                phoneNumber: formattedPhone || `temp_${Date.now()}_${crypto.randomBytes(3).toString('hex')}`,
                 role: this.resolveSelfAssignableRole(role),
                 phoneVerified: false,
                 emailVerified: false,
@@ -182,24 +205,17 @@ let AuthService = class AuthService {
         try {
             const { phoneNumber, verificationCode } = dto;
             const formattedPhone = this.smsService.formatPhoneNumber(phoneNumber);
-            const user = await this.userModel.findOne({ phoneNumber: formattedPhone });
+            const user = await this.userModel
+                .findOne({ phoneNumber: formattedPhone })
+                .select('+phoneVerificationCode +phoneVerificationAttempts');
             if (!user) {
-                throw new common_1.UnauthorizedException('User not found');
-            }
-            if (!user.phoneVerificationCode || !user.phoneVerificationExpires) {
-                throw new common_1.UnauthorizedException('No verification code found. Please request a new one.');
-            }
-            if (user.phoneVerificationExpires < new Date()) {
-                throw new common_1.UnauthorizedException('Verification code has expired');
-            }
-            if (user.phoneVerificationCode !== verificationCode) {
                 throw new common_1.UnauthorizedException('Invalid verification code');
             }
-            user.phoneVerified = true;
-            user.phoneVerificationCode = undefined;
-            user.phoneVerificationExpires = undefined;
-            await user.save();
-            this.logger.log(`User logged in with phone: ${formattedPhone}`);
+            if (!user.isActive) {
+                throw new common_1.UnauthorizedException('This account is deactivated');
+            }
+            await this.checkPhoneCode(user, verificationCode);
+            this.logger.log(`User logged in with phone: ${formattedPhone.slice(0, 5)}…`);
             const tokens = await this.generateTokens(user, req);
             return {
                 ...tokens,
@@ -215,21 +231,22 @@ let AuthService = class AuthService {
         try {
             const { email, password } = dto;
             const normalizedEmail = email.trim().toLowerCase();
-            const user = await this.userModel.findOne({
-                email: { $regex: `^${normalizedEmail}$`, $options: 'i' }
-            });
-            if (!user) {
-                this.logger.error(`Email login failed: user not found for email ${normalizedEmail}`);
-                throw new common_1.UnauthorizedException('Invalid credentials');
-            }
-            if (!user.password) {
-                this.logger.error(`Email login failed: no password set for email ${normalizedEmail}`);
-                throw new common_1.UnauthorizedException('Invalid credentials');
+            const user = await this.userModel
+                .findOne({ email: emailQuery(normalizedEmail) })
+                .select('+password');
+            if (!user || !user.password) {
+                await bcrypt.compare(password, AuthService_1.DUMMY_HASH);
+                throw new common_1.UnauthorizedException({
+                    message: 'Incorrect email or password',
+                    ...(user && !user.password && user.googleId ? { code: 'USE_GOOGLE' } : {}),
+                });
             }
             const isPasswordValid = await bcrypt.compare(password, user.password);
             if (!isPasswordValid) {
-                this.logger.error(`Email login failed: wrong password for email ${normalizedEmail}`);
-                throw new common_1.UnauthorizedException('Invalid credentials');
+                throw new common_1.UnauthorizedException('Incorrect email or password');
+            }
+            if (!user.isActive) {
+                throw new common_1.UnauthorizedException({ message: 'This account is deactivated', code: 'ACCOUNT_DEACTIVATED' });
             }
             this.logger.log(`User logged in with email: ${normalizedEmail}`);
             const tokens = await this.generateTokens(user, req);
@@ -243,103 +260,219 @@ let AuthService = class AuthService {
             throw error;
         }
     }
-    async googleAuth(dto, req) {
-        try {
-            const { googleId, email, name, picture } = dto;
-            let user = await this.userModel.findOne({
-                $or: [{ googleId }, { email }]
+    async googleSignIn(dto) {
+        const { googleId, name, picture } = dto;
+        const email = (dto.email || '').trim().toLowerCase();
+        if (!googleId || !email) {
+            throw new common_1.UnauthorizedException('Google did not return an email address');
+        }
+        if (dto.emailVerified === false) {
+            throw new common_1.UnauthorizedException('Your Google email address is not verified');
+        }
+        let user = (await this.userModel.findOne({ googleId }).select('+password').exec());
+        if (!user)
+            user = (await this.userModel.findOne({ email: emailQuery(email) }).select('+password').exec());
+        let isNewUser = false;
+        if (!user) {
+            isNewUser = true;
+            user = await this.userModel.create({
+                googleId,
+                name,
+                email,
+                profilePicture: picture,
+                phoneNumber: `google_${Date.now()}_${crypto.randomBytes(3).toString('hex')}`,
+                role: user_schema_1.UserRole.REGISTERED_USER,
+                emailVerified: true,
+                phoneVerified: false,
+                onboardingCompleted: false,
+                onboardingStatus: user_schema_1.OnboardingStatus.NOT_STARTED,
             });
-            let isNewUser = false;
-            if (!user) {
-                isNewUser = true;
-                user = await this.userModel.create({
-                    googleId,
-                    name,
-                    email,
-                    profilePicture: picture,
-                    phoneNumber: `google_${Date.now()}`,
-                    role: user_schema_1.UserRole.REGISTERED_USER,
-                    emailVerified: true,
-                    phoneVerified: false,
-                    onboardingCompleted: false,
-                    onboardingStatus: user_schema_1.OnboardingStatus.NOT_STARTED,
-                });
-                this.logger.log(`New user created via Google OAuth: ${email}`);
-                if (user.email) {
-                    void this.emailService.sendWelcomeEmail(user.email, user.name).catch(() => undefined);
-                }
+            this.logger.log(`New user created via Google OAuth: ${user._id}`);
+            if (user.email) {
+                void this.emailService.sendWelcomeEmail(user.email, user.name).catch(() => undefined);
             }
-            else {
-                if (!user.googleId)
-                    user.googleId = googleId;
-                if (!user.profilePicture && picture)
-                    user.profilePicture = picture;
-                user.emailVerified = true;
-                const hasPlaceholderPhone = !user.phoneNumber ||
-                    user.phoneNumber.startsWith('google_') ||
-                    user.phoneNumber.startsWith('temp_');
-                const explicitlyCompleted = user.onboardingStatus === user_schema_1.OnboardingStatus.COMPLETED ||
-                    user.onboardingCompleted === true;
-                const implicitlyCompleted = !hasPlaceholderPhone &&
-                    user.role !== user_schema_1.UserRole.REGISTERED_USER &&
-                    AuthService_1.ONBOARDING_SELF_ASSIGNABLE_ROLES.includes(user.role);
-                const alreadyCompleted = explicitlyCompleted || implicitlyCompleted;
-                if (alreadyCompleted) {
-                    if (user.onboardingStatus !== user_schema_1.OnboardingStatus.COMPLETED) {
-                        user.onboardingStatus = user_schema_1.OnboardingStatus.COMPLETED;
-                        user.onboardingCompleted = true;
-                    }
-                }
-                else {
-                    if (!user.onboardingStatus) {
-                        user.onboardingStatus = user_schema_1.OnboardingStatus.NOT_STARTED;
-                    }
-                    user.onboardingCompleted = false;
-                    isNewUser = true;
-                }
-                await user.save();
-                this.logger.log(`Existing user logged in via Google OAuth: ${email}, onboardingStatus: ${user.onboardingStatus}`);
+            return { user, isNewUser };
+        }
+        if (!user.isActive) {
+            throw new common_1.UnauthorizedException('This account is deactivated');
+        }
+        if (!user.googleId && !user.emailVerified && user.password) {
+            this.logger.warn(`Google sign-in for unverified email account ${user._id}: removing unverified password and sessions`);
+            user.password = undefined;
+            user.sessions = [];
+        }
+        if (!user.googleId)
+            user.googleId = googleId;
+        if (!user.profilePicture && picture)
+            user.profilePicture = picture;
+        user.emailVerified = true;
+        const explicitlyCompleted = (user.onboardingStatus === user_schema_1.OnboardingStatus.COMPLETED || user.onboardingCompleted === true) &&
+            !(user.phoneNumber || '').startsWith('google_');
+        const implicitlyCompleted = !isPlaceholderPhone(user.phoneNumber) &&
+            user.role !== user_schema_1.UserRole.REGISTERED_USER &&
+            AuthService_1.ONBOARDING_SELF_ASSIGNABLE_ROLES.includes(user.role);
+        if (explicitlyCompleted || implicitlyCompleted) {
+            if (user.onboardingStatus !== user_schema_1.OnboardingStatus.COMPLETED) {
+                user.onboardingStatus = user_schema_1.OnboardingStatus.COMPLETED;
+                user.onboardingCompleted = true;
             }
-            const tokens = await this.generateTokens(user, req);
-            return {
-                ...tokens,
-                user: user.toJSON(),
-                isNewUser,
-                onboardingStatus: user.onboardingStatus,
-            };
         }
-        catch (error) {
-            this.logger.error('Google OAuth failed:', error);
-            throw error;
+        else {
+            if (!user.onboardingStatus) {
+                user.onboardingStatus = user_schema_1.OnboardingStatus.NOT_STARTED;
+            }
+            user.onboardingCompleted = false;
+            isNewUser = true;
         }
+        await user.save();
+        this.logger.log(`Existing user signed in via Google: ${user._id}, onboardingStatus: ${user.onboardingStatus}`);
+        return { user, isNewUser };
+    }
+    async googleAuth(dto, req) {
+        const { user, isNewUser } = await this.googleSignIn(dto);
+        const tokens = await this.generateTokens(user, req);
+        return {
+            ...tokens,
+            user: user.toJSON(),
+            isNewUser,
+            onboardingStatus: user.onboardingStatus,
+        };
+    }
+    resolveOAuthRedirect(state) {
+        const webBase = (this.configService.get('FRONTEND_URL') || 'http://localhost:3000').replace(/\/+$/, '');
+        const fallback = { kind: 'web', url: `${webBase}/auth/callback` };
+        if (!state)
+            return fallback;
+        let parsed;
+        try {
+            parsed = new URL(state);
+        }
+        catch {
+            return { kind: 'rejected', url: '', reason: 'The return link is not a valid URL.' };
+        }
+        const allowExpoGo = this.configService.get('OAUTH_ALLOW_EXPO_GO') === 'true' ||
+            this.configService.get('NODE_ENV') !== 'production';
+        const configured = (this.configService.get('OAUTH_APP_SCHEMES') || 'horohouse')
+            .split(',').map((x) => x.trim().toLowerCase().replace(/:\/*$/, '')).filter(Boolean);
+        const appSchemes = [
+            ...configured.flatMap((x) => [`${x}:`, `exp+${x}:`]),
+            ...(allowExpoGo ? ['exp:', 'exps:'] : []),
+        ];
+        if (appSchemes.includes(parsed.protocol)) {
+            const challenge = parsed.searchParams.get('cc') || undefined;
+            for (const k of ['code', 'token', 'refresh', 'error', 'isNewUser', 'onboardingStatus'])
+                parsed.searchParams.delete(k);
+            return { kind: 'app', url: parsed.toString(), challenge };
+        }
+        if (parsed.protocol === 'https:' || parsed.protocol === 'http:') {
+            const allowed = [webBase, ...(this.configService.get('OAUTH_WEB_REDIRECTS') || '').split(',')]
+                .map((o) => o.trim())
+                .filter(Boolean)
+                .map((o) => {
+                try {
+                    return new URL(o).origin;
+                }
+                catch {
+                    return null;
+                }
+            })
+                .filter(Boolean);
+            if (allowed.includes(parsed.origin))
+                return { kind: 'web', url: parsed.toString() };
+        }
+        this.logger.warn(`Rejected OAuth redirect target: ${parsed.protocol}//${parsed.host}`);
+        const reason = parsed.protocol === 'exp:' || parsed.protocol === 'exps:'
+            ? 'Expo Go links are turned off on this server. Set OAUTH_ALLOW_EXPO_GO=true in the backend .env (or use a development build).'
+            : `The return link scheme "${parsed.protocol}" is not allowed. Add it to OAUTH_APP_SCHEMES (app) or OAUTH_WEB_REDIRECTS (web) in the backend .env.`;
+        return { kind: 'rejected', url: '', reason };
+    }
+    async issueOAuthCode(user, challenge, isNewUser) {
+        if (!/^[A-Za-z0-9_-]{43,128}$/.test(challenge)) {
+            throw new common_1.BadRequestException('Missing or invalid sign-in challenge');
+        }
+        const code = crypto.randomBytes(32).toString('base64url');
+        await this.userModel.updateOne({ _id: user._id }, {
+            oauthCodeHash: sha256(code),
+            oauthCodeChallenge: challenge,
+            oauthCodeExpires: new Date(Date.now() + OAUTH_CODE_TTL_MS),
+            oauthCodeNewUser: isNewUser,
+        });
+        return code;
+    }
+    async exchangeOAuthCode(code, codeVerifier, req) {
+        const consumed = await this.userModel
+            .findOneAndUpdate({ oauthCodeHash: sha256(code), oauthCodeExpires: { $gt: new Date() } }, { $unset: { oauthCodeHash: 1, oauthCodeChallenge: 1, oauthCodeExpires: 1, oauthCodeNewUser: 1 } })
+            .select('+oauthCodeChallenge +oauthCodeNewUser');
+        if (!consumed || !consumed.oauthCodeChallenge) {
+            throw new common_1.UnauthorizedException('This sign-in link has expired. Please try again.');
+        }
+        if (!safeEqual(sha256b64url(codeVerifier), consumed.oauthCodeChallenge)) {
+            this.logger.warn(`OAuth code for ${consumed._id} used with a wrong verifier`);
+            throw new common_1.UnauthorizedException('This sign-in link was not started on this device.');
+        }
+        const user = await this.userModel.findById(consumed._id);
+        if (!user || !user.isActive) {
+            throw new common_1.UnauthorizedException('User not found or inactive');
+        }
+        const tokens = await this.generateTokens(user, req);
+        return {
+            ...tokens,
+            user: user.toJSON(),
+            isNewUser: !!consumed.oauthCodeNewUser,
+            onboardingStatus: user.onboardingStatus,
+        };
+    }
+    async checkEmail(email) {
+        const user = await this.userModel
+            .findOne({ email: emailQuery(email) })
+            .select('+password')
+            .lean();
+        return {
+            exists: !!user,
+            hasPassword: !!user?.password,
+            hasGoogle: !!user?.googleId,
+        };
     }
     async verifyPhone(dto) {
         try {
             const { phoneNumber, verificationCode } = dto;
             const formattedPhone = this.smsService.formatPhoneNumber(phoneNumber);
-            const user = await this.userModel.findOne({ phoneNumber: formattedPhone });
+            const user = await this.userModel
+                .findOne({ phoneNumber: formattedPhone })
+                .select('+phoneVerificationCode +phoneVerificationAttempts');
             if (!user) {
-                throw new common_1.UnauthorizedException('User not found');
-            }
-            if (!user.phoneVerificationCode || !user.phoneVerificationExpires) {
-                throw new common_1.UnauthorizedException('No verification code found');
-            }
-            if (user.phoneVerificationExpires < new Date()) {
-                throw new common_1.UnauthorizedException('Verification code has expired');
-            }
-            if (user.phoneVerificationCode !== verificationCode) {
                 throw new common_1.UnauthorizedException('Invalid verification code');
             }
-            user.phoneVerified = true;
-            user.phoneVerificationCode = undefined;
-            user.phoneVerificationExpires = undefined;
-            await user.save();
+            await this.checkPhoneCode(user, verificationCode);
             return { message: 'Phone number verified successfully' };
         }
         catch (error) {
             this.logger.error('Phone verification failed:', error);
             throw error;
         }
+    }
+    async checkPhoneCode(user, code) {
+        if (!user.phoneVerificationCode || !user.phoneVerificationExpires) {
+            throw new common_1.UnauthorizedException('No verification code found. Please request a new one.');
+        }
+        if (user.phoneVerificationExpires < new Date()) {
+            throw new common_1.UnauthorizedException('Verification code has expired');
+        }
+        if ((user.phoneVerificationAttempts ?? 0) >= MAX_CODE_ATTEMPTS) {
+            throw new common_1.UnauthorizedException('Too many wrong codes. Please request a new one.');
+        }
+        const stored = user.phoneVerificationCode;
+        const given = String(code ?? '').trim();
+        const ok = stored.length === 64 ? safeEqual(stored, sha256(given)) : safeEqual(stored, given);
+        if (!ok) {
+            await this.userModel.updateOne({ _id: user._id }, { $inc: { phoneVerificationAttempts: 1 } });
+            throw new common_1.UnauthorizedException('Invalid verification code');
+        }
+        user.phoneVerified = true;
+        user.phoneVerificationCode = undefined;
+        user.phoneVerificationExpires = undefined;
+        user.phoneVerificationAttempts = 0;
+        await user.save();
     }
     async refreshToken(refreshToken, req) {
         try {
@@ -350,20 +483,22 @@ let AuthService = class AuthService {
             if (!user || !user.isActive) {
                 throw new common_1.UnauthorizedException('User not found or inactive');
             }
-            let session = undefined;
-            if (payload && payload.sessionId) {
-                session = user.sessions.find(s => s.id === payload.sessionId && s.isActive);
-                if (!session) {
-                    this.logger.warn(`Refresh attempt for user ${user._id} provided sessionId ${payload.sessionId} but no active session was found`);
-                }
-            }
-            const hashedIncoming = crypto.createHash('sha256').update(refreshToken).digest('hex');
+            const hashedIncoming = sha256(refreshToken);
+            const now = Date.now();
+            let session = payload?.sessionId
+                ? user.sessions.find(s => s.id === payload.sessionId && s.isActive)
+                : user.sessions.find(s => s.isActive && (s.refreshToken === hashedIncoming || s.refreshToken === refreshToken));
             if (!session) {
-                session = user.sessions.find(s => s.refreshToken === hashedIncoming && s.isActive);
-            }
-            if (!session) {
-                this.logger.error(`Invalid refresh token for user ${user._id}: session not found (payload.sessionId=${payload?.sessionId})`);
                 throw new common_1.UnauthorizedException('Invalid refresh token - session not found');
+            }
+            const isCurrent = session.refreshToken === hashedIncoming || session.refreshToken === refreshToken;
+            const isRecentPrev = session.prevRefreshToken === hashedIncoming &&
+                session.rotatedAt && now - new Date(session.rotatedAt).getTime() < ROTATION_GRACE_MS;
+            if (!isCurrent && !isRecentPrev) {
+                this.logger.warn(`Refresh token reuse for user ${user._id}, session ${session.id}: session revoked`);
+                user.sessions = user.sessions.filter(s => s.id !== session.id);
+                await user.save();
+                throw new common_1.UnauthorizedException('Session ended. Please log in again.');
             }
             if (session.expiresAt < new Date()) {
                 user.sessions = user.sessions.filter(s => s.id !== session.id);
@@ -375,7 +510,6 @@ let AuthService = class AuthService {
                 session.ipAddress = this.getClientIp(req);
                 session.userAgent = req.headers['user-agent'] || 'Unknown';
             }
-            await user.save();
             const tokens = await this.generateTokens(user, req, session.id);
             return {
                 ...tokens,
@@ -417,7 +551,7 @@ let AuthService = class AuthService {
             this.logger.error('Logout failed:', error);
         }
     }
-    async changePassword(userId, currentPassword, newPassword) {
+    async changePassword(userId, currentPassword, newPassword, currentSessionId) {
         const user = await this.userModel.findById(userId).select('+password');
         if (!user) {
             throw new common_1.NotFoundException('User not found');
@@ -431,6 +565,7 @@ let AuthService = class AuthService {
         }
         const hashedNewPassword = await bcrypt.hash(newPassword, 12);
         user.password = hashedNewPassword;
+        user.sessions = currentSessionId ? user.sessions.filter(s => s.id === currentSessionId) : [];
         await user.save();
         this.logger.log(`Password changed for user: ${user._id}`);
         return { message: 'Password changed successfully' };
@@ -481,6 +616,7 @@ let AuthService = class AuthService {
             return plainSessions.map((session) => ({
                 ...session,
                 refreshToken: undefined,
+                prevRefreshToken: undefined,
             }));
         }
         catch (error) {
@@ -533,20 +669,24 @@ let AuthService = class AuthService {
     }
     async resendEmailVerification(user) {
         try {
-            if (!user.email) {
+            const userId = user._id ? user._id.toString() : user.id || user.sub;
+            const doc = await this.userModel.findById(userId);
+            if (!doc)
+                throw new common_1.NotFoundException('User not found');
+            if (!doc.email) {
                 throw new common_1.BadRequestException('User does not have an email address');
             }
-            if (user.emailVerified) {
+            if (doc.emailVerified) {
                 throw new common_1.BadRequestException('Email is already verified');
             }
             const verificationToken = crypto.randomBytes(32).toString('hex');
             const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
-            const userId = user._id ? user._id.toString() : user.id || user.sub;
             await this.userModel.findByIdAndUpdate(userId, {
                 emailVerificationToken: verificationToken,
                 emailVerificationExpires: expiresAt
             });
-            this.logger.log(`Email verification resent to: ${user.email}`);
+            await this.emailService.sendEmailVerification(doc.email, doc.name, verificationToken);
+            this.logger.log(`Email verification resent to user ${userId}`);
             return { message: 'Verification email sent successfully' };
         }
         catch (error) {
@@ -559,18 +699,23 @@ let AuthService = class AuthService {
             if (user.phoneVerified) {
                 throw new common_1.BadRequestException('Phone number is already verified');
             }
+            if (isPlaceholderPhone(user.phoneNumber)) {
+                throw new common_1.BadRequestException('Add a phone number to your profile first');
+            }
             const verificationCode = this.smsService.generateVerificationCode();
             const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
             const userId = user._id ? user._id.toString() : user.id || user.sub;
             await this.userModel.findByIdAndUpdate(userId, {
-                phoneVerificationCode: verificationCode,
-                phoneVerificationExpires: expiresAt
+                phoneVerificationCode: sha256(String(verificationCode)),
+                phoneVerificationExpires: expiresAt,
+                phoneVerificationSentAt: new Date(),
+                phoneVerificationAttempts: 0,
             });
             const smsSent = await this.smsService.sendVerificationCode(user.phoneNumber, verificationCode);
             if (!smsSent) {
                 throw new common_1.BadRequestException('Failed to send verification code');
             }
-            this.logger.log(`Phone verification resent to: ${user.phoneNumber}`);
+            this.logger.log(`Phone verification resent to user ${userId}`);
             return { message: 'Verification code sent successfully' };
         }
         catch (error) {
@@ -602,15 +747,9 @@ let AuthService = class AuthService {
     async requestPasswordReset(email) {
         try {
             const normalizedEmail = email.trim().toLowerCase();
-            const user = await this.userModel.findOne({
-                email: { $regex: `^${normalizedEmail}$`, $options: 'i' }
-            });
-            if (!user) {
-                this.logger.log(`Password reset requested for non-existent email: ${normalizedEmail}`);
-                return { message: 'If an account exists with this email, you will receive a password reset link shortly.' };
-            }
-            if (!user.password) {
-                this.logger.log(`Password reset requested for OAuth-only user: ${normalizedEmail}`);
+            const user = await this.userModel.findOne({ email: emailQuery(normalizedEmail) });
+            if (!user || !user.isActive) {
+                this.logger.log('Password reset requested for an unknown or inactive email');
                 return { message: 'If an account exists with this email, you will receive a password reset link shortly.' };
             }
             const resetToken = crypto.randomBytes(32).toString('hex');
@@ -659,7 +798,7 @@ let AuthService = class AuthService {
             const user = await this.userModel.findOne({
                 resetPasswordToken: hashedToken,
                 resetPasswordExpires: { $gt: new Date() }
-            });
+            }).select('+password +resetPasswordToken');
             if (!user) {
                 throw new common_1.UnauthorizedException('Invalid or expired password reset token');
             }
@@ -699,15 +838,15 @@ let AuthService = class AuthService {
         };
         const accessTokenOptions = {
             secret: this.configService.get('JWT_SECRET'),
-            expiresIn: this.parseTokenExpiration(this.configService.get('JWT_EXPIRATION', '1h')),
+            expiresIn: Math.floor(this.parseTokenExpiration(this.configService.get('JWT_EXPIRATION', '1h')) / 1000),
         };
         const refreshTokenOptions = {
             secret: this.configService.get('JWT_REFRESH_SECRET'),
-            expiresIn: this.parseTokenExpiration(this.configService.get('JWT_REFRESH_EXPIRATION', '7d')),
+            expiresIn: Math.floor(this.parseTokenExpiration(this.configService.get('JWT_REFRESH_EXPIRATION', '7d')) / 1000),
         };
         const [accessToken, refreshToken] = await Promise.all([
             this.jwtService.signAsync(payload, accessTokenOptions),
-            this.jwtService.signAsync(payload, refreshTokenOptions),
+            this.jwtService.signAsync(payload, { ...refreshTokenOptions, jwtid: crypto.randomUUID() }),
         ]);
         if (!existingSessionId) {
             const refreshTokenExpirationTime = this.configService.get('JWT_REFRESH_EXPIRATION', '7d');
@@ -716,7 +855,7 @@ let AuthService = class AuthService {
             const deviceInfo = req?.body?.deviceInfo || {};
             const userAgent = req?.headers?.['user-agent'] || 'Unknown';
             const ipAddress = this.getClientIp(req);
-            const hashedRefreshToken = crypto.createHash('sha256').update(refreshToken).digest('hex');
+            const hashedRefreshToken = sha256(refreshToken);
             const newSession = {
                 id: sessionId,
                 refreshToken: hashedRefreshToken,
@@ -742,8 +881,14 @@ let AuthService = class AuthService {
         else {
             const sessionIndex = user.sessions.findIndex(s => s.id === existingSessionId);
             if (sessionIndex !== -1) {
-                user.sessions[sessionIndex].refreshToken = refreshToken;
-                user.sessions[sessionIndex].lastActive = new Date();
+                const sess = user.sessions[sessionIndex];
+                const prev = sess.refreshToken;
+                sess.prevRefreshToken = prev && prev.length === 64 ? prev : sha256(prev || '');
+                sess.rotatedAt = new Date();
+                sess.refreshToken = sha256(refreshToken);
+                sess.lastActive = new Date();
+                sess.expiresAt = new Date(Date.now() + this.parseTokenExpiration(this.configService.get('JWT_REFRESH_EXPIRATION', '7d')));
+                user.markModified('sessions');
                 await user.save();
             }
         }
@@ -871,7 +1016,8 @@ let AuthService = class AuthService {
         }
         const hasRealPhone = user.phoneNumber && !user.phoneNumber.startsWith('google_') && !user.phoneNumber.startsWith('temp_');
         return {
-            onboardingStatus: user.onboardingStatus,
+            onboardingStatus: onboardingDone(user) ? user_schema_1.OnboardingStatus.COMPLETED
+                : user.onboardingStatus === user_schema_1.OnboardingStatus.COMPLETED ? user_schema_1.OnboardingStatus.NOT_STARTED : user.onboardingStatus,
             role: user.role,
             phoneNumber: hasRealPhone ? user.phoneNumber : null,
             name: user.name,
@@ -887,7 +1033,7 @@ let AuthService = class AuthService {
         if (!user) {
             throw new common_1.NotFoundException('User not found');
         }
-        if (user.onboardingStatus === user_schema_1.OnboardingStatus.COMPLETED) {
+        if (onboardingDone(user)) {
             throw new common_1.BadRequestException('Onboarding is already completed. Role cannot be changed here.');
         }
         user.role = role;
@@ -908,7 +1054,7 @@ let AuthService = class AuthService {
         if (!user) {
             throw new common_1.NotFoundException('User not found');
         }
-        if (user.onboardingStatus === user_schema_1.OnboardingStatus.COMPLETED) {
+        if (onboardingDone(user)) {
             throw new common_1.BadRequestException('Onboarding is already completed.');
         }
         if (user.onboardingStatus === user_schema_1.OnboardingStatus.NOT_STARTED) {
@@ -931,12 +1077,12 @@ let AuthService = class AuthService {
             phoneNumber: formattedPhone,
         };
     }
-    async completeGoogleOnboarding(userId) {
+    async completeGoogleOnboarding(userId, req, currentSessionId) {
         const user = await this.userModel.findById(userId);
         if (!user) {
             throw new common_1.NotFoundException('User not found');
         }
-        if (user.onboardingStatus === user_schema_1.OnboardingStatus.COMPLETED) {
+        if (onboardingDone(user)) {
             throw new common_1.BadRequestException('Onboarding is already completed.');
         }
         const hasValidRole = AuthService_1.ONBOARDING_SELF_ASSIGNABLE_ROLES.includes(user.role);
@@ -951,7 +1097,8 @@ let AuthService = class AuthService {
         user.onboardingCompleted = true;
         await user.save();
         this.logger.log(`Google onboarding completed for user ${userId}`);
-        const tokens = await this.generateTokens(user);
+        const hasSession = !!currentSessionId && user.sessions.some(s => s.id === currentSessionId && s.isActive);
+        const tokens = await this.generateTokens(user, req, hasSession ? currentSessionId : undefined);
         return {
             ...tokens,
             user: user.toJSON(),

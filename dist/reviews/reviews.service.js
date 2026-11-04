@@ -195,6 +195,9 @@ let ReviewsService = ReviewsService_1 = class ReviewsService {
         const saved = await review.save();
         if (shouldPublishNow && otherReview) {
             await this.reviewModel.findByIdAndUpdate(otherReview._id, { isPublished: true });
+            if (otherReview.reviewType === review_schema_1.ReviewType.STAY && otherReview.propertyId) {
+                await this.updatePropertyStayRating(otherReview.propertyId.toString());
+            }
         }
         const bookingUpdate = {};
         if (dto.reviewType === review_schema_1.ReviewType.STAY)
@@ -341,25 +344,17 @@ let ReviewsService = ReviewsService_1 = class ReviewsService {
         if (!mongoose_2.Types.ObjectId.isValid(bookingId)) {
             throw new common_1.BadRequestException('Invalid booking ID');
         }
-        const [stayReview, guestReview] = await Promise.all([
-            this.reviewModel
-                .findOne({
-                bookingId: new mongoose_2.Types.ObjectId(bookingId),
-                reviewerRole: review_schema_1.ReviewerRole.GUEST,
-                isActive: true,
-            })
-                .populate('userId', 'name profilePicture')
-                .exec(),
-            this.reviewModel
-                .findOne({
-                bookingId: new mongoose_2.Types.ObjectId(bookingId),
-                reviewerRole: review_schema_1.ReviewerRole.HOST,
-                isActive: true,
-            })
-                .populate('userId', 'name profilePicture')
-                .exec(),
-        ]);
-        return { stayReview, guestReview };
+        const find = (reviewerRole) => this.reviewModel
+            .findOne({ bookingId: new mongoose_2.Types.ObjectId(bookingId), reviewerRole, isActive: true })
+            .populate('userId', 'name profilePicture')
+            .exec();
+        const [stay, guest] = await Promise.all([find(review_schema_1.ReviewerRole.GUEST), find(review_schema_1.ReviewerRole.HOST)]);
+        return {
+            stayReview: stay?.isPublished ? stay : null,
+            guestReview: guest?.isPublished ? guest : null,
+            stayReviewSubmitted: !!stay,
+            guestReviewSubmitted: !!guest,
+        };
     }
     async findOne(id) {
         if (!mongoose_2.Types.ObjectId.isValid(id)) {
@@ -373,7 +368,7 @@ let ReviewsService = ReviewsService_1 = class ReviewsService {
             .populate('respondedBy', 'name profilePicture')
             .populate('reviewedUserId', 'name profilePicture')
             .exec();
-        if (!review)
+        if (!review || !review.isActive || !review.isPublished)
             throw new common_1.NotFoundException('Review not found');
         return review;
     }
@@ -399,6 +394,9 @@ let ReviewsService = ReviewsService_1 = class ReviewsService {
             throw new common_1.NotFoundException('Review not found');
         if (review.userId.toString() !== user._id.toString()) {
             throw new common_1.ForbiddenException('You can only update your own reviews');
+        }
+        if (review.bookingId && review.isPublished) {
+            throw new common_1.BadRequestException('Stay reviews can no longer be edited once they are published');
         }
         if (dto.rating)
             review.rating = dto.rating;
@@ -473,15 +471,23 @@ let ReviewsService = ReviewsService_1 = class ReviewsService {
             await this.updateAgentRating(review.agentId.toString());
     }
     async publishExpiredReviews() {
-        const result = await this.reviewModel.updateMany({
+        const filter = {
             isPublished: false,
             publishDeadline: { $lte: new Date() },
             isActive: true,
             bookingId: { $exists: true },
-        }, { $set: { isPublished: true } });
+        };
+        const affected = await this.reviewModel
+            .find({ ...filter, reviewType: review_schema_1.ReviewType.STAY })
+            .distinct('propertyId');
+        const result = await this.reviewModel.updateMany(filter, { $set: { isPublished: true } });
         const published = result.modifiedCount;
         if (published > 0) {
             this.logger.log(`Force-published ${published} expired booking review(s)`);
+            for (const propertyId of affected) {
+                if (propertyId)
+                    await this.updatePropertyStayRating(String(propertyId));
+            }
         }
         return published;
     }

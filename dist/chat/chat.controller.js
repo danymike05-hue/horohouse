@@ -14,7 +14,7 @@ var __param = (this && this.__param) || function (paramIndex, decorator) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.ChatController = void 0;
 const common_1 = require("@nestjs/common");
-const platform_express_1 = require("@nestjs/platform-express");
+const mongoose_1 = require("mongoose");
 const swagger_1 = require("@nestjs/swagger");
 const jwt_auth_guard_1 = require("../auth/guards/jwt.auth.guard");
 const chat_service_1 = require("./chat.service");
@@ -52,8 +52,36 @@ let ChatController = class ChatController {
     async sendMessage(req, dto) {
         return this.chatService.sendMessage(req.user.userId, dto);
     }
-    async sendMessageWithAttachments(req, dto, files) {
-        if (!files || files.length === 0) {
+    async sendMessageWithAttachments(req) {
+        const MAX_FILES = 5;
+        const MAX_BYTES = 15 * 1024 * 1024;
+        const ALLOWED = /^(image|video|audio)\//;
+        const ALLOWED_DOCS = ['application/pdf'];
+        const files = [];
+        const dto = {};
+        for await (const part of req.parts()) {
+            if (part.type === 'file') {
+                if (files.length >= MAX_FILES) {
+                    await part.toBuffer();
+                    continue;
+                }
+                const mimetype = String(part.mimetype || '').toLowerCase();
+                if (!ALLOWED.test(mimetype) && !ALLOWED_DOCS.includes(mimetype)) {
+                    throw new common_1.BadRequestException('Only photos, videos, audio and PDF files can be sent');
+                }
+                const buffer = await part.toBuffer();
+                if (buffer.length > MAX_BYTES)
+                    throw new common_1.BadRequestException('File too large (15 MB maximum)');
+                files.push({ buffer, originalname: part.filename || 'file', mimetype, size: buffer.length });
+            }
+            else if (part.fieldname === 'conversationId' || part.fieldname === 'content') {
+                dto[part.fieldname] = String(part.value ?? '').slice(0, 5000);
+            }
+        }
+        if (!dto.conversationId || !mongoose_1.Types.ObjectId.isValid(dto.conversationId)) {
+            throw new common_1.BadRequestException('conversationId is required');
+        }
+        if (files.length === 0) {
             throw new common_1.BadRequestException('No files uploaded');
         }
         const attachments = await Promise.all(files.map(async (file, index) => {
@@ -185,14 +213,11 @@ __decorate([
 ], ChatController.prototype, "sendMessage", null);
 __decorate([
     (0, common_1.Post)('messages/with-attachments'),
-    (0, swagger_1.ApiOperation)({ summary: 'Send message with file attachments' }),
+    (0, swagger_1.ApiOperation)({ summary: 'Send message with file attachments (fields: conversationId, content; files: up to 5)' }),
     (0, swagger_1.ApiConsumes)('multipart/form-data'),
-    (0, common_1.UseInterceptors)((0, platform_express_1.FilesInterceptor)('files', 5)),
     __param(0, (0, common_1.Request)()),
-    __param(1, (0, common_1.Body)()),
-    __param(2, (0, common_1.UploadedFiles)()),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [Object, chat_dto_1.SendMessageDto, Array]),
+    __metadata("design:paramtypes", [Object]),
     __metadata("design:returntype", Promise)
 ], ChatController.prototype, "sendMessageWithAttachments", null);
 __decorate([

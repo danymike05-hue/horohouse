@@ -10,7 +10,7 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 
 import { Room, RoomDocument, RoomType } from './schemas/room.schema';
-import { Booking, BookingDocument, BookingStatus } from '../bookings/schema/booking.schema';
+import { Booking, BookingDocument, BookingStatus, PaymentStatus } from '../bookings/schema/booking.schema';
 import { Property, PropertyDocument, ListingType } from '../properties/schemas/property.schema';
 import { User, UserRole } from '../users/schemas/user.schema';
 import { uploadBufferToCloudinary, deleteFromCloudinary } from '../utils/cloudinary';
@@ -24,6 +24,42 @@ import {
 
 /** Property types that support multiple rooms */
 const MULTI_ROOM_TYPES = ['hotel', 'motel', 'hostel', 'resort', 'guesthouse', 'serviced_apartment'];
+
+/** iCal feeds: limits so a slow or huge feed can't hang or flood the server */
+const ICAL_TIMEOUT_MS = 10_000;
+const ICAL_MAX_BYTES = 5 * 1024 * 1024;
+
+/**
+ * Same rule as BookingsService: a booking holds its dates while it is paid, has no
+ * deadline, or its deadline hasn't passed. Expired unpaid holds stop blocking the room.
+ */
+function activeHoldFilter(now = new Date()) {
+    return {
+        $or: [
+            { paymentStatus: PaymentStatus.PAID },
+            { expiresAt: { $exists: false } },
+            { expiresAt: null },
+            { expiresAt: { $gt: now } },
+        ],
+    };
+}
+
+/** Units of this room type (e.g. 10 "Standard" rooms). Older rooms without the field = 1. */
+function roomCapacity(room: any): number {
+    const q = Number(room?.quantity);
+    return Number.isFinite(q) && q >= 1 ? Math.floor(q) : 1;
+}
+
+/** UTC day keys "YYYY-MM-DD" for every night in [checkIn, checkOut) */
+function nightsOf(checkIn: Date, checkOut: Date): string[] {
+    const out: string[] = [];
+    const d = new Date(Date.UTC(checkIn.getUTCFullYear(), checkIn.getUTCMonth(), checkIn.getUTCDate()));
+    for (let i = 0; d < checkOut && i < 730; i++) {
+        out.push(d.toISOString().slice(0, 10));
+        d.setUTCDate(d.getUTCDate() + 1);
+    }
+    return out;
+}
 
 export interface RoomAvailabilityResult {
     available: boolean;
@@ -75,6 +111,8 @@ export class RoomsService {
             bedType: dto.bedType,
             price: dto.price,
             cleaningFee: dto.cleaningFee,
+            quantity: Math.max(1, Math.floor(dto.quantity ?? 1)),
+            description: dto.description,
             amenities: dto.amenities ?? {},
             isActive: true,
         });
@@ -265,16 +303,19 @@ export class RoomsService {
         if (!property) throw new NotFoundException('Parent property not found');
 
         this.assertCanManage(property, user);
+        // Calendar apps often share webcal:// links — same feed over https.
+        const icalUrl = String(dto.icalUrl ?? '').trim().replace(/^webcal:\/\//i, 'https://');
+        this.assertSafeIcalUrl(icalUrl);
 
         const updated = await this.roomModel
             .findByIdAndUpdate(
                 roomId,
-                { icalUrl: dto.icalUrl, icalLastSyncedAt: null, icalSyncedRangesCount: 0 },
+                { icalUrl, icalLastSyncedAt: null, icalSyncedRangesCount: 0 },
                 { new: true },
             )
             .exec();
 
-        this.logger.log(`iCal URL set on room ${roomId}: ${dto.icalUrl}`);
+        this.logger.log(`iCal URL set on room ${roomId}: ${icalUrl}`);
         return updated!;
     }
 
@@ -283,12 +324,20 @@ export class RoomsService {
      * Source is marked as 'ical' so they can be purged cleanly on re-sync.
      * Returns the number of new ranges imported.
      */
-    async syncIcal(roomId: string): Promise<{ synced: number; roomId: string }> {
+    async syncIcal(roomId: string, user?: User): Promise<{ synced: number; roomId: string }> {
         const room = await this.findRoomOrThrow(roomId);
+
+        // From the API: only the room's manager. Internal jobs call it without a user.
+        if (user) {
+            const property = await this.propertyModel.findById(room.propertyId).exec();
+            if (!property) throw new NotFoundException('Parent property not found');
+            this.assertCanManage(property, user);
+        }
 
         if (!room.icalUrl) {
             throw new BadRequestException('No iCal URL set for this room');
         }
+        this.assertSafeIcalUrl(room.icalUrl);
 
         const ranges = await this.fetchAndParseIcal(room.icalUrl);
 
@@ -330,23 +379,37 @@ export class RoomsService {
             (r) => new Date(r.from) < to && new Date(r.to) > from,
         );
 
-        // 2. Platform bookings in range
+        // 2. Platform bookings in range that still hold their dates
         const platformBookings = await this.bookingModel
             .find({
                 roomId: new Types.ObjectId(roomId),
                 status: { $in: [BookingStatus.CONFIRMED, BookingStatus.PENDING] },
                 checkIn: { $lt: to },
                 checkOut: { $gt: from },
+                ...activeHoldFilter(),
             })
             .select('checkIn checkOut _id')
             .lean()
             .exec() as { checkIn: Date; checkOut: Date; _id: Types.ObjectId }[];
 
-        const bookedRanges = platformBookings.map((b) => ({
-            checkIn: b.checkIn,
-            checkOut: b.checkOut,
-            bookingId: b._id,
-        }));
+        // With several units of this type, a night is only unavailable once all are taken.
+        // Return one 1-night range per full night so every client can read it directly.
+        const capacity = roomCapacity(room);
+        let bookedRanges: { checkIn: Date; checkOut: Date; bookingId: Types.ObjectId }[];
+        if (capacity === 1) {
+            bookedRanges = platformBookings.map((b) => ({ checkIn: b.checkIn, checkOut: b.checkOut, bookingId: b._id }));
+        } else {
+            const counts = new Map<string, number>();
+            platformBookings.forEach((b) => nightsOf(b.checkIn, b.checkOut).forEach((n) => counts.set(n, (counts.get(n) ?? 0) + 1)));
+            bookedRanges = [...counts.entries()]
+                .filter(([, n]) => n >= capacity)
+                .sort(([a], [b]) => a.localeCompare(b))
+                .map(([night]) => {
+                    const start = new Date(`${night}T00:00:00Z`);
+                    const end = new Date(start); end.setUTCDate(end.getUTCDate() + 1);
+                    return { checkIn: start, checkOut: end, bookingId: undefined as any };
+                });
+        }
 
         const available = blocked.length === 0 && bookedRanges.length === 0;
 
@@ -381,28 +444,41 @@ export class RoomsService {
             throw new ConflictException('Selected dates are blocked on this room');
         }
 
-        // Check platform bookings
+        // Check platform bookings that still hold their dates
         const filter: any = {
             roomId: new Types.ObjectId(roomId),
             status: { $in: [BookingStatus.CONFIRMED, BookingStatus.PENDING] },
             checkIn: { $lt: checkOut },
             checkOut: { $gt: checkIn },
+            ...activeHoldFilter(),
         };
         if (excludeBookingId) {
             filter._id = { $ne: new Types.ObjectId(excludeBookingId) };
         }
 
-        const conflict = await this.bookingModel
-            .findOne(filter)
+        const overlapping = await this.bookingModel
+            .find(filter)
             .select('_id checkIn checkOut')
-            .lean();
+            .lean()
+            .exec() as { checkIn: Date; checkOut: Date }[];
 
-        if (conflict) {
-            throw new ConflictException(
-                `Room is already booked from ` +
-                `${conflict.checkIn.toISOString().split('T')[0]} to ` +
-                `${conflict.checkOut.toISOString().split('T')[0]}`,
-            );
+        // Full only when every unit of this type is taken on at least one of the nights.
+        const capacity = roomCapacity(room);
+        const wanted = new Set(nightsOf(checkIn, checkOut));
+        const counts = new Map<string, number>();
+        for (const b of overlapping) {
+            for (const n of nightsOf(b.checkIn, b.checkOut)) {
+                if (!wanted.has(n)) continue;
+                const c = (counts.get(n) ?? 0) + 1;
+                counts.set(n, c);
+                if (c >= capacity) {
+                    throw new ConflictException(
+                        capacity === 1
+                            ? `Room is already booked on ${n}`
+                            : `All ${capacity} rooms of this type are booked on ${n}`,
+                    );
+                }
+            }
         }
     }
 
@@ -441,19 +517,55 @@ export class RoomsService {
     }
 
     private fetchUrl(url: string): Promise<string> {
+        this.assertSafeIcalUrl(url);
         return new Promise((resolve, reject) => {
-            const lib = url.startsWith('https') ? require('https') : require('http');
+            const https = require('https');
             let data = '';
-            lib.get(url, (res: any) => {
+            let size = 0;
+            const req = https.get(url, { timeout: ICAL_TIMEOUT_MS }, (res: any) => {
                 if (res.statusCode !== 200) {
+                    res.resume();
                     reject(new Error(`HTTP ${res.statusCode} fetching iCal: ${url}`));
                     return;
                 }
-                res.on('data', (chunk: any) => (data += chunk));
+                res.setEncoding('utf8');
+                res.on('data', (chunk: string) => {
+                    size += Buffer.byteLength(chunk);
+                    if (size > ICAL_MAX_BYTES) {
+                        req.destroy(new Error('iCal feed is too large'));
+                        return;
+                    }
+                    data += chunk;
+                });
                 res.on('end', () => resolve(data));
                 res.on('error', reject);
-            }).on('error', reject);
+            });
+            req.on('timeout', () => req.destroy(new Error('iCal feed timed out')));
+            req.on('error', reject);
         });
+    }
+
+    /**
+     * The server fetches this URL, so only public HTTPS hosts: no http://, localhost,
+     * private / link-local IPs (cloud metadata) or internal names.
+     * Note: a public hostname can still resolve to a private IP; for full protection,
+     * resolve the host with dns.lookup and re-check the address before fetching.
+     */
+    private assertSafeIcalUrl(raw: string): void {
+        let u: URL;
+        try {
+            u = new URL(raw);
+        } catch {
+            throw new BadRequestException('Invalid iCal URL');
+        }
+        if (u.protocol !== 'https:') throw new BadRequestException('The iCal link must start with https://');
+        const host = u.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+        const isPrivateV4 = /^(127\.|10\.|192\.168\.|169\.254\.|0\.|172\.(1[6-9]|2\d|3[01])\.)/.test(host);
+        const isPrivateV6 = host === '::1' || /^f[cd][0-9a-f]{2}:/.test(host) || /^fe80:/.test(host);
+        const isInternalName = host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.internal') || host.endsWith('.local') || !host.includes('.');
+        if (isPrivateV4 || isPrivateV6 || isInternalName) {
+            throw new BadRequestException('This iCal link is not allowed');
+        }
     }
 
     private parseIcalEvents(

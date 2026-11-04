@@ -85,35 +85,49 @@ export class WalletService {
     return wallet;
   }
 
+  /**
+   * One atomic update that only succeeds while the balance covers the amount. The old
+   * read-check-save let two withdrawals sent at the same moment both pass the check.
+   */
   async debitWallet(
     userId: string,
     amount: number,
     description: string,
     reference?: string,
   ): Promise<WalletDocument> {
-    const wallet = await this.getWallet(userId);
-
-    if (wallet.balance < amount) {
-      throw new BadRequestException('Insufficient balance');
-    }
-
-    const tx: WalletTransaction = {
-      type: WalletTransactionType.DEBIT,
-      amount,
-      balance: wallet.balance - amount,
-      description,
-      reference,
-      createdAt: new Date(),
-    };
-
-    wallet.balance -= amount;
-    wallet.availableBalance = Math.max(0, (wallet.availableBalance ?? 0) - amount);
-    wallet.transactions.unshift(tx);
-    wallet.lastTransactionDate = new Date();
-
-    await wallet.save();
+    if (!(amount > 0)) throw new BadRequestException('Invalid amount');
+    const current = await this.getWallet(userId);
+    const now = new Date();
+    const updated = await this.walletModel.findOneAndUpdate(
+      { _id: current._id, balance: { $gte: amount } },
+      [
+        {
+          $set: {
+            balance: { $subtract: ['$balance', amount] },
+            availableBalance: { $max: [0, { $subtract: [{ $ifNull: ['$availableBalance', '$balance'] }, amount] }] },
+            lastTransactionDate: now,
+            transactions: {
+              $concatArrays: [
+                [{
+                  type: WalletTransactionType.DEBIT,
+                  amount,
+                  balance: { $subtract: ['$balance', amount] },
+                  // $literal: text starting with "$" must not be read as a field path
+                  description: { $literal: description },
+                  reference: { $literal: reference ?? null },
+                  createdAt: now,
+                }],
+                { $ifNull: ['$transactions', []] },
+              ],
+            },
+          },
+        },
+      ] as any,
+      { new: true },
+    );
+    if (!updated) throw new BadRequestException('Insufficient balance');
     this.logger.log(`Wallet debited: ${userId} — ${amount} XAF`);
-    return wallet;
+    return updated;
   }
 
   async addCommission(
@@ -153,9 +167,9 @@ export class WalletService {
       bankCode?: string;
     },
   ): Promise<any> {
-    const wallet = await this.getWallet(userId);
+    const wallet = await this.getOrCreateWallet(userId);
 
-    if (amount < this.MIN_WITHDRAWAL) {
+    if (!(amount > 0) || amount < this.MIN_WITHDRAWAL) {
       throw new BadRequestException(`Minimum withdrawal amount is ${this.MIN_WITHDRAWAL} XAF`);
     }
 
@@ -181,8 +195,7 @@ export class WalletService {
     });
     await transaction.save();
 
-    wallet.totalWithdrawn = (wallet.totalWithdrawn ?? 0) + amount;
-    await wallet.save();
+    await this.walletModel.updateOne({ _id: wallet._id }, { $inc: { totalWithdrawn: amount } });
 
     // ✅ Fire-and-forget CamerPay payout
     this.dispatchCamerPayPayout(
@@ -191,11 +204,18 @@ export class WalletService {
       accountDetails,
       reference,
       transaction._id as Types.ObjectId,
-    ).catch(err =>
+    ).catch(async (err) => {
       this.logger.error(
         `Background CamerPay payout error (tx ${transaction._id}): ${err.message}`,
-      ),
-    );
+      );
+      // The money was already taken from the wallet: give it back, or the host loses it.
+      try {
+        await this.creditWallet(userId, amount, `Withdrawal failed — refunded (${reference})`, `${reference}-REFUND`);
+        await this.walletModel.updateOne({ _id: wallet._id }, { $inc: { totalWithdrawn: -amount, totalEarned: -amount } });
+      } catch (refundErr: any) {
+        this.logger.error(`URGENT: could not refund failed withdrawal ${reference} for ${userId}: ${refundErr?.message}`);
+      }
+    });
 
     this.logger.log(`Withdrawal queued: ${userId} — ${amount} XAF via ${withdrawalMethod}`);
 
@@ -249,6 +269,7 @@ export class WalletService {
         `CamerPay payout failed (tx ${transactionId}): ${error.message}`,
       );
       await this.transactionModel.findByIdAndUpdate(transactionId, {
+        status: 'failed',
         paymentProviderResponse: { error: error.message },
       });
       throw error;
@@ -266,7 +287,7 @@ export class WalletService {
       bankCode: string;
     },
   ): Promise<WalletDocument> {
-    const wallet = await this.getWallet(userId);
+    const wallet = await this.getOrCreateWallet(userId);
     wallet.bankAccountName = bankDetails.accountName;
     wallet.bankAccountNumber = bankDetails.accountNumber;
     wallet.bankName = bankDetails.bankName;
@@ -280,7 +301,7 @@ export class WalletService {
     userId: string,
     mobileMoneyDetails: { phoneNumber: string; provider: 'MTN' | 'ORANGE' },
   ): Promise<WalletDocument> {
-    const wallet = await this.getWallet(userId);
+    const wallet = await this.getOrCreateWallet(userId);
     wallet.mobileMoneyNumber = mobileMoneyDetails.phoneNumber;
     wallet.mobileMoneyProvider = mobileMoneyDetails.provider;
     await wallet.save();
@@ -289,7 +310,7 @@ export class WalletService {
   }
 
   async enableAutoWithdrawal(userId: string, threshold: number): Promise<WalletDocument> {
-    const wallet = await this.getWallet(userId);
+    const wallet = await this.getOrCreateWallet(userId);
     if (threshold < this.MIN_WITHDRAWAL) {
       throw new BadRequestException(`Threshold must be at least ${this.MIN_WITHDRAWAL} XAF`);
     }
@@ -302,19 +323,21 @@ export class WalletService {
 
   // ─── Queries / stats ────────────────────────────────────────────────────────
 
+  // A host with no earnings yet has no wallet: these used to answer 404 "Wallet not found",
+  // which showed "Some data couldn't be loaded" on every new host's dashboard.
   async getTransactions(userId: string, limit = 50): Promise<WalletTransaction[]> {
-    const wallet = await this.getWallet(userId);
+    const wallet = await this.getOrCreateWallet(userId);
     return wallet.transactions.slice(0, limit);
   }
 
   async getWalletStats(userId: string): Promise<any> {
-    const wallet = await this.getWallet(userId);
+    const wallet = await this.getOrCreateWallet(userId);
     const now = new Date();
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
 
     const thisMonthEarnings = wallet.transactions
       .filter(
-        t => t.type === WalletTransactionType.CREDIT && t.createdAt >= startOfMonth,
+        t => t.type === WalletTransactionType.CREDIT && new Date(t.createdAt) >= startOfMonth,
       )
       .reduce((sum, t) => sum + t.amount, 0);
 

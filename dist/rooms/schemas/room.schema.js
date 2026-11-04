@@ -41,6 +41,8 @@ let Room = class Room {
     roomType;
     maxGuests;
     bedCount;
+    quantity;
+    description;
     bedType;
     price;
     cleaningFee;
@@ -84,6 +86,14 @@ __decorate([
     (0, mongoose_1.Prop)({ default: 1, min: 1 }),
     __metadata("design:type", Number)
 ], Room.prototype, "bedCount", void 0);
+__decorate([
+    (0, mongoose_1.Prop)({ default: 1, min: 1 }),
+    __metadata("design:type", Number)
+], Room.prototype, "quantity", void 0);
+__decorate([
+    (0, mongoose_1.Prop)({ trim: true, maxlength: 500 }),
+    __metadata("design:type", String)
+], Room.prototype, "description", void 0);
 __decorate([
     (0, mongoose_1.Prop)({
         type: String,

@@ -13,7 +13,7 @@ var __param = (this && this.__param) || function (paramIndex, decorator) {
 };
 var UsersService_1;
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.UsersService = void 0;
+exports.UsersService = exports.GOVERNMENT_ID_MAX_BYTES = exports.GOVERNMENT_ID_MIME_TYPES = exports.HOST_COMMISSION_RATE = void 0;
 const common_1 = require("@nestjs/common");
 const mongoose_1 = require("@nestjs/mongoose");
 const mongoose_2 = require("mongoose");
@@ -22,6 +22,29 @@ const cloudinary_1 = require("cloudinary");
 const user_schema_1 = require("./schemas/user.schema");
 const property_schema_1 = require("../properties/schemas/property.schema");
 const reviews_service_1 = require("../reviews/reviews.service");
+exports.HOST_COMMISSION_RATE = 0.10;
+exports.GOVERNMENT_ID_MIME_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif'];
+exports.GOVERNMENT_ID_MAX_BYTES = 10 * 1024 * 1024;
+const PUBLIC_HOST_PROFILE_FIELDS = [
+    'isSuperhost',
+    'superhostSince',
+    'instantBookEnabled',
+    'hostBio',
+    'hostLanguages',
+    'operatingCity',
+    'completedStays',
+    'responseRate',
+    'responseTimeMinutes',
+    'responseTimeHours',
+    'minNightsDefault',
+    'maxNightsDefault',
+    'petsAllowedDefault',
+    'smokingAllowedDefault',
+    'eventsAllowedDefault',
+    'checkInTimeDefault',
+    'checkOutTimeDefault',
+    'hostingSince',
+];
 let UsersService = UsersService_1 = class UsersService {
     userModel;
     propertyModel;
@@ -174,7 +197,7 @@ let UsersService = UsersService_1 = class UsersService {
                 totalEarnings: 0,
                 currentMonthEarnings: 0,
                 completedStays: 0,
-                commissionRate: 0.12,
+                commissionRate: exports.HOST_COMMISSION_RATE,
                 payoutAccounts: [],
                 payoutHistory: [],
                 petsAllowedDefault: false,
@@ -248,6 +271,16 @@ let UsersService = UsersService_1 = class UsersService {
             throw new common_1.BadRequestException('Failed to upload profile picture');
         }
     }
+    async removeProfilePicture(userId) {
+        const user = await this.userModel
+            .findByIdAndUpdate(userId, { $unset: { profilePicture: '' } }, { new: true })
+            .select('-firebaseUid')
+            .exec();
+        if (!user)
+            throw new common_1.NotFoundException('User not found');
+        this.logger.log(`✅ Profile picture removed for user: ${userId}`);
+        return user;
+    }
     async addToFavorites(userId, propertyId) {
         if (!mongoose_2.Types.ObjectId.isValid(propertyId)) {
             throw new common_1.BadRequestException('Invalid property ID');
@@ -263,6 +296,15 @@ let UsersService = UsersService_1 = class UsersService {
         return user;
     }
     async removeFromFavorites(userId, propertyId) {
+        if (!mongoose_2.Types.ObjectId.isValid(propertyId)) {
+            throw new common_1.BadRequestException('Invalid property ID');
+        }
+        try {
+            await this.userModel.db
+                .collection('wishlists')
+                .updateMany({ ownerId: new mongoose_2.Types.ObjectId(userId) }, { $pull: { propertyIds: new mongoose_2.Types.ObjectId(propertyId) } });
+        }
+        catch { }
         const user = await this.userModel
             .findByIdAndUpdate(userId, { $pull: { favorites: new mongoose_2.Types.ObjectId(propertyId) } }, { new: true })
             .select('-firebaseUid')
@@ -486,7 +528,7 @@ let UsersService = UsersService_1 = class UsersService {
                         $size: {
                             $filter: {
                                 input: '$properties',
-                                cond: { $eq: ['$$this.status', 'available'] },
+                                cond: { $eq: ['$$this.availability', property_schema_1.PropertyStatus.ACTIVE] },
                             },
                         },
                     },
@@ -541,7 +583,7 @@ let UsersService = UsersService_1 = class UsersService {
                         $size: {
                             $filter: {
                                 input: '$properties',
-                                cond: { $eq: ['$$this.status', 'available'] },
+                                cond: { $eq: ['$$this.availability', property_schema_1.PropertyStatus.ACTIVE] },
                             },
                         },
                     },
@@ -732,22 +774,40 @@ let UsersService = UsersService_1 = class UsersService {
                 .exec(),
             this.propertyModel.countDocuments(query),
         ]);
-        const mappedProperties = properties.map(p => {
+        const mappedProperties = properties.map((p) => {
             const prop = p.toObject();
+            const pid = p._id.toString();
             return {
-                id: p._id.toString(),
-                images: (prop.images || []).map((img) => img.url),
+                id: pid,
+                _id: pid,
+                title: prop.title,
+                images: prop.images || [],
                 price: prop.price,
+                originalPrice: prop.originalPrice,
+                currency: prop.currency,
+                pricingUnit: prop.pricingUnit,
                 address: prop.address,
                 city: prop.city,
-                state: prop.country,
+                neighborhood: prop.neighborhood,
+                country: prop.country,
+                type: prop.type,
+                listingType: prop.listingType,
+                amenities: prop.amenities,
                 bedrooms: prop.amenities?.bedrooms || 0,
                 bathrooms: prop.amenities?.bathrooms || 0,
                 squareFeet: prop.area || 0,
+                averageRating: prop.averageRating,
+                reviewCount: prop.reviewCount,
+                isVerified: prop.isVerified,
+                isFeatured: prop.isFeatured,
+                customDiscountNights: prop.customDiscountNights,
+                customDiscountPercent: prop.customDiscountPercent,
+                weeklyDiscountPercent: prop.weeklyDiscountPercent,
+                monthlyDiscountPercent: prop.monthlyDiscountPercent,
+                createdAt: prop.createdAt,
+                updatedAt: prop.updatedAt,
                 status: this.mapAvailabilityToStatus(prop.availability, prop.listingType),
-                propertyType: this.capitalizePropertyType(prop.type),
                 soldDate: prop.availability === property_schema_1.PropertyStatus.SOLD ? p.updatedAt.toISOString() : undefined,
-                listingType: prop.listingType,
                 latitude: prop.location?.coordinates?.[1] || prop.latitude,
                 longitude: prop.location?.coordinates?.[0] || prop.longitude,
             };
@@ -1282,10 +1342,20 @@ let UsersService = UsersService_1 = class UsersService {
             this.getHostListingStats(id),
             this.getAgentReviewStats(id).catch(() => ({ averageRating: 0, totalReviews: 0 })),
         ]);
-        const hp = host.hostProfile ? { ...host.hostProfile } : null;
-        if (hp?.governmentIdPublicId)
-            delete hp.governmentIdPublicId;
-        const payoutAccountsSummary = (hp?.payoutAccounts ?? []).map((acc) => ({
+        const rawHp = host.toObject().hostProfile ?? null;
+        const hp = rawHp ? {} : null;
+        if (rawHp) {
+            for (const key of PUBLIC_HOST_PROFILE_FIELDS) {
+                if (rawHp[key] !== undefined)
+                    hp[key] = rawHp[key];
+            }
+            hp.verificationStatus =
+                rawHp.verificationStatus === user_schema_1.HostVerificationStatus.VERIFIED
+                    ? user_schema_1.HostVerificationStatus.VERIFIED
+                    : user_schema_1.HostVerificationStatus.UNVERIFIED;
+            hp.identityVerified = rawHp.verificationStatus === user_schema_1.HostVerificationStatus.VERIFIED;
+        }
+        const payoutAccountsSummary = (rawHp?.payoutAccounts ?? []).map((acc) => ({
             method: acc.method,
             providerName: acc.providerName,
             isDefault: acc.isDefault,
@@ -1303,14 +1373,7 @@ let UsersService = UsersService_1 = class UsersService {
             reviewCount: reviewStats.totalReviews,
             totalListings: listingStats.totalListings,
             activeListings: listingStats.activeListings,
-            hostProfile: hp
-                ? {
-                    ...hp,
-                    payoutAccounts: payoutAccountsSummary,
-                    totalEarnings: undefined,
-                    currentMonthEarnings: undefined,
-                }
-                : null,
+            hostProfile: hp ? { ...hp, payoutAccounts: payoutAccountsSummary } : null,
             createdAt: host.createdAt,
         };
     }
@@ -1359,8 +1422,12 @@ let UsersService = UsersService_1 = class UsersService {
         const arrayPushOps = {};
         const arrayPullOps = {};
         if (updates.governmentIdBuffer) {
+            if (host.hostProfile?.verificationStatus === user_schema_1.HostVerificationStatus.VERIFIED) {
+                throw new common_1.BadRequestException('Your identity is already verified');
+            }
+            const previousPublicId = host.hostProfile?.governmentIdPublicId;
             const uploadResult = await new Promise((resolve, reject) => {
-                const stream = cloudinary_1.v2.uploader.upload_stream({ folder: 'horohouse/host-ids', resource_type: 'image' }, (err, result) => {
+                const stream = cloudinary_1.v2.uploader.upload_stream({ folder: 'horohouse/host-ids', resource_type: 'image', type: 'authenticated' }, (err, result) => {
                     if (err)
                         reject(err);
                     else
@@ -1372,7 +1439,13 @@ let UsersService = UsersService_1 = class UsersService {
             setFields['hostProfile.governmentIdPublicId'] = uploadResult.public_id;
             setFields['hostProfile.verificationStatus'] = user_schema_1.HostVerificationStatus.PENDING;
             setFields['hostProfile.verificationSubmittedAt'] = new Date();
+            setFields['hostProfile.verificationRejectionReason'] = null;
             this.logger.log(`📄 Government ID uploaded for host ${id}`);
+            if (previousPublicId && previousPublicId !== uploadResult.public_id) {
+                for (const type of ['authenticated', 'upload']) {
+                    await cloudinary_1.v2.uploader.destroy(previousPublicId, { type, resource_type: 'image' }).catch(() => undefined);
+                }
+            }
         }
         const scalarMap = {
             instantBookEnabled: 'hostProfile.instantBookEnabled',
@@ -1444,6 +1517,91 @@ let UsersService = UsersService_1 = class UsersService {
             .exec();
         this.logger.log(`✅ Host profile updated for ${id}`);
         return updated;
+    }
+    isHostIdRequired() {
+        return String(this.configService.get('HOST_ID_REQUIRED') ?? '').toLowerCase() === 'true';
+    }
+    async getMyHostVerification(id) {
+        const user = await this.userModel.findById(id).select('role hostProfile').lean().exec();
+        if (!user)
+            throw new common_1.NotFoundException('User not found');
+        const hp = user.hostProfile ?? {};
+        return {
+            status: hp.verificationStatus ?? user_schema_1.HostVerificationStatus.UNVERIFIED,
+            submittedAt: hp.verificationSubmittedAt ?? null,
+            reviewedAt: hp.verificationReviewedAt ?? null,
+            rejectionReason: hp.verificationRejectionReason ?? null,
+            hasDocument: !!hp.governmentIdPublicId,
+            idRequired: this.isHostIdRequired(),
+        };
+    }
+    async assertHostCanPublish(userId) {
+        if (!this.isHostIdRequired())
+            return;
+        const user = await this.userModel.findById(userId).select('role hostProfile.verificationStatus').lean().exec();
+        if (!user)
+            throw new common_1.NotFoundException('User not found');
+        if (user.role !== user_schema_1.UserRole.HOST)
+            return;
+        if (user.hostProfile?.verificationStatus !== user_schema_1.HostVerificationStatus.VERIFIED) {
+            throw new common_1.ForbiddenException('Verify your identity before publishing a listing');
+        }
+    }
+    async getPendingHostVerifications(page = 1, limit = 20) {
+        const safeLimit = Math.min(Math.max(1, limit), 100);
+        const filter = {
+            role: user_schema_1.UserRole.HOST,
+            'hostProfile.verificationStatus': user_schema_1.HostVerificationStatus.PENDING,
+        };
+        const [items, total] = await Promise.all([
+            this.userModel
+                .find(filter)
+                .select('name email phoneNumber profilePicture city createdAt hostProfile.verificationSubmittedAt')
+                .sort({ 'hostProfile.verificationSubmittedAt': 1 })
+                .skip((Math.max(1, page) - 1) * safeLimit)
+                .limit(safeLimit)
+                .lean()
+                .exec(),
+            this.userModel.countDocuments(filter),
+        ]);
+        return {
+            hosts: items.map((u) => ({
+                id: String(u._id),
+                name: u.name,
+                email: u.email,
+                phoneNumber: u.phoneNumber,
+                profilePicture: u.profilePicture,
+                city: u.city,
+                joinedAt: u.createdAt,
+                submittedAt: u.hostProfile?.verificationSubmittedAt ?? null,
+            })),
+            total,
+            page: Math.max(1, page),
+            totalPages: Math.ceil(total / safeLimit),
+        };
+    }
+    async getGovernmentIdViewUrl(id) {
+        if (!mongoose_2.Types.ObjectId.isValid(id))
+            throw new common_1.BadRequestException('Invalid host ID');
+        const user = await this.userModel
+            .findById(id)
+            .select('hostProfile.governmentIdPublicId hostProfile.governmentIdUrl')
+            .lean()
+            .exec();
+        const hp = user?.hostProfile;
+        if (!hp?.governmentIdPublicId)
+            throw new common_1.NotFoundException('No ID document on file');
+        const isPrivate = String(hp.governmentIdUrl ?? '').includes('/authenticated/');
+        if (!isPrivate)
+            return { url: hp.governmentIdUrl };
+        return {
+            url: cloudinary_1.v2.url(hp.governmentIdPublicId, {
+                type: 'authenticated',
+                resource_type: 'image',
+                sign_url: true,
+                secure: true,
+            }),
+        };
     }
     async verifyHost(id, decision, rejectionReason) {
         if (!mongoose_2.Types.ObjectId.isValid(id)) {
@@ -1572,13 +1730,12 @@ let UsersService = UsersService_1 = class UsersService {
         };
     }
     async getHostListingStats(hostId) {
-        const hostObjectId = new mongoose_2.Types.ObjectId(hostId);
         const result = await this.propertyModel.aggregate([
             {
                 $match: {
-                    ownerId: hostObjectId,
+                    ownerId: new mongoose_2.Types.ObjectId(hostId),
                     isActive: true,
-                    listingType: 'short-term',
+                    listingType: property_schema_1.ListingType.SHORT_TERM,
                 },
             },
             {
@@ -1586,19 +1743,14 @@ let UsersService = UsersService_1 = class UsersService {
                     _id: null,
                     totalListings: { $sum: 1 },
                     activeListings: {
-                        $sum: {
-                            $cond: [{ $eq: ['$availability', 'available'] }, 1, 0],
-                        },
+                        $sum: { $cond: [{ $eq: ['$availability', property_schema_1.PropertyStatus.ACTIVE] }, 1, 0] },
                     },
                 },
             },
         ]);
-        if (!result || result.length === 0) {
-            return { totalListings: 0, activeListings: 0 };
-        }
         return {
-            totalListings: result[0].totalListings ?? 0,
-            activeListings: result[0].activeListings ?? 0,
+            totalListings: result[0]?.totalListings ?? 0,
+            activeListings: result[0]?.activeListings ?? 0,
         };
     }
 };

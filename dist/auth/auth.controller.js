@@ -11,158 +11,23 @@ var __metadata = (this && this.__metadata) || function (k, v) {
 var __param = (this && this.__param) || function (paramIndex, decorator) {
     return function (target, key) { decorator(target, key, paramIndex); }
 };
+var AuthController_1;
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.AuthController = void 0;
 const common_1 = require("@nestjs/common");
 const swagger_1 = require("@nestjs/swagger");
-const class_validator_1 = require("class-validator");
 const throttler_1 = require("@nestjs/throttler");
 const auth_service_1 = require("./auth.service");
+const auth_dto_1 = require("./dto/auth.dto");
 const roles_guard_1 = require("./guards/roles.guard");
 const jwt_auth_guard_1 = require("./guards/jwt.auth.guard");
-const user_schema_1 = require("../users/schemas/user.schema");
 const google_oauth_guard_1 = require("./guards/google-oauth.guard");
 const onboarding_guard_1 = require("./guards/onboarding.guard");
 const password_reset_dto_1 = require("./dto/password-reset.dto");
 const google_onboarding_dto_1 = require("./dto/google-onboarding.dto");
-class SendPhoneCodeRequestDto {
-    phoneNumber;
-}
-__decorate([
-    (0, class_validator_1.IsString)(),
-    (0, class_validator_1.IsNotEmpty)(),
-    __metadata("design:type", String)
-], SendPhoneCodeRequestDto.prototype, "phoneNumber", void 0);
-class RegisterPhoneDto {
-    name;
-    phoneNumber;
-    email;
-    role;
-    deviceInfo;
-}
-__decorate([
-    (0, class_validator_1.IsString)(),
-    (0, class_validator_1.IsNotEmpty)(),
-    __metadata("design:type", String)
-], RegisterPhoneDto.prototype, "name", void 0);
-__decorate([
-    (0, class_validator_1.IsString)(),
-    (0, class_validator_1.IsNotEmpty)(),
-    __metadata("design:type", String)
-], RegisterPhoneDto.prototype, "phoneNumber", void 0);
-__decorate([
-    (0, class_validator_1.IsEmail)(),
-    (0, class_validator_1.IsOptional)(),
-    __metadata("design:type", String)
-], RegisterPhoneDto.prototype, "email", void 0);
-__decorate([
-    (0, class_validator_1.IsOptional)(),
-    (0, class_validator_1.IsEnum)(user_schema_1.UserRole),
-    __metadata("design:type", String)
-], RegisterPhoneDto.prototype, "role", void 0);
-__decorate([
-    (0, class_validator_1.IsOptional)(),
-    __metadata("design:type", Object)
-], RegisterPhoneDto.prototype, "deviceInfo", void 0);
-class RegisterEmailDto {
-    name;
-    email;
-    password;
-    phoneNumber;
-    role;
-    deviceInfo;
-}
-__decorate([
-    (0, class_validator_1.IsString)(),
-    (0, class_validator_1.IsNotEmpty)(),
-    __metadata("design:type", String)
-], RegisterEmailDto.prototype, "name", void 0);
-__decorate([
-    (0, class_validator_1.IsEmail)(),
-    (0, class_validator_1.IsNotEmpty)(),
-    __metadata("design:type", String)
-], RegisterEmailDto.prototype, "email", void 0);
-__decorate([
-    (0, class_validator_1.IsString)(),
-    (0, class_validator_1.IsNotEmpty)(),
-    __metadata("design:type", String)
-], RegisterEmailDto.prototype, "password", void 0);
-__decorate([
-    (0, class_validator_1.IsString)(),
-    (0, class_validator_1.IsOptional)(),
-    __metadata("design:type", String)
-], RegisterEmailDto.prototype, "phoneNumber", void 0);
-__decorate([
-    (0, class_validator_1.IsOptional)(),
-    (0, class_validator_1.IsEnum)(user_schema_1.UserRole),
-    __metadata("design:type", String)
-], RegisterEmailDto.prototype, "role", void 0);
-__decorate([
-    (0, class_validator_1.IsOptional)(),
-    __metadata("design:type", Object)
-], RegisterEmailDto.prototype, "deviceInfo", void 0);
-class LoginPhoneDto {
-    phoneNumber;
-    verificationCode;
-    deviceInfo;
-}
-__decorate([
-    (0, class_validator_1.IsString)(),
-    (0, class_validator_1.IsNotEmpty)(),
-    __metadata("design:type", String)
-], LoginPhoneDto.prototype, "phoneNumber", void 0);
-__decorate([
-    (0, class_validator_1.IsString)(),
-    (0, class_validator_1.IsNotEmpty)(),
-    __metadata("design:type", String)
-], LoginPhoneDto.prototype, "verificationCode", void 0);
-__decorate([
-    (0, class_validator_1.IsOptional)(),
-    __metadata("design:type", Object)
-], LoginPhoneDto.prototype, "deviceInfo", void 0);
-class LoginEmailDto {
-    email;
-    password;
-    deviceInfo;
-}
-__decorate([
-    (0, class_validator_1.IsEmail)(),
-    (0, class_validator_1.IsNotEmpty)(),
-    __metadata("design:type", String)
-], LoginEmailDto.prototype, "email", void 0);
-__decorate([
-    (0, class_validator_1.IsString)(),
-    (0, class_validator_1.IsNotEmpty)(),
-    __metadata("design:type", String)
-], LoginEmailDto.prototype, "password", void 0);
-__decorate([
-    (0, class_validator_1.IsOptional)(),
-    __metadata("design:type", Object)
-], LoginEmailDto.prototype, "deviceInfo", void 0);
-class VerifyPhoneRequestDto {
-    phoneNumber;
-    verificationCode;
-}
-__decorate([
-    (0, class_validator_1.IsString)(),
-    (0, class_validator_1.IsNotEmpty)(),
-    __metadata("design:type", String)
-], VerifyPhoneRequestDto.prototype, "phoneNumber", void 0);
-__decorate([
-    (0, class_validator_1.IsString)(),
-    (0, class_validator_1.IsNotEmpty)(),
-    __metadata("design:type", String)
-], VerifyPhoneRequestDto.prototype, "verificationCode", void 0);
-class RefreshTokenDto {
-    refreshToken;
-}
-__decorate([
-    (0, class_validator_1.IsString)(),
-    (0, class_validator_1.IsNotEmpty)(),
-    __metadata("design:type", String)
-], RefreshTokenDto.prototype, "refreshToken", void 0);
-let AuthController = class AuthController {
+let AuthController = AuthController_1 = class AuthController {
     authService;
+    logger = new common_1.Logger(AuthController_1.name);
     constructor(authService) {
         this.authService = authService;
     }
@@ -235,60 +100,82 @@ let AuthController = class AuthController {
     async resetPassword(dto) {
         return this.authService.resetPassword(dto.token, dto.newPassword);
     }
+    async checkEmail(dto) {
+        return this.authService.checkEmail(dto.email);
+    }
+    async verifyEmail(dto) {
+        return this.authService.verifyEmail(dto.token);
+    }
+    async googleExchange(dto, req) {
+        return this.authService.exchangeOAuthCode(dto.code, dto.codeVerifier, req);
+    }
     async googleAuth() {
     }
     async googleAuthRedirect(req, res) {
         const googleUser = req.user;
-        const state = req.query?.state;
+        const state = String(req.query?.state ?? '');
+        const target = this.authService.resolveOAuthRedirect(state);
+        const withParams = (base, params) => `${base}${base.includes('?') ? '&' : '?'}${new URLSearchParams(params).toString()}`;
+        if (target.kind === 'rejected') {
+            const esc = (v) => v.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+            res.status(400).type('text/html; charset=utf-8').send(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">` +
+                `<title>HoroHouse</title></head><body style="font-family:system-ui,sans-serif;padding:32px;max-width:520px;margin:auto;color:#222">` +
+                `<h2>Sign-in could not be completed</h2><p>La connexion n'a pas pu aboutir.</p>` +
+                `<p style="color:#6a6a6a">${esc(target.reason || '')}</p>` +
+                `<p>Close this page and go back to the app. / Fermez cette page et revenez à l'application.</p></body></html>`);
+            return res;
+        }
         try {
-            const authResult = await this.authService.googleAuth({
+            const dto = {
                 googleId: googleUser.id,
                 email: googleUser.email,
                 name: googleUser.displayName,
                 picture: googleUser.picture,
-            }, req);
+                emailVerified: googleUser.emailVerified,
+            };
+            if (target.kind === 'app') {
+                if (!target.challenge)
+                    throw new common_1.BadRequestException('Missing sign-in challenge');
+                const { user, isNewUser } = await this.authService.googleSignIn(dto);
+                const code = await this.authService.issueOAuthCode(user, target.challenge, isNewUser);
+                res.redirect(withParams(target.url, {
+                    code,
+                    ...(isNewUser ? { isNewUser: 'true' } : {}),
+                    ...(user.onboardingStatus ? { onboardingStatus: user.onboardingStatus } : {}),
+                }), 302);
+                return res;
+            }
+            const authResult = await this.authService.googleAuth(dto, req);
             this.setAuthCookies(res, authResult);
-            let redirectUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
-            const params = new URLSearchParams({
+            res.redirect(withParams(target.url, {
                 token: authResult.accessToken,
                 refresh: authResult.refreshToken,
                 ...(authResult.isNewUser ? { isNewUser: 'true' } : {}),
                 ...(authResult.onboardingStatus ? { onboardingStatus: authResult.onboardingStatus } : {}),
-            });
-            if (state && (state.startsWith('exp://') || state.startsWith('horohouse://') || state.startsWith('http'))) {
-                const separator = state.includes('?') ? '&' : '?';
-                redirectUrl = `${state}${separator}${params.toString()}`;
-            }
-            else {
-                redirectUrl = `${redirectUrl}/auth/callback?${params.toString()}`;
-            }
-            res.redirect(redirectUrl, 302);
+            }), 302);
             return res;
         }
         catch (error) {
-            let errorUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
-            if (state && (state.startsWith('exp://') || state.startsWith('horohouse://') || state.startsWith('http'))) {
-                const separator = state.includes('?') ? '&' : '?';
-                errorUrl = `${state}${separator}error=oauth_failed`;
-            }
-            else {
-                errorUrl = `${errorUrl}/auth/login?error=oauth_failed`;
-            }
-            res.redirect(errorUrl, 302);
+            const msg = String(error?.message || error);
+            this.logger.error(`Google callback failed: ${msg}`, error?.stack);
+            const reason = msg.includes('deactivated') ? 'account_deactivated' : 'oauth_failed';
+            const detail = process.env.NODE_ENV !== 'production' ? { detail: msg.slice(0, 200) } : {};
+            const base = target.kind === 'app' && target.url
+                ? target.url
+                : `${(process.env.FRONTEND_URL || 'http://localhost:3000').replace(/\/+$/, '')}/auth/login`;
+            const errorParams = { error: reason };
+            if (process.env.NODE_ENV !== 'production')
+                errorParams.detail = msg.slice(0, 200);
+            res.redirect(withParams(base, errorParams), 302);
             return res;
         }
     }
     async logout(req, res) {
-        let userId;
-        let sessionId;
-        if ('_id' in req.user) {
-            userId = req.user._id.toString();
-        }
-        else {
-            userId = req.user.sub;
-            sessionId = req.user.sessionId;
-        }
-        await this.authService.logout(userId, sessionId);
+        const u = req.user;
+        const userId = u.userId || u._id?.toString() || u.sub;
+        const sessionId = u.sessionId;
+        if (sessionId)
+            await this.authService.logout(userId, sessionId);
         this.clearAuthCookies(res);
     }
     async getProfile(req) {
@@ -333,13 +220,12 @@ let AuthController = class AuthController {
             };
         }
         catch (error) {
-            console.error('Error in verifyToken:', error);
-            throw new Error('Failed to verify token');
+            throw new common_1.UnauthorizedException('Invalid token');
         }
     }
     async changePassword(body, req) {
         const userId = '_id' in req.user ? req.user._id.toString() : req.user.sub;
-        return this.authService.changePassword(userId, body.currentPassword, body.newPassword);
+        return this.authService.changePassword(userId, body.currentPassword, body.newPassword, req.user.sessionId);
     }
     async enable2FA(req) {
         return this.authService.enable2FA(req.user);
@@ -356,12 +242,14 @@ let AuthController = class AuthController {
         }));
         return { sessions: sessionsWithCurrent };
     }
+    async terminateAllSessions(req) {
+        const currentSessionId = req.user.sessionId;
+        if (!currentSessionId)
+            throw new common_1.BadRequestException('Current session unknown');
+        return this.authService.terminateAllSessions(req.user, currentSessionId);
+    }
     async terminateSession(sessionId, req) {
         return this.authService.terminateSession(req.user, sessionId);
-    }
-    async terminateAllSessions(req) {
-        const currentSessionId = req.user.sessions?.[0]?.id;
-        return this.authService.terminateAllSessions(req.user, currentSessionId);
     }
     async resendEmailVerification(req) {
         return this.authService.resendEmailVerification(req.user);
@@ -393,7 +281,7 @@ let AuthController = class AuthController {
     }
     async completeOnboarding(req, res) {
         const userId = '_id' in req.user ? req.user._id.toString() : req.user.sub;
-        const result = await this.authService.completeGoogleOnboarding(userId);
+        const result = await this.authService.completeGoogleOnboarding(userId, req, req.user.sessionId);
         this.setAuthCookies(res, result);
         return result;
     }
@@ -405,12 +293,12 @@ __decorate([
     (0, common_1.Post)('send-phone-code'),
     (0, common_1.HttpCode)(common_1.HttpStatus.OK),
     (0, swagger_1.ApiOperation)({ summary: 'Send phone verification code' }),
-    (0, swagger_1.ApiBody)({ type: SendPhoneCodeRequestDto }),
+    (0, swagger_1.ApiBody)({ type: auth_dto_1.SendPhoneCodeRequestDto }),
     (0, swagger_1.ApiResponse)({ status: 200, description: 'Verification code sent successfully' }),
     (0, swagger_1.ApiResponse)({ status: 400, description: 'Invalid phone number' }),
     __param(0, (0, common_1.Body)()),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [Object]),
+    __metadata("design:paramtypes", [auth_dto_1.SendPhoneCodeRequestDto]),
     __metadata("design:returntype", Promise)
 ], AuthController.prototype, "sendPhoneCode", null);
 __decorate([
@@ -418,7 +306,7 @@ __decorate([
     (0, throttler_1.Throttle)({ default: { limit: 10, ttl: 60000 } }),
     (0, common_1.Post)('register/phone'),
     (0, swagger_1.ApiOperation)({ summary: 'Register with phone number' }),
-    (0, swagger_1.ApiBody)({ type: RegisterPhoneDto }),
+    (0, swagger_1.ApiBody)({ type: auth_dto_1.RegisterPhoneDto }),
     (0, swagger_1.ApiResponse)({ status: 201, description: 'User registered successfully' }),
     (0, swagger_1.ApiResponse)({ status: 400, description: 'Bad request' }),
     (0, swagger_1.ApiResponse)({ status: 409, description: 'User already exists' }),
@@ -426,7 +314,7 @@ __decorate([
     __param(1, (0, common_1.Req)()),
     __param(2, (0, common_1.Res)({ passthrough: true })),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [Object, Object, Object]),
+    __metadata("design:paramtypes", [auth_dto_1.RegisterPhoneDto, Object, Object]),
     __metadata("design:returntype", Promise)
 ], AuthController.prototype, "registerWithPhone", null);
 __decorate([
@@ -434,7 +322,7 @@ __decorate([
     (0, throttler_1.Throttle)({ default: { limit: 10, ttl: 60000 } }),
     (0, common_1.Post)('register/email'),
     (0, swagger_1.ApiOperation)({ summary: 'Register with email and password' }),
-    (0, swagger_1.ApiBody)({ type: RegisterEmailDto }),
+    (0, swagger_1.ApiBody)({ type: auth_dto_1.RegisterEmailDto }),
     (0, swagger_1.ApiResponse)({ status: 201, description: 'User registered successfully' }),
     (0, swagger_1.ApiResponse)({ status: 400, description: 'Bad request' }),
     (0, swagger_1.ApiResponse)({ status: 409, description: 'User already exists' }),
@@ -442,7 +330,7 @@ __decorate([
     __param(1, (0, common_1.Req)()),
     __param(2, (0, common_1.Res)({ passthrough: true })),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [Object, Object, Object]),
+    __metadata("design:paramtypes", [auth_dto_1.RegisterEmailDto, Object, Object]),
     __metadata("design:returntype", Promise)
 ], AuthController.prototype, "registerWithEmail", null);
 __decorate([
@@ -451,14 +339,14 @@ __decorate([
     (0, common_1.Post)('login/phone'),
     (0, common_1.HttpCode)(common_1.HttpStatus.OK),
     (0, swagger_1.ApiOperation)({ summary: 'Login with phone verification code' }),
-    (0, swagger_1.ApiBody)({ type: LoginPhoneDto }),
+    (0, swagger_1.ApiBody)({ type: auth_dto_1.LoginPhoneDto }),
     (0, swagger_1.ApiResponse)({ status: 200, description: 'Login successful' }),
     (0, swagger_1.ApiResponse)({ status: 401, description: 'Invalid credentials' }),
     __param(0, (0, common_1.Body)()),
     __param(1, (0, common_1.Req)()),
     __param(2, (0, common_1.Res)({ passthrough: true })),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [Object, Object, Object]),
+    __metadata("design:paramtypes", [auth_dto_1.LoginPhoneDto, Object, Object]),
     __metadata("design:returntype", Promise)
 ], AuthController.prototype, "loginWithPhone", null);
 __decorate([
@@ -467,42 +355,44 @@ __decorate([
     (0, common_1.Post)('login/email'),
     (0, common_1.HttpCode)(common_1.HttpStatus.OK),
     (0, swagger_1.ApiOperation)({ summary: 'Login with email and password' }),
-    (0, swagger_1.ApiBody)({ type: LoginEmailDto }),
+    (0, swagger_1.ApiBody)({ type: auth_dto_1.LoginEmailDto }),
     (0, swagger_1.ApiResponse)({ status: 200, description: 'Login successful' }),
     (0, swagger_1.ApiResponse)({ status: 401, description: 'Invalid credentials' }),
     __param(0, (0, common_1.Body)()),
     __param(1, (0, common_1.Req)()),
     __param(2, (0, common_1.Res)({ passthrough: true })),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [Object, Object, Object]),
+    __metadata("design:paramtypes", [auth_dto_1.LoginEmailDto, Object, Object]),
     __metadata("design:returntype", Promise)
 ], AuthController.prototype, "loginWithEmail", null);
 __decorate([
     (0, roles_guard_1.Public)(),
+    (0, throttler_1.Throttle)({ default: { limit: 10, ttl: 60000 } }),
     (0, common_1.Post)('verify-phone'),
     (0, common_1.HttpCode)(common_1.HttpStatus.OK),
     (0, swagger_1.ApiOperation)({ summary: 'Verify phone number' }),
-    (0, swagger_1.ApiBody)({ type: VerifyPhoneRequestDto }),
+    (0, swagger_1.ApiBody)({ type: auth_dto_1.VerifyPhoneRequestDto }),
     (0, swagger_1.ApiResponse)({ status: 200, description: 'Phone verified successfully' }),
     (0, swagger_1.ApiResponse)({ status: 401, description: 'Invalid verification code' }),
     __param(0, (0, common_1.Body)()),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [Object]),
+    __metadata("design:paramtypes", [auth_dto_1.VerifyPhoneRequestDto]),
     __metadata("design:returntype", Promise)
 ], AuthController.prototype, "verifyPhone", null);
 __decorate([
     (0, roles_guard_1.Public)(),
+    (0, throttler_1.Throttle)({ default: { limit: 30, ttl: 60000 } }),
     (0, common_1.Post)('refresh'),
     (0, common_1.HttpCode)(common_1.HttpStatus.OK),
     (0, swagger_1.ApiOperation)({ summary: 'Refresh access token' }),
-    (0, swagger_1.ApiBody)({ type: RefreshTokenDto }),
+    (0, swagger_1.ApiBody)({ type: auth_dto_1.RefreshTokenDto }),
     (0, swagger_1.ApiResponse)({ status: 200, description: 'Token refreshed successfully' }),
     (0, swagger_1.ApiResponse)({ status: 401, description: 'Invalid refresh token' }),
     __param(0, (0, common_1.Body)()),
     __param(1, (0, common_1.Req)()),
     __param(2, (0, common_1.Res)({ passthrough: true })),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [Object, Object, Object]),
+    __metadata("design:paramtypes", [auth_dto_1.RefreshTokenDto, Object, Object]),
     __metadata("design:returntype", Promise)
 ], AuthController.prototype, "refreshToken", null);
 __decorate([
@@ -520,6 +410,7 @@ __decorate([
 ], AuthController.prototype, "forgotPassword", null);
 __decorate([
     (0, roles_guard_1.Public)(),
+    (0, throttler_1.Throttle)({ default: { limit: 10, ttl: 60000 } }),
     (0, common_1.Post)('validate-reset-token'),
     (0, common_1.HttpCode)(common_1.HttpStatus.OK),
     (0, swagger_1.ApiOperation)({ summary: 'Validate password reset token' }),
@@ -544,6 +435,40 @@ __decorate([
     __metadata("design:paramtypes", [password_reset_dto_1.ResetPasswordDto]),
     __metadata("design:returntype", Promise)
 ], AuthController.prototype, "resetPassword", null);
+__decorate([
+    (0, roles_guard_1.Public)(),
+    (0, throttler_1.Throttle)({ default: { limit: 10, ttl: 60000 } }),
+    (0, common_1.Post)('check-email'),
+    (0, common_1.HttpCode)(common_1.HttpStatus.OK),
+    (0, swagger_1.ApiOperation)({ summary: 'Does an account exist for this email? (sign-up asks before the last step)' }),
+    __param(0, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [auth_dto_1.CheckEmailDto]),
+    __metadata("design:returntype", Promise)
+], AuthController.prototype, "checkEmail", null);
+__decorate([
+    (0, roles_guard_1.Public)(),
+    (0, throttler_1.Throttle)({ default: { limit: 10, ttl: 60000 } }),
+    (0, common_1.Post)('verify-email'),
+    (0, common_1.HttpCode)(common_1.HttpStatus.OK),
+    (0, swagger_1.ApiOperation)({ summary: 'Confirm an email address with the token from the verification email' }),
+    __param(0, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [auth_dto_1.VerifyEmailDto]),
+    __metadata("design:returntype", Promise)
+], AuthController.prototype, "verifyEmail", null);
+__decorate([
+    (0, roles_guard_1.Public)(),
+    (0, throttler_1.Throttle)({ default: { limit: 10, ttl: 60000 } }),
+    (0, common_1.Post)('google/exchange'),
+    (0, common_1.HttpCode)(common_1.HttpStatus.OK),
+    (0, swagger_1.ApiOperation)({ summary: 'App: swap the one-time Google sign-in code (+ PKCE verifier) for tokens' }),
+    __param(0, (0, common_1.Body)()),
+    __param(1, (0, common_1.Req)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [auth_dto_1.OAuthExchangeDto, Object]),
+    __metadata("design:returntype", Promise)
+], AuthController.prototype, "googleExchange", null);
 __decorate([
     (0, roles_guard_1.Public)(),
     (0, common_1.Get)('google'),
@@ -611,7 +536,7 @@ __decorate([
     __param(0, (0, common_1.Body)()),
     __param(1, (0, common_1.Req)()),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [Object, Object]),
+    __metadata("design:paramtypes", [auth_dto_1.ChangePasswordDto, Object]),
     __metadata("design:returntype", Promise)
 ], AuthController.prototype, "changePassword", null);
 __decorate([
@@ -648,6 +573,18 @@ __decorate([
     __metadata("design:returntype", Promise)
 ], AuthController.prototype, "getSessions", null);
 __decorate([
+    (0, common_1.Delete)('sessions/all'),
+    (0, swagger_1.ApiBearerAuth)(),
+    (0, common_1.UseGuards)(jwt_auth_guard_1.JwtAuthGuard),
+    (0, common_1.HttpCode)(common_1.HttpStatus.NO_CONTENT),
+    (0, swagger_1.ApiOperation)({ summary: 'Terminate all other sessions' }),
+    (0, swagger_1.ApiResponse)({ status: 204, description: 'All other sessions terminated successfully' }),
+    __param(0, (0, common_1.Req)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object]),
+    __metadata("design:returntype", Promise)
+], AuthController.prototype, "terminateAllSessions", null);
+__decorate([
     (0, common_1.Delete)('sessions/:sessionId'),
     (0, swagger_1.ApiBearerAuth)(),
     (0, common_1.UseGuards)(jwt_auth_guard_1.JwtAuthGuard),
@@ -660,18 +597,6 @@ __decorate([
     __metadata("design:paramtypes", [String, Object]),
     __metadata("design:returntype", Promise)
 ], AuthController.prototype, "terminateSession", null);
-__decorate([
-    (0, common_1.Delete)('sessions/all'),
-    (0, swagger_1.ApiBearerAuth)(),
-    (0, common_1.UseGuards)(jwt_auth_guard_1.JwtAuthGuard),
-    (0, common_1.HttpCode)(common_1.HttpStatus.NO_CONTENT),
-    (0, swagger_1.ApiOperation)({ summary: 'Terminate all other sessions' }),
-    (0, swagger_1.ApiResponse)({ status: 204, description: 'All other sessions terminated successfully' }),
-    __param(0, (0, common_1.Req)()),
-    __metadata("design:type", Function),
-    __metadata("design:paramtypes", [Object]),
-    __metadata("design:returntype", Promise)
-], AuthController.prototype, "terminateAllSessions", null);
 __decorate([
     (0, common_1.Post)('resend-email-verification'),
     (0, common_1.UseGuards)(jwt_auth_guard_1.JwtAuthGuard),
@@ -780,7 +705,7 @@ __decorate([
     __metadata("design:paramtypes", [Object, Object]),
     __metadata("design:returntype", Promise)
 ], AuthController.prototype, "completeOnboarding", null);
-exports.AuthController = AuthController = __decorate([
+exports.AuthController = AuthController = AuthController_1 = __decorate([
     (0, swagger_1.ApiTags)('Authentication'),
     (0, common_1.Controller)('auth'),
     __metadata("design:paramtypes", [auth_service_1.AuthService])

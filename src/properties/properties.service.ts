@@ -3,12 +3,19 @@ import {
   NotFoundException,
   ForbiddenException,
   BadRequestException,
+  ConflictException,
   Logger,
   OnModuleInit,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import axios from 'axios';
+import { randomBytes } from 'crypto';
+import { isInCameroon, LISTING_COUNTRY } from '../common/geo.util';
+import { buildIcalFeed, fetchIcal, normalizeIcalUrl, assertSafeIcalUrl, parseIcalRanges } from '../common/ical.util';
+
+/** Most external calendars a listing can import (Airbnb, Booking.com, Google…). */
+const MAX_EXTERNAL_CALENDARS = 5;
 import { uploadBufferToCloudinary, deleteFromCloudinary } from '../utils/cloudinary';
 import { WatermarkService } from '../watermark/watermark.service';
 
@@ -66,6 +73,9 @@ export interface PropertySearchFilters {
   maxArea?: number;
   furnished?: boolean;
   neighborhood?: string;
+  // Home screen sections: student mode and "Promoted"
+  isStudentFriendly?: boolean;
+  isFeatured?: boolean;
 }
 
 export interface PropertySearchOptions {
@@ -193,6 +203,7 @@ export class PropertiesService implements OnModuleInit {
         if (!this.isValidCoordinate(latitude, longitude)) {
           throw new BadRequestException('Invalid coordinates provided');
         }
+        this.assertListingLocation(latitude, longitude);
       }
 
       const locationData =
@@ -228,7 +239,9 @@ export class PropertiesService implements OnModuleInit {
         cleaningFee: createPropertyDto.cleaningFee ?? 0,
         serviceFee: createPropertyDto.serviceFee ?? 0,
         city: createPropertyDto.city.trim().toLowerCase(),
+        country: LISTING_COUNTRY,
         shortTermAmenities: createPropertyDto.shortTermAmenities ?? {},
+        houseRules: createPropertyDto.houseRules ?? {},
         isInstantBookable: createPropertyDto.isInstantBookable ?? false,
         cancellationPolicy: createPropertyDto.cancellationPolicy ?? CancellationPolicy.FLEXIBLE,
         advanceNoticeDays: createPropertyDto.advanceNoticeDays ?? 0,
@@ -289,6 +302,9 @@ export class PropertiesService implements OnModuleInit {
       if (bookedIds.length > 0) {
         query._id = { $nin: bookedIds };
       }
+      if (filters.checkIn && filters.checkOut) {
+        Object.assign(query, this.notHostBlockedFilter(filters.checkIn, filters.checkOut));
+      }
 
       // Main query + count in parallel — both use .lean() to skip hydration
       const [properties, total] = await Promise.all([
@@ -304,6 +320,10 @@ export class PropertiesService implements OnModuleInit {
           .exec(),
         this.propertyModel.countDocuments(query),
       ]);
+
+      if (filters.checkIn && filters.checkOut) {
+        await this.attachStayQuotes(properties as any[], filters.checkIn, filters.checkOut, filters.minGuests);
+      }
 
       // ── Fire-and-forget analytics (don't block the response) ──────────────
       if (user) {
@@ -342,6 +362,7 @@ export class PropertiesService implements OnModuleInit {
             },
           },
           isActive: true,
+          approvalStatus: ApprovalStatus.APPROVED,
           availability: PropertyStatus.ACTIVE,
         })
         .select(this.listingProjection())
@@ -422,7 +443,12 @@ export class PropertiesService implements OnModuleInit {
     }
     // ─────────────────────────────────────────────────────────────────────
 
-    // ...rest unchanged (fire-and-forget analytics, etc.)
+    // Imported iCal links (Airbnb, Booking.com…) are private: anyone holding one can read
+    // the host's calendar. Only the owner, agent or an admin gets them.
+    if (!isOwner && !isAgent && !isAdmin) {
+      delete (property as any).externalCalendars;
+      delete (property as any).icalExportToken;
+    }
     return property as unknown as Property;
   } catch (error) {
     this.logger.error(`Error finding property ${id}:`, error);
@@ -439,7 +465,7 @@ export class PropertiesService implements OnModuleInit {
       // Fetch only the fields we need for the permission check — not the full document
       const property = await this.propertyModel
         .findById(id)
-        .select('ownerId agentId title description city type price originalPrice')
+        .select('ownerId agentId title description city type price originalPrice listingType images amenities shortTermAmenities houseRules studentDetails')
         .lean()
         .exec();
 
@@ -460,6 +486,8 @@ export class PropertiesService implements OnModuleInit {
         if (!this.isValidCoordinate(updatePropertyDto.latitude, updatePropertyDto.longitude)) {
           throw new BadRequestException('Invalid coordinates provided');
         }
+        this.assertListingLocation(updatePropertyDto.latitude, updatePropertyDto.longitude);
+        (updatePropertyDto as any).country = LISTING_COUNTRY;
         (updatePropertyDto as any).location = {
           type: 'Point' as const,
           coordinates: [updatePropertyDto.longitude, updatePropertyDto.latitude],
@@ -473,6 +501,41 @@ export class PropertiesService implements OnModuleInit {
           city: updatePropertyDto.city || (property as any).city,
           type: updatePropertyDto.type || (property as any).type,
         } as any);
+      }
+
+      if (typeof updatePropertyDto.city === 'string') {
+        // Search matches cities in lower case (create already does this)
+        updatePropertyDto.city = updatePropertyDto.city.trim().toLowerCase();
+      }
+
+      // Short-term → rent / sale would strand guests who already booked
+      if (
+        updatePropertyDto.listingType !== undefined &&
+        updatePropertyDto.listingType !== (property as any).listingType &&
+        (property as any).listingType === ListingType.SHORT_TERM
+      ) {
+        const active = await this.countActiveBookings(id);
+        if (active > 0) {
+          throw new ConflictException(
+            `This listing has ${active} upcoming booking(s). Finish or cancel them before changing the listing type.`,
+          );
+        }
+      }
+
+      // Photos: the update may only reorder or drop existing photos. New ones go through
+      // the upload route (watermark + Cloudinary); any other URL is refused.
+      if (updatePropertyDto.images !== undefined) {
+        const current = new Map<string, any>(
+          (((property as any).images ?? []) as any[]).map((img) => [String(img.publicId), img]),
+        );
+        const ordered: any[] = [];
+        for (const img of updatePropertyDto.images ?? []) {
+          const pid = String((img as any)?.publicId ?? '');
+          const known = current.get(pid);
+          if (!known) throw new BadRequestException('Unknown photo in the list. Upload new photos instead.');
+          if (!ordered.includes(known)) ordered.push(known);
+        }
+        updatePropertyDto.images = ordered;
       }
 
       // Automatically track price discount / crossed-out original price
@@ -493,7 +556,10 @@ export class PropertiesService implements OnModuleInit {
       }
 
       const updatedProperty = await this.propertyModel
-        .findByIdAndUpdate(id, updatePropertyDto, { new: true })
+        // Nested settings are merged field by field. Saving the whole object used to wipe
+        // whatever the screen didn't send (e.g. the edit screen erased check-in times,
+        // safety items and smoking / party rules).
+        .findByIdAndUpdate(id, { $set: this.toMergeSet(updatePropertyDto, property) }, { new: true })
         .populate('ownerId', 'name email phoneNumber')
         .populate('agentId', 'name email phoneNumber agency')
         .lean()
@@ -630,6 +696,15 @@ export class PropertiesService implements OnModuleInit {
         throw new ForbiddenException('You can only delete your own properties');
       }
 
+      // Deleting a listing with upcoming stays would leave paid guests with nowhere to go
+      // and no refund. The host cancels them first (guests are refunded in full).
+      const active = await this.countActiveBookings(id);
+      if (active > 0) {
+        throw new ConflictException(
+          `This listing has ${active} upcoming booking(s). Cancel them first — guests get a full refund — then delete the listing.`,
+        );
+      }
+
       await this.propertyModel.findByIdAndDelete(id);
       this.cacheInvalidate(`similar_${id}`);
       this.cacheInvalidate('popular_cities');
@@ -679,10 +754,15 @@ export class PropertiesService implements OnModuleInit {
     if (!property) throw new NotFoundException('Property not found');
     this.assertCanManage(property, user);
 
-    await deleteFromCloudinary(imagePublicId, 'image');
-    (property.images as any) = ((property.images as any) || []).filter(
-      (img: any) => img.publicId !== imagePublicId,
-    );
+    // The id arrives URL-encoded (Cloudinary ids contain "/"). Only photos of THIS listing
+    // can be deleted — before, any Cloudinary id was accepted, including other hosts' photos.
+    const wanted = decodeURIComponent(String(imagePublicId ?? ''));
+    const images = ((property.images as any) || []) as any[];
+    if (!images.some((img) => img.publicId === wanted)) {
+      throw new NotFoundException('Photo not found on this listing');
+    }
+    await deleteFromCloudinary(wanted, 'image');
+    (property.images as any) = images.filter((img: any) => img.publicId !== wanted);
     await property.save();
     return property;
   }
@@ -719,10 +799,13 @@ export class PropertiesService implements OnModuleInit {
     if (!property) throw new NotFoundException('Property not found');
     this.assertCanManage(property, user);
 
-    await deleteFromCloudinary(videoPublicId, 'video');
-    (property as any).videos = ((property as any).videos || []).filter(
-      (vid: any) => vid.publicId !== videoPublicId,
-    );
+    const wanted = decodeURIComponent(String(videoPublicId ?? ''));
+    const videos = (((property as any).videos as any[]) || []);
+    if (!videos.some((v) => v.publicId === wanted)) {
+      throw new NotFoundException('Video not found on this listing');
+    }
+    await deleteFromCloudinary(wanted, 'video');
+    (property as any).videos = videos.filter((vid: any) => vid.publicId !== wanted);
     await property.save();
     return property;
   }
@@ -737,7 +820,7 @@ export class PropertiesService implements OnModuleInit {
     if (cached) return cached;
 
     const result = await this.propertyModel
-      .find({ isActive: true, availability: PropertyStatus.ACTIVE })
+      .find({ isActive: true, approvalStatus: ApprovalStatus.APPROVED, availability: PropertyStatus.ACTIVE })
       .select(this.listingProjection())
       .sort({ viewsCount: -1 })
       .limit(limit)
@@ -756,7 +839,7 @@ export class PropertiesService implements OnModuleInit {
     if (cached) return cached;
 
     const result = await this.propertyModel
-      .find({ isActive: true, availability: PropertyStatus.ACTIVE })
+      .find({ isActive: true, approvalStatus: ApprovalStatus.APPROVED, availability: PropertyStatus.ACTIVE })
       .select(this.listingProjection())
       .sort({ createdAt: -1 })
       .limit(limit)
@@ -775,7 +858,7 @@ export class PropertiesService implements OnModuleInit {
     if (cached) return cached;
 
     const result = await this.propertyModel
-      .find({ isActive: true, isFeatured: true, availability: PropertyStatus.ACTIVE })
+      .find({ isActive: true, isFeatured: true, approvalStatus: ApprovalStatus.APPROVED, availability: PropertyStatus.ACTIVE })
       .select(this.listingProjection())
       .sort({ createdAt: -1 })
       .limit(limit)
@@ -788,13 +871,21 @@ export class PropertiesService implements OnModuleInit {
     return result;
   }
 
-  async getPopularCities(limit = 10): Promise<Array<{ city: string; count: number }>> {
-    const key = `popular_cities_${limit}`;
+  async getPopularCities(limit = 10, listingType?: ListingType): Promise<Array<{ city: string; count: number }>> {
+    const key = `popular_cities_${limit}_${listingType ?? 'all'}`;
     const cached = this.cacheGet<Array<{ city: string; count: number }>>(key);
     if (cached) return cached;
 
     const result = await this.propertyModel.aggregate([
-      { $match: { isActive: true, availability: PropertyStatus.ACTIVE } },
+      {
+        $match: {
+          isActive: true,
+          approvalStatus: ApprovalStatus.APPROVED,
+          availability: PropertyStatus.ACTIVE,
+          // "12 stays in Kribi" should count stays, not apartments for sale.
+          ...(listingType && Object.values(ListingType).includes(listingType) ? { listingType } : {}),
+        },
+      },
       { $group: { _id: '$city', count: { $sum: 1 } } },
       { $sort: { count: -1 } },
       { $limit: limit },
@@ -829,7 +920,12 @@ export class PropertiesService implements OnModuleInit {
 
       const priceMin = (property as any).price * 0.7;
       const priceMax = (property as any).price * 1.3;
-      const baseExclude = { _id: { $ne: (property as any)._id }, isActive: true, availability: PropertyStatus.ACTIVE };
+      const baseExclude = {
+        _id: { $ne: (property as any)._id },
+        isActive: true,
+        approvalStatus: ApprovalStatus.APPROVED,
+        availability: PropertyStatus.ACTIVE,
+      };
       const cityFilter = (property as any).city
         ? { city: { $regex: new RegExp(`^${(property as any).city.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } }
         : {};
@@ -953,7 +1049,7 @@ export class PropertiesService implements OnModuleInit {
       const sort: any = { [sortBy]: sortOrder === 'asc' ? 1 : -1 };
 
       const properties = await this.propertyModel
-        .find({ _id: { $in: favoriteIds }, isActive: true })
+        .find({ _id: { $in: favoriteIds }, isActive: true, approvalStatus: ApprovalStatus.APPROVED })
         .select(this.listingProjection())
         .populate('ownerId', 'name email phoneNumber profilePicture')
         .populate('agentId', 'name email phoneNumber profilePicture agency')
@@ -1085,6 +1181,7 @@ export class PropertiesService implements OnModuleInit {
       const query: any = {
         $text: { $search: searchText },
         isActive: true,
+        approvalStatus: ApprovalStatus.APPROVED,
         availability: PropertyStatus.ACTIVE,
         ...this.buildFilterQuery(filters),
       };
@@ -1188,6 +1285,9 @@ export class PropertiesService implements OnModuleInit {
 
     const bookedIds = await availabilityPromise;
     if (bookedIds.length > 0) query._id = { $nin: bookedIds };
+    if (filters.checkIn && filters.checkOut) {
+      Object.assign(query, this.notHostBlockedFilter(filters.checkIn, filters.checkOut));
+    }
 
     const sort: any = { [sortBy]: sortOrder === 'asc' ? 1 : -1 };
 
@@ -1205,7 +1305,74 @@ export class PropertiesService implements OnModuleInit {
       this.propertyModel.countDocuments(query),
     ]);
 
+    if (filters.checkIn && filters.checkOut) {
+      await this.attachStayQuotes(properties as any[], filters.checkIn, filters.checkOut, filters.minGuests);
+    }
+
     return { properties: properties as unknown as Property[], total, page, totalPages: Math.ceil(total / limit) };
+  }
+
+  /**
+   * Date searches: put the price of the stay on each short-term card, with the same
+   * rules BookingsService charges (custom price per date → weekend price for Friday and
+   * Saturday nights → base price; the largest qualifying discount; cleaning fee).
+   * Hotels are skipped: they're priced per room type, so their card keeps "from".
+   */
+  private async attachStayQuotes(properties: any[], checkIn: Date, checkOut: Date, guests?: number): Promise<void> {
+    const start = new Date(Date.UTC(checkIn.getUTCFullYear(), checkIn.getUTCMonth(), checkIn.getUTCDate()));
+    const nights = Math.round((checkOut.getTime() - start.getTime()) / 86_400_000);
+    if (!(nights > 0) || nights > 365) return;
+
+    const HOTEL = new Set(['hotel', 'motel', 'hostel', 'resort', 'guesthouse']);
+    const ids = properties
+      .filter((p) => p?.listingType === ListingType.SHORT_TERM && !HOTEL.has(String(p?.type)))
+      .map((p) => p._id);
+    if (!ids.length) return;
+
+    const pricing = await this.propertyModel
+      .find({ _id: { $in: ids } })
+      .select('price weekendPrice priceOverrides cleaningFee minNights maxNights weeklyDiscountPercent monthlyDiscountPercent customDiscountNights customDiscountPercent guestsIncluded extraGuestFee')
+      .lean()
+      .exec();
+    const byId = new Map(pricing.map((p: any) => [String(p._id), p]));
+
+    for (const card of properties) {
+      const p: any = byId.get(String(card._id));
+      if (!p) continue;
+      const base = Number(p.price ?? 0);
+      const weekend = Number(p.weekendPrice || 0);
+      const overrides: Record<string, number> = p.priceOverrides ?? {};
+      let nightsTotal = 0;
+      const d = new Date(start);
+      for (let i = 0; i < nights; i++) {
+        const override = Number(overrides[d.toISOString().slice(0, 10)] || 0);
+        const day = d.getUTCDay();
+        nightsTotal += override > 0 ? override : weekend > 0 && (day === 5 || day === 6) ? weekend : base;
+        d.setUTCDate(d.getUTCDate() + 1);
+      }
+      // Extra-guest fee for the number of guests searched (same rule as BookingsService)
+      const included = Number(p.guestsIncluded) || 0;
+      const fee = Number(p.extraGuestFee) || 0;
+      if (guests && included > 0 && fee > 0) nightsTotal += Math.max(0, guests - included) * fee * nights;
+      let pct = 0;
+      if (nights >= 28 && Number(p.monthlyDiscountPercent) > 0) pct = Math.max(pct, Number(p.monthlyDiscountPercent));
+      if (nights >= 7 && Number(p.weeklyDiscountPercent) > 0) pct = Math.max(pct, Number(p.weeklyDiscountPercent));
+      if (Number(p.customDiscountNights) > 0 && nights >= Number(p.customDiscountNights) && Number(p.customDiscountPercent) > 0) {
+        pct = Math.max(pct, Number(p.customDiscountPercent));
+      }
+      const discountAmount = pct > 0 ? Math.round((nightsTotal * pct) / 100) : 0;
+      const cleaningFee = Number(p.cleaningFee ?? 0);
+      card.stayQuote = {
+        nights,
+        nightsTotal,
+        discountPercent: pct,
+        discountAmount,
+        cleaningFee,
+        total: nightsTotal - discountAmount + cleaningFee,
+        minNights: Number(p.minNights ?? 1),
+        meetsStayRules: nights >= Number(p.minNights ?? 1) && (p.maxNights == null || nights <= Number(p.maxNights)),
+      };
+    }
   }
 
   // ════════════════════════════════════════════════════════════════════════════
@@ -1281,7 +1448,14 @@ export class PropertiesService implements OnModuleInit {
       .exec();
 
     if (!property) throw new NotFoundException('Property not found');
-    return { unavailableDates: (property as any).unavailableDates ?? [] };
+    // Public route: dates and where they came from (manual / imported), not the host's notes.
+    return {
+      unavailableDates: ((property as any).unavailableDates ?? []).map((r: any) => ({
+        from: r.from,
+        to: r.to,
+        source: r.source ?? 'manual',
+      })),
+    };
   }
 
   // ════════════════════════════════════════════════════════════════════════════
@@ -1294,7 +1468,14 @@ export class PropertiesService implements OnModuleInit {
     if (!property) throw new NotFoundException('Property not found');
     this.assertCanManage(property, user);
 
-    const baseUrl = process.env.API_URL || process.env.BACKEND_URL || 'https://horohouse.com/api';
+    const baseUrl = (process.env.API_URL || process.env.BACKEND_URL || 'https://horohouse.com/api').replace(/\/+$/, '');
+    let token = (property as any).icalExportToken as string | undefined;
+    if (!token) {
+      token = randomBytes(24).toString('hex');
+      await this.propertyModel.updateOne({ _id: property._id, icalExportToken: { $exists: false } }, { $set: { icalExportToken: token } });
+      const fresh = await this.propertyModel.findById(property._id).select('icalExportToken').lean().exec();
+      token = (fresh as any)?.icalExportToken ?? token;
+    }
 
     return {
       basePrice: property.price ?? 0,
@@ -1305,7 +1486,8 @@ export class PropertiesService implements OnModuleInit {
       noticeDays: property.noticeDays ?? 0,
       windowMonths: property.windowMonths ?? 12,
       externalCalendars: property.externalCalendars ?? [],
-      exportUrl: `${baseUrl}/properties/${propertyId}/calendar.ics`,
+      // There was no route behind the old …/:id/calendar.ics link, so exports never worked.
+      exportUrl: `${baseUrl}/properties/ical/${token}.ics`,
     };
   }
 
@@ -1352,7 +1534,7 @@ export class PropertiesService implements OnModuleInit {
       } else {
         priceOverrides[key] = dto.price;
       }
-      cur.setDate(cur.getDate() + 1);
+      cur.setUTCDate(cur.getUTCDate() + 1);
     }
 
     await this.propertyModel.findByIdAndUpdate(
@@ -1370,11 +1552,23 @@ export class PropertiesService implements OnModuleInit {
     if (!property) throw new NotFoundException('Property not found');
     this.assertCanManage(property, user);
 
+    const existing = ((property as any).externalCalendars ?? []) as any[];
+    if (existing.length >= MAX_EXTERNAL_CALENDARS) {
+      throw new BadRequestException(`You can connect up to ${MAX_EXTERNAL_CALENDARS} calendars`);
+    }
+    const url = normalizeIcalUrl(dto.url);
+    await assertSafeIcalUrl(url);
+    if (existing.some((c) => c.url === url)) {
+      throw new BadRequestException('This calendar is already connected');
+    }
+
     const newCalendar = {
       id: new Types.ObjectId().toString(),
-      name: dto.name,
-      url: dto.url,
-      lastSyncedAt: new Date(),
+      name: dto.name.trim(),
+      url,
+      lastSyncedAt: null,
+      lastSyncError: null,
+      lastSyncedCount: 0,
     };
 
     await this.propertyModel.findByIdAndUpdate(
@@ -1383,7 +1577,130 @@ export class PropertiesService implements OnModuleInit {
       { new: true },
     ).exec();
 
-    return newCalendar;
+    // Import right away so the host sees the nights blocked. (It used to only save the
+    // link — nothing ever read it, so double bookings with other platforms stayed possible.)
+    const result = await this.syncExternalCalendar(propertyId, newCalendar.id);
+    return { ...newCalendar, ...result };
+  }
+
+  /**
+   * Re-reads one external calendar and replaces the nights it blocks.
+   * Never throws for a bad feed: the error is stored on the calendar so the host sees it.
+   */
+  async syncExternalCalendar(
+    propertyId: string,
+    calendarId: string,
+  ): Promise<{ lastSyncedAt: Date | null; lastSyncError: string | null; lastSyncedCount: number }> {
+    const property = await this.propertyModel.findById(propertyId).select('externalCalendars').lean().exec();
+    const cal = ((property as any)?.externalCalendars ?? []).find((c: any) => c.id === calendarId);
+    if (!cal) throw new NotFoundException('Calendar not found');
+
+    try {
+      const ranges = parseIcalRanges(await fetchIcal(cal.url)).slice(0, 1000);
+      const now = new Date();
+      // Drop this calendar's previous import, then add the fresh one.
+      await this.propertyModel.updateOne(
+        { _id: propertyId },
+        { $pull: { unavailableDates: { source: 'ical', calendarId } } },
+      );
+      await this.propertyModel.updateOne(
+        { _id: propertyId, 'externalCalendars.id': calendarId },
+        {
+          $push: {
+            unavailableDates: {
+              $each: ranges.map((r) => ({ from: r.from, to: r.to, reason: `${cal.name}: ${r.reason}`.slice(0, 120), source: 'ical', calendarId })),
+            },
+          },
+          $set: {
+            'externalCalendars.$.lastSyncedAt': now,
+            'externalCalendars.$.lastSyncError': null,
+            'externalCalendars.$.lastSyncedCount': ranges.length,
+          },
+        },
+      );
+      this.logger.log(`iCal import ${calendarId} on ${propertyId}: ${ranges.length} range(s)`);
+      return { lastSyncedAt: now, lastSyncError: null, lastSyncedCount: ranges.length };
+    } catch (err: any) {
+      // Keep the last good import: a feed that's down for an hour shouldn't unblock nights.
+      const message = String(err?.response?.message ?? err?.message ?? 'Sync failed').slice(0, 200);
+      await this.propertyModel.updateOne(
+        { _id: propertyId, 'externalCalendars.id': calendarId },
+        { $set: { 'externalCalendars.$.lastSyncError': message } },
+      );
+      this.logger.warn(`iCal import ${calendarId} on ${propertyId} failed: ${message}`);
+      return { lastSyncedAt: cal.lastSyncedAt ?? null, lastSyncError: message, lastSyncedCount: cal.lastSyncedCount ?? 0 };
+    }
+  }
+
+  /** Host taps "Sync now". */
+  async syncExternalCalendarForHost(propertyId: string, calendarId: string, user: User) {
+    if (!Types.ObjectId.isValid(propertyId)) throw new BadRequestException('Invalid property ID');
+    const property = await this.propertyModel.findById(propertyId).exec();
+    if (!property) throw new NotFoundException('Property not found');
+    this.assertCanManage(property, user);
+    return this.syncExternalCalendar(propertyId, calendarId);
+  }
+
+  /** Every connected calendar, a few at a time. Called by PropertyCalendarScheduler. */
+  async syncAllExternalCalendars(): Promise<number> {
+    const properties = await this.propertyModel
+      .find({ 'externalCalendars.0': { $exists: true } })
+      .select('_id externalCalendars.id')
+      .lean()
+      .exec();
+    let synced = 0;
+    for (const p of properties as any[]) {
+      for (const cal of p.externalCalendars ?? []) {
+        await this.syncExternalCalendar(String(p._id), cal.id);
+        synced++;
+      }
+    }
+    return synced;
+  }
+
+  /**
+   * The export feed other platforms read: nights booked on HoroHouse plus nights the
+   * host blocked by hand. Imported nights are left out so two platforms don't keep
+   * echoing each other's blocks back. Guest names are never included.
+   */
+  async getIcalFeed(token: string): Promise<string> {
+    if (!/^[a-f0-9]{48}$/.test(token)) throw new NotFoundException('Calendar not found');
+    const property = await this.propertyModel
+      .findOne({ icalExportToken: token })
+      .select('_id title unavailableDates')
+      .lean()
+      .exec();
+    if (!property) throw new NotFoundException('Calendar not found');
+
+    const since = new Date(Date.now() - 30 * 86_400_000);
+    const now = new Date();
+    let bookings: any[] = [];
+    try {
+      const bookingModel = (this.propertyModel.db as any).model('Booking');
+      bookings = await bookingModel
+        .find({
+          propertyId: property._id,
+          status: { $in: ['confirmed', 'pending', 'completed'] },
+          checkOut: { $gte: since },
+          $and: [
+            { $or: [{ roomId: { $exists: false } }, { roomId: null }] },
+            { $or: [{ paymentStatus: 'paid' }, { expiresAt: { $exists: false } }, { expiresAt: null }, { expiresAt: { $gt: now } }] },
+          ],
+        })
+        .select('_id checkIn checkOut')
+        .lean()
+        .exec();
+    } catch {
+      this.logger.warn('Booking model not available — exporting blocked dates only');
+    }
+
+    const events = [
+      ...bookings.map((b) => ({ uid: `booking-${b._id}`, from: new Date(b.checkIn), to: new Date(b.checkOut), summary: 'Reserved (HoroHouse)' })),
+      ...(((property as any).unavailableDates ?? []) as any[])
+        .filter((r) => (r.source ?? 'manual') !== 'ical' && new Date(r.to) >= since)
+        .map((r, i) => ({ uid: `block-${property._id}-${new Date(r.from).getTime()}-${i}`, from: new Date(r.from), to: new Date(r.to), summary: 'Not available' })),
+    ];
+    return buildIcalFeed(`HoroHouse · ${(property as any).title ?? 'Listing'}`, events);
   }
 
   async removeExternalCalendar(propertyId: string, calendarId: string, user: User) {
@@ -1392,9 +1709,10 @@ export class PropertiesService implements OnModuleInit {
     if (!property) throw new NotFoundException('Property not found');
     this.assertCanManage(property, user);
 
+    // The app says "Nights imported from it will be unblocked" — this now does it.
     await this.propertyModel.findByIdAndUpdate(
       propertyId,
-      { $pull: { externalCalendars: { id: calendarId } } },
+      { $pull: { externalCalendars: { id: calendarId }, unavailableDates: { source: 'ical', calendarId } } },
       { new: true },
     ).exec();
 
@@ -1417,6 +1735,9 @@ export class PropertiesService implements OnModuleInit {
       .exec();
 
     if (!property) throw new NotFoundException('Short-term property not found');
+    // Public route: the host's imported iCal links and export token stay private.
+    delete (property as any).externalCalendars;
+    delete (property as any).icalExportToken;
 
     return {
       ...property,
@@ -1433,6 +1754,10 @@ export class PropertiesService implements OnModuleInit {
         maxGuests: (property as any).shortTermAmenities?.maxGuests,
         advanceNoticeDays: (property as any).advanceNoticeDays,
         bookingWindowDays: (property as any).bookingWindowDays,
+        // What the host calendar actually edits (the booking checks use these first)
+        noticeDays: (property as any).noticeDays ?? 0,
+        windowMonths: (property as any).windowMonths ?? 12,
+        weekendPrice: (property as any).weekendPrice ?? null,
       },
     };
   }
@@ -1525,6 +1850,10 @@ export class PropertiesService implements OnModuleInit {
     if (filters.bedrooms) query['amenities.bedrooms'] = { $gte: filters.bedrooms };
     if (filters.bathrooms) query['amenities.bathrooms'] = { $gte: filters.bathrooms };
     if (filters.furnished !== undefined) query['amenities.furnished'] = filters.furnished;
+    // The app's student mode and "Promoted" sections send these; they were ignored,
+    // so student mode listed everything and "Promoted" showed ordinary listings.
+    if (filters.isStudentFriendly) query.isStudentFriendly = true;
+    if (filters.isFeatured) query.isFeatured = true;
     if (filters.amenities?.length) {
       query.$and = filters.amenities.map((a) => ({ [`amenities.${a}`]: true }));
     }
@@ -1657,11 +1986,18 @@ export class PropertiesService implements OnModuleInit {
       const bookingModel = (this.propertyModel.db as any).model('Booking');
       if (!bookingModel) return [];
 
+      const now = new Date();
       const bookings = await bookingModel
         .find({
           status: { $in: ['confirmed', 'pending'] },
           checkIn: { $lt: checkOut },
           checkOut: { $gt: checkIn },
+          $and: [
+            // Hotel room bookings: one booked room doesn't make the whole hotel unavailable.
+            { $or: [{ roomId: { $exists: false } }, { roomId: null }] },
+            // Same rule as BookingsService.activeHoldFilter: an expired unpaid hold frees the dates.
+            { $or: [{ paymentStatus: 'paid' }, { expiresAt: { $exists: false } }, { expiresAt: null }, { expiresAt: { $gt: now } }] },
+          ],
         })
         .select('propertyId')
         .lean()
@@ -1674,7 +2010,64 @@ export class PropertiesService implements OnModuleInit {
     }
   }
 
+  /** Listings whose host blocked any night of the stay are left out of date searches. */
+  private notHostBlockedFilter(checkIn: Date, checkOut: Date): any {
+    return {
+      unavailableDates: { $not: { $elemMatch: { from: { $lt: checkOut }, to: { $gt: checkIn } } } },
+    };
+  }
+
   // ─── Validation ──────────────────────────────────────────────────────────
+
+  /** HoroHouse is Cameroon-only for now (see common/geo.util.ts). */
+  private assertListingLocation(lat: number, lng: number): void {
+    if (!isInCameroon(lat, lng)) {
+      throw new BadRequestException('HoroHouse listings must be in Cameroon for now. Move the pin to your property in Cameroon.');
+    }
+  }
+
+  /**
+   * Turns { shortTermAmenities: { hasWifi: true } } into { 'shortTermAmenities.hasWifi': true }
+   * so an update only touches the fields it sends.
+   */
+  private toMergeSet(dto: Record<string, any>, current?: Record<string, any>): Record<string, any> {
+    const MERGED = new Set(['amenities', 'shortTermAmenities', 'houseRules', 'studentDetails']);
+    // Old listings may hold an array or null here; Mongo can't set "amenities.x" inside
+    // those, so the object is written whole for them.
+    const canMerge = (key: string) => {
+      const existing = current?.[key];
+      return existing === undefined || (existing !== null && typeof existing === 'object' && !Array.isArray(existing));
+    };
+    const out: Record<string, any> = {};
+    for (const [key, value] of Object.entries(dto)) {
+      if (value === undefined) continue;
+      if (MERGED.has(key) && canMerge(key) && value && typeof value === 'object' && !Array.isArray(value)) {
+        for (const [sub, subValue] of Object.entries(value)) {
+          if (subValue !== undefined) out[`${key}.${sub}`] = subValue;
+        }
+      } else {
+        out[key] = value;
+      }
+    }
+    return out;
+  }
+
+  /** Pending or confirmed stays that haven't ended yet (expired unpaid holds don't count). */
+  private async countActiveBookings(propertyId: string): Promise<number> {
+    try {
+      const bookingModel = (this.propertyModel.db as any).model('Booking');
+      const now = new Date();
+      const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+      return await bookingModel.countDocuments({
+        propertyId: new Types.ObjectId(propertyId),
+        status: { $in: ['pending', 'confirmed'] },
+        checkOut: { $gte: today },
+        $or: [{ paymentStatus: 'paid' }, { expiresAt: { $exists: false } }, { expiresAt: null }, { expiresAt: { $gt: now } }],
+      });
+    } catch {
+      return 0; // Booking model not registered (tests) — don't block
+    }
+  }
 
   private isValidCoordinate(lat: number, lng: number): boolean {
     return lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180;

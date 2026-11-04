@@ -108,6 +108,8 @@ export enum GenderRestriction {
 
 export interface PropertyAmenities {
   bedrooms?: number;
+  /** Number of beds (short stays: shown to guests next to bedrooms) */
+  beds?: number;
   bathrooms?: number;
   parkingSpaces?: number;
   hasGarden?: boolean;
@@ -119,6 +121,10 @@ export interface PropertyAmenities {
   hasAirConditioning?: boolean;
   hasInternet?: boolean;
   hasGenerator?: boolean;
+  /** Water storage tank (backup when CAMWATER cuts) */
+  hasWaterTank?: boolean;
+  /** Solar backup for power cuts */
+  hasSolarBackup?: boolean;
   furnished?: boolean;
 }
 
@@ -144,6 +150,81 @@ export interface ShortTermAmenities {
   airportTransfer?: boolean;
   conciergeService?: boolean;
   dailyHousekeeping?: boolean;
+  hasWorkspace?: boolean;
+  // Safety (shown in the "Safety & property" section of the listing)
+  hasSmokeDetector?: boolean;
+  hasFireExtinguisher?: boolean;
+  hasFirstAidKit?: boolean;
+  /** Guests must be told about cameras before they book */
+  hasSecurityCameras?: boolean;
+}
+
+export interface CheckInGuidePhoto {
+  url: string;
+  publicId: string;
+  caption?: string;
+}
+
+export interface CheckInGuide {
+  wifiName?: string;
+  wifiPassword?: string;
+  /** How to find the place: landmarks, taxi / moto directions */
+  directions?: string;
+  /** Door code, lockbox code, who hands over the keys… */
+  accessInstructions?: string;
+  parking?: string;
+  /** Water tank, generator, AC remote, rubbish collection… */
+  houseManual?: string;
+  /** Phone for emergencies during the stay */
+  emergencyPhone?: string;
+  photos?: CheckInGuidePhoto[];
+  updatedAt?: Date;
+}
+
+/** How guests get in. "host_greets" and "staff" mean someone meets them. */
+export enum CheckInMethod {
+  HOST_GREETS = 'host_greets',
+  STAFF = 'staff',            // reception / building staff / gardien
+  LOCKBOX = 'lockbox',
+  SMART_LOCK = 'smart_lock',
+  KEYPAD = 'keypad',
+}
+
+/** Airbnb-style "before you leave" checklist */
+export const CHECKOUT_TASKS = [
+  'gather_towels',
+  'strip_beds',
+  'take_out_trash',
+  'turn_things_off',
+  'lock_up',
+  'return_keys',
+  'wash_dishes',
+] as const;
+export type CheckoutTask = (typeof CHECKOUT_TASKS)[number];
+
+/**
+ * House rules beyond the pets / smoking / parties switches and check-in / check-out times,
+ * which stay in shortTermAmenities so older screens keep working.
+ * Every field is optional: listings created before these rules existed show only what
+ * they have.
+ */
+export interface HouseRules {
+  childrenAllowed?: boolean;       // false → bookings with children are refused
+  infantsAllowed?: boolean;        // false → bookings with infants are refused
+  visitorsAllowed?: boolean;       // people who are not on the booking
+  quietHoursStart?: string | null; // 'HH:mm'
+  quietHoursEnd?: string | null;   // 'HH:mm'
+  commercialPhotographyAllowed?: boolean;
+  /** Latest check-in time ('HH:mm'); null = flexible */
+  checkInEndTime?: string | null;
+  checkInMethod?: CheckInMethod;
+  /** Guest shows an ID card or passport on arrival (common for hotels in Cameroon) */
+  idRequiredAtCheckIn?: boolean;
+  /** Refundable caution paid on arrival, in FCFA. Not charged through the app. */
+  securityDeposit?: number;
+  checkoutTasks?: CheckoutTask[];
+  /** Anything else, in the host's words */
+  additionalRules?: string;
 }
 
 /**
@@ -221,6 +302,10 @@ export interface UnavailableDateRange {
   from: Date;
   to: Date;
   reason?: string;
+  /** 'manual' (host) or 'ical' (imported from an external calendar) */
+  source?: string;
+  /** For imported ranges: which externalCalendars entry they came from */
+  calendarId?: string;
 }
 
 // ─── Schema ───────────────────────────────────────────────────────────────────
@@ -325,14 +410,26 @@ export class Property {
   @Prop({ default: 0, min: 0 })
   serviceFee: number;
 
-  @Prop({ default: 10, min: 0, max: 100 })
+  // Defaults are 0: only discounts the host actually set apply. The old 10 % / 15 %
+  // defaults were charged by the server but never shown to the host or the guest.
+  @Prop({ default: 0, min: 0, max: 100 })
   weeklyDiscountPercent: number;
 
-  @Prop({ default: 15, min: 0, max: 100 })
+  @Prop({ default: 0, min: 0, max: 100 })
   monthlyDiscountPercent: number;
 
   @Prop({ type: Number, default: null })
   customDiscountNights?: number | null;
+
+  /**
+   * Extra-guest fee (Airbnb "fee for extra guests"): guests beyond guestsIncluded pay
+   * extraGuestFee per guest per night. Infants are free. Not used for hotel room types.
+   */
+  @Prop({ type: Number, default: null, min: 1 })
+  guestsIncluded?: number | null;
+
+  @Prop({ default: 0, min: 0 })
+  extraGuestFee: number;
 
   @Prop({ type: Number, default: null })
   customDiscountPercent?: number | null;
@@ -343,6 +440,8 @@ export class Property {
         from: { type: Date, required: true },
         to: { type: Date, required: true },
         reason: { type: String },
+        source: { type: String, default: 'manual' },
+        calendarId: { type: String },
       },
     ],
     default: [],
@@ -370,6 +469,8 @@ export class Property {
         name: { type: String, required: true },
         url: { type: String, required: true },
         lastSyncedAt: { type: Date, default: null },
+        lastSyncError: { type: String, default: null },
+        lastSyncedCount: { type: Number, default: 0 },
       },
     ],
     default: [],
@@ -379,10 +480,35 @@ export class Property {
     name: string;
     url: string;
     lastSyncedAt?: Date | null;
+    lastSyncError?: string | null;
+    lastSyncedCount?: number;
   }>;
+
+  /**
+   * Secret in the export link (…/properties/ical/<token>.ics) that Airbnb or Booking.com
+   * read to block nights booked here. A token rather than the property id, so nobody
+   * can read a listing's occupancy by guessing ids. Never sent on public routes.
+   */
+  @Prop({ type: String, index: { unique: true, sparse: true } })
+  icalExportToken?: string;
 
   @Prop({ type: Object, default: {} })
   shortTermAmenities: ShortTermAmenities;
+
+  @Prop({ type: Object, default: {} })
+  houseRules: HouseRules;
+
+  /**
+   * Check-in guide (Wi-Fi, directions, door code, photos). Private: never returned by the
+   * listing routes (select: false). Guests with a paid booking get it from
+   * GET /host-messages/booking/:id/check-in-guide, starting 2 days before check-in.
+   */
+  @Prop({ type: Object, default: {}, select: false })
+  checkInGuide?: CheckInGuide;
+
+  /** Instant Book only for guests with a verified ID; others send a request */
+  @Prop({ default: false })
+  instantBookRequiresVerifiedGuest: boolean;
 
   @Prop({ default: false })
   isInstantBookable: boolean;
@@ -544,6 +670,14 @@ export class Property {
 
   @Prop({ default: 0 })
   reviewCount?: number;
+
+  /**
+   * Average of each stay sub-rating (cleanliness, accuracy, checkIn, communication,
+   * location, value). ReviewsService already wrote it, but without this field Mongoose
+   * dropped it, so the listing page never got the category scores.
+   */
+  @Prop({ type: Object, default: {} })
+  stayRatingBreakdown?: Record<string, number>;
 
   // ── Hotel-specific ────────────────────────────────────────────────────────
 

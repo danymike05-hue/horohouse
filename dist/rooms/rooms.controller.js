@@ -69,14 +69,19 @@ let RoomsController = class RoomsController {
     async setIcalUrl(id, dto, req) {
         return this.roomsService.setIcalUrl(id, dto, req.user);
     }
-    async syncIcal(id) {
-        return this.roomsService.syncIcal(id);
+    async syncIcal(id, req) {
+        return this.roomsService.syncIcal(id, req.user);
     }
     async getRoomAvailability(id, query) {
         if (!query.from || !query.to) {
             throw new common_1.BadRequestException('Both "from" and "to" query params are required');
         }
-        return this.roomsService.getRoomAvailability(id, new Date(query.from), new Date(query.to));
+        const result = await this.roomsService.getRoomAvailability(id, new Date(query.from), new Date(query.to));
+        return {
+            available: result.available,
+            unavailableDates: result.unavailableDates.map((r) => ({ from: r.from, to: r.to })),
+            bookedRanges: result.bookedRanges.map((r) => ({ checkIn: r.checkIn, checkOut: r.checkOut })),
+        };
     }
 };
 exports.RoomsController = RoomsController;
@@ -229,8 +234,9 @@ __decorate([
     (0, swagger_1.ApiParam)({ name: 'id', description: 'Room ID' }),
     (0, swagger_1.ApiResponse)({ status: 200, description: 'Sync result with number of imported ranges' }),
     __param(0, (0, common_1.Param)('id')),
+    __param(1, (0, common_1.Req)()),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [String]),
+    __metadata("design:paramtypes", [String, Object]),
     __metadata("design:returntype", Promise)
 ], RoomsController.prototype, "syncIcal", null);
 __decorate([

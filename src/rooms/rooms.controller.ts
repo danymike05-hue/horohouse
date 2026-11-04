@@ -219,8 +219,12 @@ export class RoomsController {
     @ApiOperation({ summary: 'Manually trigger iCal sync for a room' })
     @ApiParam({ name: 'id', description: 'Room ID' })
     @ApiResponse({ status: 200, description: 'Sync result with number of imported ranges' })
-    async syncIcal(@Param('id') id: string) {
-        return this.roomsService.syncIcal(id);
+    async syncIcal(
+        @Param('id') id: string,
+        @Req() req: FastifyRequest & { user: User },
+    ) {
+        // Ownership is checked in the service (any host could trigger it before)
+        return this.roomsService.syncIcal(id, req.user);
     }
 
     // ════════════════════════════════════════════════════════════════════════════
@@ -241,6 +245,12 @@ export class RoomsController {
         if (!query.from || !query.to) {
             throw new BadRequestException('Both "from" and "to" query params are required');
         }
-        return this.roomsService.getRoomAvailability(id, new Date(query.from), new Date(query.to));
+        const result = await this.roomsService.getRoomAvailability(id, new Date(query.from), new Date(query.to));
+        // Public endpoint: dates only, no internal booking IDs
+        return {
+            available: result.available,
+            unavailableDates: result.unavailableDates.map((r) => ({ from: r.from, to: r.to })),
+            bookedRanges: result.bookedRanges.map((r) => ({ checkIn: r.checkIn, checkOut: r.checkOut })),
+        };
     }
 }

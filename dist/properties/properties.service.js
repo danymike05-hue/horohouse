@@ -18,6 +18,10 @@ const common_1 = require("@nestjs/common");
 const mongoose_1 = require("@nestjs/mongoose");
 const mongoose_2 = require("mongoose");
 const axios_1 = require("axios");
+const crypto_1 = require("crypto");
+const geo_util_1 = require("../common/geo.util");
+const ical_util_1 = require("../common/ical.util");
+const MAX_EXTERNAL_CALENDARS = 5;
 const cloudinary_1 = require("../utils/cloudinary");
 const watermark_service_1 = require("../watermark/watermark.service");
 const property_schema_1 = require("./schemas/property.schema");
@@ -93,6 +97,7 @@ let PropertiesService = PropertiesService_1 = class PropertiesService {
                 if (!this.isValidCoordinate(latitude, longitude)) {
                     throw new common_1.BadRequestException('Invalid coordinates provided');
                 }
+                this.assertListingLocation(latitude, longitude);
             }
             const locationData = latitude !== undefined && longitude !== undefined
                 ? {
@@ -123,7 +128,9 @@ let PropertiesService = PropertiesService_1 = class PropertiesService {
                 cleaningFee: createPropertyDto.cleaningFee ?? 0,
                 serviceFee: createPropertyDto.serviceFee ?? 0,
                 city: createPropertyDto.city.trim().toLowerCase(),
+                country: geo_util_1.LISTING_COUNTRY,
                 shortTermAmenities: createPropertyDto.shortTermAmenities ?? {},
+                houseRules: createPropertyDto.houseRules ?? {},
                 isInstantBookable: createPropertyDto.isInstantBookable ?? false,
                 cancellationPolicy: createPropertyDto.cancellationPolicy ?? property_schema_1.CancellationPolicy.FLEXIBLE,
                 advanceNoticeDays: createPropertyDto.advanceNoticeDays ?? 0,
@@ -158,6 +165,9 @@ let PropertiesService = PropertiesService_1 = class PropertiesService {
             if (bookedIds.length > 0) {
                 query._id = { $nin: bookedIds };
             }
+            if (filters.checkIn && filters.checkOut) {
+                Object.assign(query, this.notHostBlockedFilter(filters.checkIn, filters.checkOut));
+            }
             const [properties, total] = await Promise.all([
                 this.propertyModel
                     .find(query)
@@ -171,6 +181,9 @@ let PropertiesService = PropertiesService_1 = class PropertiesService {
                     .exec(),
                 this.propertyModel.countDocuments(query),
             ]);
+            if (filters.checkIn && filters.checkOut) {
+                await this.attachStayQuotes(properties, filters.checkIn, filters.checkOut, filters.minGuests);
+            }
             if (user) {
                 this.fireAnalytics(user, filters, total);
             }
@@ -195,6 +208,7 @@ let PropertiesService = PropertiesService_1 = class PropertiesService {
                     },
                 },
                 isActive: true,
+                approvalStatus: property_schema_1.ApprovalStatus.APPROVED,
                 availability: property_schema_1.PropertyStatus.ACTIVE,
             })
                 .select(this.listingProjection())
@@ -257,6 +271,10 @@ let PropertiesService = PropertiesService_1 = class PropertiesService {
                     throw new common_1.NotFoundException('Property not found');
                 }
             }
+            if (!isOwner && !isAgent && !isAdmin) {
+                delete property.externalCalendars;
+                delete property.icalExportToken;
+            }
             return property;
         }
         catch (error) {
@@ -268,7 +286,7 @@ let PropertiesService = PropertiesService_1 = class PropertiesService {
         try {
             const property = await this.propertyModel
                 .findById(id)
-                .select('ownerId agentId title description city type price originalPrice')
+                .select('ownerId agentId title description city type price originalPrice listingType images amenities shortTermAmenities houseRules studentDetails')
                 .lean()
                 .exec();
             if (!property)
@@ -283,6 +301,8 @@ let PropertiesService = PropertiesService_1 = class PropertiesService {
                 if (!this.isValidCoordinate(updatePropertyDto.latitude, updatePropertyDto.longitude)) {
                     throw new common_1.BadRequestException('Invalid coordinates provided');
                 }
+                this.assertListingLocation(updatePropertyDto.latitude, updatePropertyDto.longitude);
+                updatePropertyDto.country = geo_util_1.LISTING_COUNTRY;
                 updatePropertyDto.location = {
                     type: 'Point',
                     coordinates: [updatePropertyDto.longitude, updatePropertyDto.latitude],
@@ -295,6 +315,30 @@ let PropertiesService = PropertiesService_1 = class PropertiesService {
                     city: updatePropertyDto.city || property.city,
                     type: updatePropertyDto.type || property.type,
                 });
+            }
+            if (typeof updatePropertyDto.city === 'string') {
+                updatePropertyDto.city = updatePropertyDto.city.trim().toLowerCase();
+            }
+            if (updatePropertyDto.listingType !== undefined &&
+                updatePropertyDto.listingType !== property.listingType &&
+                property.listingType === property_schema_1.ListingType.SHORT_TERM) {
+                const active = await this.countActiveBookings(id);
+                if (active > 0) {
+                    throw new common_1.ConflictException(`This listing has ${active} upcoming booking(s). Finish or cancel them before changing the listing type.`);
+                }
+            }
+            if (updatePropertyDto.images !== undefined) {
+                const current = new Map((property.images ?? []).map((img) => [String(img.publicId), img]));
+                const ordered = [];
+                for (const img of updatePropertyDto.images ?? []) {
+                    const pid = String(img?.publicId ?? '');
+                    const known = current.get(pid);
+                    if (!known)
+                        throw new common_1.BadRequestException('Unknown photo in the list. Upload new photos instead.');
+                    if (!ordered.includes(known))
+                        ordered.push(known);
+                }
+                updatePropertyDto.images = ordered;
             }
             if (updatePropertyDto.originalPrice !== undefined) {
                 updatePropertyDto.originalPrice = updatePropertyDto.originalPrice;
@@ -311,7 +355,7 @@ let PropertiesService = PropertiesService_1 = class PropertiesService {
                 }
             }
             const updatedProperty = await this.propertyModel
-                .findByIdAndUpdate(id, updatePropertyDto, { new: true })
+                .findByIdAndUpdate(id, { $set: this.toMergeSet(updatePropertyDto, property) }, { new: true })
                 .populate('ownerId', 'name email phoneNumber')
                 .populate('agentId', 'name email phoneNumber agency')
                 .lean()
@@ -413,6 +457,10 @@ let PropertiesService = PropertiesService_1 = class PropertiesService {
                 property.ownerId.toString() !== user._id.toString()) {
                 throw new common_1.ForbiddenException('You can only delete your own properties');
             }
+            const active = await this.countActiveBookings(id);
+            if (active > 0) {
+                throw new common_1.ConflictException(`This listing has ${active} upcoming booking(s). Cancel them first — guests get a full refund — then delete the listing.`);
+            }
             await this.propertyModel.findByIdAndDelete(id);
             this.cacheInvalidate(`similar_${id}`);
             this.cacheInvalidate('popular_cities');
@@ -448,8 +496,13 @@ let PropertiesService = PropertiesService_1 = class PropertiesService {
         if (!property)
             throw new common_1.NotFoundException('Property not found');
         this.assertCanManage(property, user);
-        await (0, cloudinary_1.deleteFromCloudinary)(imagePublicId, 'image');
-        property.images = (property.images || []).filter((img) => img.publicId !== imagePublicId);
+        const wanted = decodeURIComponent(String(imagePublicId ?? ''));
+        const images = (property.images || []);
+        if (!images.some((img) => img.publicId === wanted)) {
+            throw new common_1.NotFoundException('Photo not found on this listing');
+        }
+        await (0, cloudinary_1.deleteFromCloudinary)(wanted, 'image');
+        property.images = images.filter((img) => img.publicId !== wanted);
         await property.save();
         return property;
     }
@@ -477,8 +530,13 @@ let PropertiesService = PropertiesService_1 = class PropertiesService {
         if (!property)
             throw new common_1.NotFoundException('Property not found');
         this.assertCanManage(property, user);
-        await (0, cloudinary_1.deleteFromCloudinary)(videoPublicId, 'video');
-        property.videos = (property.videos || []).filter((vid) => vid.publicId !== videoPublicId);
+        const wanted = decodeURIComponent(String(videoPublicId ?? ''));
+        const videos = (property.videos || []);
+        if (!videos.some((v) => v.publicId === wanted)) {
+            throw new common_1.NotFoundException('Video not found on this listing');
+        }
+        await (0, cloudinary_1.deleteFromCloudinary)(wanted, 'video');
+        property.videos = videos.filter((vid) => vid.publicId !== wanted);
         await property.save();
         return property;
     }
@@ -488,7 +546,7 @@ let PropertiesService = PropertiesService_1 = class PropertiesService {
         if (cached)
             return cached;
         const result = await this.propertyModel
-            .find({ isActive: true, availability: property_schema_1.PropertyStatus.ACTIVE })
+            .find({ isActive: true, approvalStatus: property_schema_1.ApprovalStatus.APPROVED, availability: property_schema_1.PropertyStatus.ACTIVE })
             .select(this.listingProjection())
             .sort({ viewsCount: -1 })
             .limit(limit)
@@ -505,7 +563,7 @@ let PropertiesService = PropertiesService_1 = class PropertiesService {
         if (cached)
             return cached;
         const result = await this.propertyModel
-            .find({ isActive: true, availability: property_schema_1.PropertyStatus.ACTIVE })
+            .find({ isActive: true, approvalStatus: property_schema_1.ApprovalStatus.APPROVED, availability: property_schema_1.PropertyStatus.ACTIVE })
             .select(this.listingProjection())
             .sort({ createdAt: -1 })
             .limit(limit)
@@ -522,7 +580,7 @@ let PropertiesService = PropertiesService_1 = class PropertiesService {
         if (cached)
             return cached;
         const result = await this.propertyModel
-            .find({ isActive: true, isFeatured: true, availability: property_schema_1.PropertyStatus.ACTIVE })
+            .find({ isActive: true, isFeatured: true, approvalStatus: property_schema_1.ApprovalStatus.APPROVED, availability: property_schema_1.PropertyStatus.ACTIVE })
             .select(this.listingProjection())
             .sort({ createdAt: -1 })
             .limit(limit)
@@ -533,13 +591,20 @@ let PropertiesService = PropertiesService_1 = class PropertiesService {
         this.cacheSet(key, result, this.FEATURED_TTL_MS);
         return result;
     }
-    async getPopularCities(limit = 10) {
-        const key = `popular_cities_${limit}`;
+    async getPopularCities(limit = 10, listingType) {
+        const key = `popular_cities_${limit}_${listingType ?? 'all'}`;
         const cached = this.cacheGet(key);
         if (cached)
             return cached;
         const result = await this.propertyModel.aggregate([
-            { $match: { isActive: true, availability: property_schema_1.PropertyStatus.ACTIVE } },
+            {
+                $match: {
+                    isActive: true,
+                    approvalStatus: property_schema_1.ApprovalStatus.APPROVED,
+                    availability: property_schema_1.PropertyStatus.ACTIVE,
+                    ...(listingType && Object.values(property_schema_1.ListingType).includes(listingType) ? { listingType } : {}),
+                },
+            },
             { $group: { _id: '$city', count: { $sum: 1 } } },
             { $sort: { count: -1 } },
             { $limit: limit },
@@ -566,7 +631,12 @@ let PropertiesService = PropertiesService_1 = class PropertiesService {
                 throw new common_1.NotFoundException('Property not found');
             const priceMin = property.price * 0.7;
             const priceMax = property.price * 1.3;
-            const baseExclude = { _id: { $ne: property._id }, isActive: true, availability: property_schema_1.PropertyStatus.ACTIVE };
+            const baseExclude = {
+                _id: { $ne: property._id },
+                isActive: true,
+                approvalStatus: property_schema_1.ApprovalStatus.APPROVED,
+                availability: property_schema_1.PropertyStatus.ACTIVE,
+            };
             const cityFilter = property.city
                 ? { city: { $regex: new RegExp(`^${property.city.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } }
                 : {};
@@ -669,7 +739,7 @@ let PropertiesService = PropertiesService_1 = class PropertiesService {
                 return { properties: [], total: 0, page, totalPages: 0 };
             const sort = { [sortBy]: sortOrder === 'asc' ? 1 : -1 };
             const properties = await this.propertyModel
-                .find({ _id: { $in: favoriteIds }, isActive: true })
+                .find({ _id: { $in: favoriteIds }, isActive: true, approvalStatus: property_schema_1.ApprovalStatus.APPROVED })
                 .select(this.listingProjection())
                 .populate('ownerId', 'name email phoneNumber profilePicture')
                 .populate('agentId', 'name email phoneNumber profilePicture agency')
@@ -775,6 +845,7 @@ let PropertiesService = PropertiesService_1 = class PropertiesService {
             const query = {
                 $text: { $search: searchText },
                 isActive: true,
+                approvalStatus: property_schema_1.ApprovalStatus.APPROVED,
                 availability: property_schema_1.PropertyStatus.ACTIVE,
                 ...this.buildFilterQuery(filters),
             };
@@ -855,6 +926,9 @@ let PropertiesService = PropertiesService_1 = class PropertiesService {
         const bookedIds = await availabilityPromise;
         if (bookedIds.length > 0)
             query._id = { $nin: bookedIds };
+        if (filters.checkIn && filters.checkOut) {
+            Object.assign(query, this.notHostBlockedFilter(filters.checkIn, filters.checkOut));
+        }
         const sort = { [sortBy]: sortOrder === 'asc' ? 1 : -1 };
         const [properties, total] = await Promise.all([
             this.propertyModel
@@ -869,7 +943,68 @@ let PropertiesService = PropertiesService_1 = class PropertiesService {
                 .exec(),
             this.propertyModel.countDocuments(query),
         ]);
+        if (filters.checkIn && filters.checkOut) {
+            await this.attachStayQuotes(properties, filters.checkIn, filters.checkOut, filters.minGuests);
+        }
         return { properties: properties, total, page, totalPages: Math.ceil(total / limit) };
+    }
+    async attachStayQuotes(properties, checkIn, checkOut, guests) {
+        const start = new Date(Date.UTC(checkIn.getUTCFullYear(), checkIn.getUTCMonth(), checkIn.getUTCDate()));
+        const nights = Math.round((checkOut.getTime() - start.getTime()) / 86_400_000);
+        if (!(nights > 0) || nights > 365)
+            return;
+        const HOTEL = new Set(['hotel', 'motel', 'hostel', 'resort', 'guesthouse']);
+        const ids = properties
+            .filter((p) => p?.listingType === property_schema_1.ListingType.SHORT_TERM && !HOTEL.has(String(p?.type)))
+            .map((p) => p._id);
+        if (!ids.length)
+            return;
+        const pricing = await this.propertyModel
+            .find({ _id: { $in: ids } })
+            .select('price weekendPrice priceOverrides cleaningFee minNights maxNights weeklyDiscountPercent monthlyDiscountPercent customDiscountNights customDiscountPercent guestsIncluded extraGuestFee')
+            .lean()
+            .exec();
+        const byId = new Map(pricing.map((p) => [String(p._id), p]));
+        for (const card of properties) {
+            const p = byId.get(String(card._id));
+            if (!p)
+                continue;
+            const base = Number(p.price ?? 0);
+            const weekend = Number(p.weekendPrice || 0);
+            const overrides = p.priceOverrides ?? {};
+            let nightsTotal = 0;
+            const d = new Date(start);
+            for (let i = 0; i < nights; i++) {
+                const override = Number(overrides[d.toISOString().slice(0, 10)] || 0);
+                const day = d.getUTCDay();
+                nightsTotal += override > 0 ? override : weekend > 0 && (day === 5 || day === 6) ? weekend : base;
+                d.setUTCDate(d.getUTCDate() + 1);
+            }
+            const included = Number(p.guestsIncluded) || 0;
+            const fee = Number(p.extraGuestFee) || 0;
+            if (guests && included > 0 && fee > 0)
+                nightsTotal += Math.max(0, guests - included) * fee * nights;
+            let pct = 0;
+            if (nights >= 28 && Number(p.monthlyDiscountPercent) > 0)
+                pct = Math.max(pct, Number(p.monthlyDiscountPercent));
+            if (nights >= 7 && Number(p.weeklyDiscountPercent) > 0)
+                pct = Math.max(pct, Number(p.weeklyDiscountPercent));
+            if (Number(p.customDiscountNights) > 0 && nights >= Number(p.customDiscountNights) && Number(p.customDiscountPercent) > 0) {
+                pct = Math.max(pct, Number(p.customDiscountPercent));
+            }
+            const discountAmount = pct > 0 ? Math.round((nightsTotal * pct) / 100) : 0;
+            const cleaningFee = Number(p.cleaningFee ?? 0);
+            card.stayQuote = {
+                nights,
+                nightsTotal,
+                discountPercent: pct,
+                discountAmount,
+                cleaningFee,
+                total: nightsTotal - discountAmount + cleaningFee,
+                minNights: Number(p.minNights ?? 1),
+                meetsStayRules: nights >= Number(p.minNights ?? 1) && (p.maxNights == null || nights <= Number(p.maxNights)),
+            };
+        }
     }
     async blockDates(propertyId, dto, user) {
         const property = await this.propertyModel.findById(propertyId);
@@ -927,7 +1062,13 @@ let PropertiesService = PropertiesService_1 = class PropertiesService {
             .exec();
         if (!property)
             throw new common_1.NotFoundException('Property not found');
-        return { unavailableDates: property.unavailableDates ?? [] };
+        return {
+            unavailableDates: (property.unavailableDates ?? []).map((r) => ({
+                from: r.from,
+                to: r.to,
+                source: r.source ?? 'manual',
+            })),
+        };
     }
     async getCalendarSettings(propertyId, user) {
         if (!mongoose_2.Types.ObjectId.isValid(propertyId))
@@ -936,7 +1077,14 @@ let PropertiesService = PropertiesService_1 = class PropertiesService {
         if (!property)
             throw new common_1.NotFoundException('Property not found');
         this.assertCanManage(property, user);
-        const baseUrl = process.env.API_URL || process.env.BACKEND_URL || 'https://horohouse.com/api';
+        const baseUrl = (process.env.API_URL || process.env.BACKEND_URL || 'https://horohouse.com/api').replace(/\/+$/, '');
+        let token = property.icalExportToken;
+        if (!token) {
+            token = (0, crypto_1.randomBytes)(24).toString('hex');
+            await this.propertyModel.updateOne({ _id: property._id, icalExportToken: { $exists: false } }, { $set: { icalExportToken: token } });
+            const fresh = await this.propertyModel.findById(property._id).select('icalExportToken').lean().exec();
+            token = fresh?.icalExportToken ?? token;
+        }
         return {
             basePrice: property.price ?? 0,
             weekendPrice: property.weekendPrice ?? null,
@@ -946,7 +1094,7 @@ let PropertiesService = PropertiesService_1 = class PropertiesService {
             noticeDays: property.noticeDays ?? 0,
             windowMonths: property.windowMonths ?? 12,
             externalCalendars: property.externalCalendars ?? [],
-            exportUrl: `${baseUrl}/properties/${propertyId}/calendar.ics`,
+            exportUrl: `${baseUrl}/properties/ical/${token}.ics`,
         };
     }
     async updateCalendarSettings(propertyId, dto, user) {
@@ -998,7 +1146,7 @@ let PropertiesService = PropertiesService_1 = class PropertiesService {
             else {
                 priceOverrides[key] = dto.price;
             }
-            cur.setDate(cur.getDate() + 1);
+            cur.setUTCDate(cur.getUTCDate() + 1);
         }
         await this.propertyModel.findByIdAndUpdate(propertyId, { $set: { priceOverrides } }, { new: true }).exec();
         return { priceOverrides };
@@ -1010,14 +1158,121 @@ let PropertiesService = PropertiesService_1 = class PropertiesService {
         if (!property)
             throw new common_1.NotFoundException('Property not found');
         this.assertCanManage(property, user);
+        const existing = (property.externalCalendars ?? []);
+        if (existing.length >= MAX_EXTERNAL_CALENDARS) {
+            throw new common_1.BadRequestException(`You can connect up to ${MAX_EXTERNAL_CALENDARS} calendars`);
+        }
+        const url = (0, ical_util_1.normalizeIcalUrl)(dto.url);
+        await (0, ical_util_1.assertSafeIcalUrl)(url);
+        if (existing.some((c) => c.url === url)) {
+            throw new common_1.BadRequestException('This calendar is already connected');
+        }
         const newCalendar = {
             id: new mongoose_2.Types.ObjectId().toString(),
-            name: dto.name,
-            url: dto.url,
-            lastSyncedAt: new Date(),
+            name: dto.name.trim(),
+            url,
+            lastSyncedAt: null,
+            lastSyncError: null,
+            lastSyncedCount: 0,
         };
         await this.propertyModel.findByIdAndUpdate(propertyId, { $push: { externalCalendars: newCalendar } }, { new: true }).exec();
-        return newCalendar;
+        const result = await this.syncExternalCalendar(propertyId, newCalendar.id);
+        return { ...newCalendar, ...result };
+    }
+    async syncExternalCalendar(propertyId, calendarId) {
+        const property = await this.propertyModel.findById(propertyId).select('externalCalendars').lean().exec();
+        const cal = (property?.externalCalendars ?? []).find((c) => c.id === calendarId);
+        if (!cal)
+            throw new common_1.NotFoundException('Calendar not found');
+        try {
+            const ranges = (0, ical_util_1.parseIcalRanges)(await (0, ical_util_1.fetchIcal)(cal.url)).slice(0, 1000);
+            const now = new Date();
+            await this.propertyModel.updateOne({ _id: propertyId }, { $pull: { unavailableDates: { source: 'ical', calendarId } } });
+            await this.propertyModel.updateOne({ _id: propertyId, 'externalCalendars.id': calendarId }, {
+                $push: {
+                    unavailableDates: {
+                        $each: ranges.map((r) => ({ from: r.from, to: r.to, reason: `${cal.name}: ${r.reason}`.slice(0, 120), source: 'ical', calendarId })),
+                    },
+                },
+                $set: {
+                    'externalCalendars.$.lastSyncedAt': now,
+                    'externalCalendars.$.lastSyncError': null,
+                    'externalCalendars.$.lastSyncedCount': ranges.length,
+                },
+            });
+            this.logger.log(`iCal import ${calendarId} on ${propertyId}: ${ranges.length} range(s)`);
+            return { lastSyncedAt: now, lastSyncError: null, lastSyncedCount: ranges.length };
+        }
+        catch (err) {
+            const message = String(err?.response?.message ?? err?.message ?? 'Sync failed').slice(0, 200);
+            await this.propertyModel.updateOne({ _id: propertyId, 'externalCalendars.id': calendarId }, { $set: { 'externalCalendars.$.lastSyncError': message } });
+            this.logger.warn(`iCal import ${calendarId} on ${propertyId} failed: ${message}`);
+            return { lastSyncedAt: cal.lastSyncedAt ?? null, lastSyncError: message, lastSyncedCount: cal.lastSyncedCount ?? 0 };
+        }
+    }
+    async syncExternalCalendarForHost(propertyId, calendarId, user) {
+        if (!mongoose_2.Types.ObjectId.isValid(propertyId))
+            throw new common_1.BadRequestException('Invalid property ID');
+        const property = await this.propertyModel.findById(propertyId).exec();
+        if (!property)
+            throw new common_1.NotFoundException('Property not found');
+        this.assertCanManage(property, user);
+        return this.syncExternalCalendar(propertyId, calendarId);
+    }
+    async syncAllExternalCalendars() {
+        const properties = await this.propertyModel
+            .find({ 'externalCalendars.0': { $exists: true } })
+            .select('_id externalCalendars.id')
+            .lean()
+            .exec();
+        let synced = 0;
+        for (const p of properties) {
+            for (const cal of p.externalCalendars ?? []) {
+                await this.syncExternalCalendar(String(p._id), cal.id);
+                synced++;
+            }
+        }
+        return synced;
+    }
+    async getIcalFeed(token) {
+        if (!/^[a-f0-9]{48}$/.test(token))
+            throw new common_1.NotFoundException('Calendar not found');
+        const property = await this.propertyModel
+            .findOne({ icalExportToken: token })
+            .select('_id title unavailableDates')
+            .lean()
+            .exec();
+        if (!property)
+            throw new common_1.NotFoundException('Calendar not found');
+        const since = new Date(Date.now() - 30 * 86_400_000);
+        const now = new Date();
+        let bookings = [];
+        try {
+            const bookingModel = this.propertyModel.db.model('Booking');
+            bookings = await bookingModel
+                .find({
+                propertyId: property._id,
+                status: { $in: ['confirmed', 'pending', 'completed'] },
+                checkOut: { $gte: since },
+                $and: [
+                    { $or: [{ roomId: { $exists: false } }, { roomId: null }] },
+                    { $or: [{ paymentStatus: 'paid' }, { expiresAt: { $exists: false } }, { expiresAt: null }, { expiresAt: { $gt: now } }] },
+                ],
+            })
+                .select('_id checkIn checkOut')
+                .lean()
+                .exec();
+        }
+        catch {
+            this.logger.warn('Booking model not available — exporting blocked dates only');
+        }
+        const events = [
+            ...bookings.map((b) => ({ uid: `booking-${b._id}`, from: new Date(b.checkIn), to: new Date(b.checkOut), summary: 'Reserved (HoroHouse)' })),
+            ...(property.unavailableDates ?? [])
+                .filter((r) => (r.source ?? 'manual') !== 'ical' && new Date(r.to) >= since)
+                .map((r, i) => ({ uid: `block-${property._id}-${new Date(r.from).getTime()}-${i}`, from: new Date(r.from), to: new Date(r.to), summary: 'Not available' })),
+        ];
+        return (0, ical_util_1.buildIcalFeed)(`HoroHouse · ${property.title ?? 'Listing'}`, events);
     }
     async removeExternalCalendar(propertyId, calendarId, user) {
         if (!mongoose_2.Types.ObjectId.isValid(propertyId))
@@ -1026,7 +1281,7 @@ let PropertiesService = PropertiesService_1 = class PropertiesService {
         if (!property)
             throw new common_1.NotFoundException('Property not found');
         this.assertCanManage(property, user);
-        await this.propertyModel.findByIdAndUpdate(propertyId, { $pull: { externalCalendars: { id: calendarId } } }, { new: true }).exec();
+        await this.propertyModel.findByIdAndUpdate(propertyId, { $pull: { externalCalendars: { id: calendarId }, unavailableDates: { source: 'ical', calendarId } } }, { new: true }).exec();
         return { success: true };
     }
     async getShortTermById(propertyId) {
@@ -1045,6 +1300,8 @@ let PropertiesService = PropertiesService_1 = class PropertiesService {
             .exec();
         if (!property)
             throw new common_1.NotFoundException('Short-term property not found');
+        delete property.externalCalendars;
+        delete property.icalExportToken;
         return {
             ...property,
             shortTermSummary: {
@@ -1060,6 +1317,9 @@ let PropertiesService = PropertiesService_1 = class PropertiesService {
                 maxGuests: property.shortTermAmenities?.maxGuests,
                 advanceNoticeDays: property.advanceNoticeDays,
                 bookingWindowDays: property.bookingWindowDays,
+                noticeDays: property.noticeDays ?? 0,
+                windowMonths: property.windowMonths ?? 12,
+                weekendPrice: property.weekendPrice ?? null,
             },
         };
     }
@@ -1145,6 +1405,10 @@ let PropertiesService = PropertiesService_1 = class PropertiesService {
             query['amenities.bathrooms'] = { $gte: filters.bathrooms };
         if (filters.furnished !== undefined)
             query['amenities.furnished'] = filters.furnished;
+        if (filters.isStudentFriendly)
+            query.isStudentFriendly = true;
+        if (filters.isFeatured)
+            query.isFeatured = true;
         if (filters.amenities?.length) {
             query.$and = filters.amenities.map((a) => ({ [`amenities.${a}`]: true }));
         }
@@ -1256,11 +1520,16 @@ let PropertiesService = PropertiesService_1 = class PropertiesService {
             const bookingModel = this.propertyModel.db.model('Booking');
             if (!bookingModel)
                 return [];
+            const now = new Date();
             const bookings = await bookingModel
                 .find({
                 status: { $in: ['confirmed', 'pending'] },
                 checkIn: { $lt: checkOut },
                 checkOut: { $gt: checkIn },
+                $and: [
+                    { $or: [{ roomId: { $exists: false } }, { roomId: null }] },
+                    { $or: [{ paymentStatus: 'paid' }, { expiresAt: { $exists: false } }, { expiresAt: null }, { expiresAt: { $gt: now } }] },
+                ],
             })
                 .select('propertyId')
                 .lean()
@@ -1270,6 +1539,54 @@ let PropertiesService = PropertiesService_1 = class PropertiesService {
         catch {
             this.logger.warn('Booking model not available — skipping availability filter');
             return [];
+        }
+    }
+    notHostBlockedFilter(checkIn, checkOut) {
+        return {
+            unavailableDates: { $not: { $elemMatch: { from: { $lt: checkOut }, to: { $gt: checkIn } } } },
+        };
+    }
+    assertListingLocation(lat, lng) {
+        if (!(0, geo_util_1.isInCameroon)(lat, lng)) {
+            throw new common_1.BadRequestException('HoroHouse listings must be in Cameroon for now. Move the pin to your property in Cameroon.');
+        }
+    }
+    toMergeSet(dto, current) {
+        const MERGED = new Set(['amenities', 'shortTermAmenities', 'houseRules', 'studentDetails']);
+        const canMerge = (key) => {
+            const existing = current?.[key];
+            return existing === undefined || (existing !== null && typeof existing === 'object' && !Array.isArray(existing));
+        };
+        const out = {};
+        for (const [key, value] of Object.entries(dto)) {
+            if (value === undefined)
+                continue;
+            if (MERGED.has(key) && canMerge(key) && value && typeof value === 'object' && !Array.isArray(value)) {
+                for (const [sub, subValue] of Object.entries(value)) {
+                    if (subValue !== undefined)
+                        out[`${key}.${sub}`] = subValue;
+                }
+            }
+            else {
+                out[key] = value;
+            }
+        }
+        return out;
+    }
+    async countActiveBookings(propertyId) {
+        try {
+            const bookingModel = this.propertyModel.db.model('Booking');
+            const now = new Date();
+            const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+            return await bookingModel.countDocuments({
+                propertyId: new mongoose_2.Types.ObjectId(propertyId),
+                status: { $in: ['pending', 'confirmed'] },
+                checkOut: { $gte: today },
+                $or: [{ paymentStatus: 'paid' }, { expiresAt: { $exists: false } }, { expiresAt: null }, { expiresAt: { $gt: now } }],
+            });
+        }
+        catch {
+            return 0;
         }
     }
     isValidCoordinate(lat, lng) {

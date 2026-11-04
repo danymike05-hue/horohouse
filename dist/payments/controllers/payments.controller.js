@@ -59,6 +59,9 @@ let PaymentsController = class PaymentsController {
     async getPaymentAnalytics() {
         return { message: 'Payment analytics endpoint' };
     }
+    async adminRefundBooking(bookingId, dto) {
+        return this.paymentsService.adminRefundBooking(bookingId, dto.amount, dto.reason);
+    }
 };
 exports.PaymentsController = PaymentsController;
 __decorate([
@@ -181,6 +184,22 @@ __decorate([
     __metadata("design:paramtypes", []),
     __metadata("design:returntype", Promise)
 ], PaymentsController.prototype, "getPaymentAnalytics", null);
+__decorate([
+    (0, common_1.Post)('admin/bookings/:bookingId/refund'),
+    (0, common_1.UseGuards)(jwt_auth_guard_1.JwtAuthGuard),
+    (0, roles_guard_1.Roles)(user_schema_1.UserRole.ADMIN),
+    (0, swagger_1.ApiOperation)({
+        summary: 'Process or retry refund for a booking (Admin)',
+        description: 'Initiates a refund via CamerPay for a cancelled or disputed booking, records the REFUND transaction, ' +
+            'updates booking payment status, and debits host wallet if applicable.',
+    }),
+    (0, swagger_1.ApiParam)({ name: 'bookingId', description: 'ID of the booking to refund' }),
+    __param(0, (0, common_1.Param)('bookingId')),
+    __param(1, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, payment_dto_1.AdminRefundBookingDto]),
+    __metadata("design:returntype", Promise)
+], PaymentsController.prototype, "adminRefundBooking", null);
 exports.PaymentsController = PaymentsController = __decorate([
     (0, swagger_1.ApiTags)('Payments'),
     (0, swagger_1.ApiBearerAuth)('JWT-auth'),

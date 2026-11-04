@@ -37,9 +37,21 @@ export declare class RoomsController {
     setIcalUrl(id: string, dto: SetIcalUrlDto, req: FastifyRequest & {
         user: User;
     }): Promise<import("./schemas/room.schema").Room>;
-    syncIcal(id: string): Promise<{
+    syncIcal(id: string, req: FastifyRequest & {
+        user: User;
+    }): Promise<{
         synced: number;
         roomId: string;
     }>;
-    getRoomAvailability(id: string, query: RoomAvailabilityQueryDto): Promise<import("./rooms.service").RoomAvailabilityResult>;
+    getRoomAvailability(id: string, query: RoomAvailabilityQueryDto): Promise<{
+        available: boolean;
+        unavailableDates: {
+            from: Date;
+            to: Date;
+        }[];
+        bookedRanges: {
+            checkIn: Date;
+            checkOut: Date;
+        }[];
+    }>;
 }

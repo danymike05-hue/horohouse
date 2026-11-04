@@ -306,24 +306,28 @@ let PaymentsService = PaymentsService_1 = class PaymentsService {
                 return;
             }
             switch (status) {
-                case 'SUCCESSFUL':
+                case 'SUCCESSFUL': {
                     if (parseFloat(amount) < transaction.amount) {
                         this.logger.warn(`Underpayment on tx ${transaction._id}: expected ${transaction.amount}, got ${amount}`);
                         return;
                     }
-                    if (transaction.status === transaction_schema_1.TransactionStatus.SUCCESS) {
+                    const confirmed = await this.transactionModel.findOneAndUpdate({ _id: transaction._id, status: { $ne: transaction_schema_1.TransactionStatus.SUCCESS } }, {
+                        $set: {
+                            status: transaction_schema_1.TransactionStatus.SUCCESS,
+                            completedAt: new Date(payload.datetime ?? Date.now()),
+                            flutterwaveTransactionId: reference,
+                            paymentMethod: this.camerPayService.mapPaymentMethod(payload.operator ?? ''),
+                            paymentProviderResponse: payload,
+                        },
+                    }, { new: true });
+                    if (!confirmed) {
                         this.logger.log(`Duplicate webhook — already successful: ${transaction._id}`);
                         return;
                     }
-                    transaction.status = transaction_schema_1.TransactionStatus.SUCCESS;
-                    transaction.completedAt = new Date(payload.datetime ?? Date.now());
-                    transaction.flutterwaveTransactionId = reference;
-                    transaction.paymentMethod = this.camerPayService.mapPaymentMethod(payload.operator ?? '');
-                    transaction.paymentProviderResponse = payload;
-                    await transaction.save();
-                    await this.processSuccessfulPayment(transaction);
+                    await this.processSuccessfulPayment(confirmed);
                     this.logger.log(`Webhook: payment SUCCESSFUL — tx: ${transaction._id}`);
                     break;
+                }
                 case 'FAILED':
                     transaction.status = transaction_schema_1.TransactionStatus.FAILED;
                     transaction.failureReason = `CamPay status: FAILED`;
@@ -331,6 +335,25 @@ let PaymentsService = PaymentsService_1 = class PaymentsService {
                     await transaction.save();
                     this.logger.log(`Webhook: payment FAILED — tx: ${transaction._id}`);
                     break;
+                case 'REFUNDED': {
+                    const alreadyRefunded = transaction.status === transaction_schema_1.TransactionStatus.REFUNDED;
+                    if (alreadyRefunded) {
+                        this.logger.log(`Duplicate REFUNDED webhook — tx: ${transaction._id}`);
+                        return;
+                    }
+                    transaction.status = transaction_schema_1.TransactionStatus.REFUNDED;
+                    transaction.refundedAt = new Date(payload.datetime ?? Date.now());
+                    transaction.paymentProviderResponse = payload;
+                    await transaction.save();
+                    if (transaction.bookingId) {
+                        await this.bookingModel.findByIdAndUpdate(transaction.bookingId, {
+                            paymentStatus: booking_schema_1.PaymentStatus.REFUNDED,
+                            'cancellation.refundStatus': 'processed',
+                        });
+                    }
+                    this.logger.log(`Webhook: payment REFUNDED — tx: ${transaction._id}`);
+                    break;
+                }
                 default:
                     this.logger.log(`Unhandled CamPay webhook status: ${status}`);
             }
@@ -434,12 +457,154 @@ let PaymentsService = PaymentsService_1 = class PaymentsService {
                 this.logger.log(`No post-payment action for type: ${transaction.type}`);
         }
     }
+    async processBookingRefund(bookingId, refundAmount, reason) {
+        this.logger.log(`processBookingRefund | bookingId: ${bookingId} | amount: ${refundAmount} XAF`);
+        const booking = await this.bookingModel
+            .findById(bookingId)
+            .populate('propertyId', 'title')
+            .exec();
+        if (!booking) {
+            this.logger.error(`processBookingRefund: Booking ${bookingId} not found`);
+            return;
+        }
+        if (booking.paymentStatus === booking_schema_1.PaymentStatus.REFUNDED) {
+            this.logger.log(`Booking ${bookingId} already refunded — skipping`);
+            return;
+        }
+        const originalTx = await this.transactionModel.findOne({
+            bookingId: booking._id,
+            status: transaction_schema_1.TransactionStatus.SUCCESS,
+            type: transaction_schema_1.TransactionType.BOOKING,
+        });
+        if (!originalTx) {
+            this.logger.error(`processBookingRefund: No SUCCESS transaction found for booking ${bookingId}`);
+            await this.bookingModel.findByIdAndUpdate(bookingId, {
+                'cancellation.refundStatus': 'failed',
+            });
+            await this.alertRefundFailed(bookingId, refundAmount, 'no successful payment transaction on record (it may have been paid through the checkout flow — check CamerPay)');
+            return;
+        }
+        const providerUuid = originalTx.flutterwaveTransactionId;
+        if (!providerUuid) {
+            this.logger.error(`processBookingRefund: No CamerPay UUID on transaction ${originalTx._id}`);
+            await this.bookingModel.findByIdAndUpdate(bookingId, {
+                'cancellation.refundStatus': 'failed',
+            });
+            await this.alertRefundFailed(bookingId, refundAmount, `no CamerPay reference on transaction ${originalTx._id}`);
+            return;
+        }
+        const maxRefundable = booking.priceBreakdown.totalAmount;
+        if (refundAmount > maxRefundable) {
+            this.logger.error(`processBookingRefund: refundAmount ${refundAmount} exceeds original payment ` +
+                `${maxRefundable} for booking ${bookingId}`);
+            await this.bookingModel.findByIdAndUpdate(bookingId, {
+                'cancellation.refundStatus': 'failed',
+            });
+            return;
+        }
+        const isFullRefund = refundAmount >= maxRefundable;
+        const currency = (booking.currency ?? 'XAF');
+        const propertyTitle = booking.propertyId?.title ?? 'Property';
+        const refundReason = reason ?? 'Booking cancellation';
+        try {
+            await this.camerPayService.refundPayment(providerUuid, refundAmount, refundReason);
+        }
+        catch (err) {
+            this.logger.error(`processBookingRefund: CamerPay refund FAILED for booking ${bookingId}: ${err.message}`);
+            await this.bookingModel.findByIdAndUpdate(bookingId, {
+                'cancellation.refundStatus': 'failed',
+            });
+            await this.alertRefundFailed(bookingId, refundAmount, `CamerPay refund call failed: ${err?.message ?? err}`);
+            throw err;
+        }
+        const refundTx = new this.transactionModel({
+            userId: booking.guestId,
+            bookingId: booking._id,
+            propertyId: booking.propertyId,
+            amount: refundAmount,
+            currency,
+            type: transaction_schema_1.TransactionType.REFUND,
+            status: transaction_schema_1.TransactionStatus.REFUNDED,
+            paymentMethod: originalTx.paymentMethod,
+            flutterwaveReference: originalTx.flutterwaveReference,
+            refundedAt: new Date(),
+            refundReason,
+            refundTransactionId: originalTx._id,
+            description: `Refund: ${propertyTitle} booking cancellation`,
+            completedAt: new Date(),
+            metadata: {
+                originalTransactionId: originalTx._id.toString(),
+                bookingId,
+                propertyTitle,
+                isFullRefund,
+                originalAmount: maxRefundable,
+                refundAmount,
+            },
+        });
+        await refundTx.save();
+        await this.transactionModel.findByIdAndUpdate(originalTx._id, {
+            status: transaction_schema_1.TransactionStatus.REFUNDED,
+            refundedAt: new Date(),
+            refundReason,
+            refundTransactionId: refundTx._id,
+        });
+        await this.bookingModel.findByIdAndUpdate(bookingId, {
+            paymentStatus: isFullRefund ? booking_schema_1.PaymentStatus.REFUNDED : booking_schema_1.PaymentStatus.PARTIAL,
+            'cancellation.refundStatus': 'processed',
+        });
+        const hostPaidPortion = Math.round(refundAmount * (1 - this.BOOKING_PLATFORM_FEE_RATE));
+        try {
+            await this.walletService.debitWallet(booking.hostId.toString(), hostPaidPortion, `Refund deducted: ${propertyTitle} booking cancellation`, originalTx.flutterwaveReference ?? undefined);
+            this.logger.log(`Host wallet debited: ${booking.hostId} — ${hostPaidPortion} XAF (refund recovery)`);
+        }
+        catch (walletErr) {
+            this.logger.error(`processBookingRefund: Host wallet debit FAILED for booking ${bookingId} ` +
+                `(host: ${booking.hostId}, amount: ${hostPaidPortion} XAF). ` +
+                `Manual recovery required. Error: ${walletErr.message}`);
+            await this.notificationsService.notifyAdmins({
+                title: 'Host wallet not debited after a refund',
+                message: `The guest was refunded ${refundAmount} XAF for booking ${bookingId}, but ${hostPaidPortion} XAF couldn't be taken back from host ${booking.hostId}'s wallet (${walletErr.message}). Recover it manually.`,
+                metadata: { bookingId, hostId: String(booking.hostId), amount: hostPaidPortion },
+            });
+        }
+        try {
+            await this.notificationsService.notifyRefundProcessed(booking.guestId.toString(), {
+                bookingId,
+                propertyTitle,
+                amount: refundAmount,
+                currency,
+            });
+        }
+        catch (notifErr) {
+            this.logger.warn(`processBookingRefund: Notification failed for booking ${bookingId}: ${notifErr.message}`);
+        }
+        this.logger.log(`processBookingRefund DONE | booking: ${bookingId} | refund: ${refundAmount} ${currency} | ` +
+            `host debit: ${hostPaidPortion} ${currency}`);
+    }
+    async adminRefundBooking(bookingId, amount, reason) {
+        const booking = await this.bookingModel.findById(bookingId).exec();
+        if (!booking) {
+            throw new common_1.NotFoundException(`Booking with ID ${bookingId} not found`);
+        }
+        const refundAmount = amount ??
+            booking.cancellation?.refundAmount ??
+            booking.priceBreakdown?.totalAmount;
+        if (!refundAmount || refundAmount <= 0) {
+            throw new common_1.BadRequestException('Refund amount must be greater than 0');
+        }
+        await this.processBookingRefund(bookingId, refundAmount, reason ?? 'Admin initiated refund');
+        return {
+            success: true,
+            message: `Refund of ${refundAmount} ${booking.currency ?? 'XAF'} processed successfully`,
+            refundAmount,
+        };
+    }
     async confirmBookingPayment(transaction) {
         if (!transaction.bookingId)
             return;
         const booking = await this.bookingModel
             .findById(transaction.bookingId)
-            .populate('propertyId', 'isInstantBookable')
+            .populate('propertyId', 'isInstantBookable title')
             .exec();
         if (!booking) {
             this.logger.error(`Booking not found for tx: ${transaction._id}`);
@@ -449,21 +614,36 @@ let PaymentsService = PaymentsService_1 = class PaymentsService {
             this.logger.log(`Booking ${booking._id} already paid — skipping`);
             return;
         }
+        if ([booking_schema_1.BookingStatus.CANCELLED, booking_schema_1.BookingStatus.REJECTED].includes(booking.status)) {
+            this.logger.error(`Payment ${transaction._id} received for closed booking ${booking._id} (${booking.status}) — refund the guest`);
+            await this.transactionModel.findByIdAndUpdate(transaction._id, {
+                $set: {
+                    'metadata.needsReview': true,
+                    'metadata.reviewReason': `paid_after_booking_${booking.status}`,
+                },
+            });
+            await this.notificationsService.notifyAdmins({
+                title: 'Refund needed: paid after the booking closed',
+                message: `${transaction.amount} ${transaction.currency ?? 'XAF'} arrived for booking ${booking._id}, which is ${booking.status}. The host was not paid. Refund the guest (txRef ${transaction.flutterwaveReference ?? transaction._id}).`,
+                metadata: { bookingId: String(booking._id), transactionId: String(transaction._id), reason: `paid_after_booking_${booking.status}` },
+            });
+            return;
+        }
         const update = {
             paymentStatus: booking_schema_1.PaymentStatus.PAID,
             paymentReference: transaction.flutterwaveReference,
             paymentMethod: transaction.paymentMethod,
             paidAt: transaction.completedAt ?? new Date(),
         };
-        update.expiresAt = undefined;
         const isInstantBookable = booking.propertyId?.isInstantBookable ?? false;
-        if (isInstantBookable && booking.status === booking_schema_1.BookingStatus.PENDING) {
+        const instantConfirmed = isInstantBookable && booking.status === booking_schema_1.BookingStatus.PENDING;
+        if (instantConfirmed) {
             update.status = booking_schema_1.BookingStatus.CONFIRMED;
             update.confirmedAt = new Date();
             update.isInstantBook = true;
             this.logger.log(`Auto-confirmed instant booking: ${booking._id}`);
         }
-        await this.bookingModel.findByIdAndUpdate(booking._id, update);
+        await this.bookingModel.findByIdAndUpdate(booking._id, { $set: update, $unset: { expiresAt: 1 } });
         const totalPaid = booking.priceBreakdown.totalAmount;
         const platformCut = Math.round(totalPaid * this.BOOKING_PLATFORM_FEE_RATE);
         const hostPayout = totalPaid - platformCut;
@@ -498,13 +678,39 @@ let PaymentsService = PaymentsService_1 = class PaymentsService {
         await commissionTx.save();
         await this.walletService.creditWallet(hostIdStr, hostPayout, commissionDesc, transaction.flutterwaveReference ?? undefined, commissionTx._id);
         this.logger.log(`Host payout | host: ${hostIdStr} | payout: ${hostPayout} ${currency} | platform fee: ${platformCut}`);
-        const guest = await this.userModel.findById(booking.guestId).select('name').lean();
-        await this.notificationsService.notifyPaymentReceived(hostIdStr, {
-            bookingId: booking._id.toString(),
-            propertyTitle,
-            guestName: guest?.name ?? 'A guest',
-            amount: hostPayout,
-            currency,
+        const fmt = (d) => new Date(d).toISOString().split('T')[0];
+        const [guest, host] = await Promise.all([
+            this.userModel.findById(booking.guestId).select('name').lean(),
+            this.userModel.findById(booking.hostId).select('name').lean(),
+        ]);
+        try {
+            await this.notificationsService.notifyPaymentReceived(hostIdStr, {
+                bookingId: booking._id.toString(),
+                propertyTitle,
+                guestName: guest?.name ?? 'A guest',
+                amount: hostPayout,
+                currency,
+            });
+            if (instantConfirmed) {
+                await this.notificationsService.notifyBookingConfirmed(booking.guestId.toString(), {
+                    bookingId: booking._id.toString(),
+                    propertyId: String(booking.propertyId?._id ?? booking.propertyId),
+                    propertyTitle,
+                    hostName: host?.name ?? 'Your host',
+                    checkIn: fmt(booking.checkIn),
+                    checkOut: fmt(booking.checkOut),
+                });
+            }
+        }
+        catch (err) {
+            this.logger.warn(`confirmBookingPayment: notification failed for booking ${booking._id}: ${err?.message}`);
+        }
+    }
+    async alertRefundFailed(bookingId, amount, why) {
+        await this.notificationsService.notifyAdmins({
+            title: 'Refund failed — guest still owed money',
+            message: `Refund of ${amount} XAF for booking ${bookingId} did not go through: ${why}. Retry it from the admin refund action or refund in CamerPay.`,
+            metadata: { bookingId, amount, reason: why },
         });
     }
     generateTransactionReference(type) {

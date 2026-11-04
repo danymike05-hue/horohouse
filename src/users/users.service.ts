@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException, Logger } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ForbiddenException, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { ConfigService } from '@nestjs/config';
@@ -8,6 +8,42 @@ import { User, UserDocument, UserRole, UserPreferences, TenantRecord, HostVerifi
 import { CreateUserDto, UpdateUserDto, UpdatePreferencesDto, CreateTenantDto, UpdateTenantDto } from './dto';
 import { Property, PropertyDocument, PropertyImages, PropertyStatus, ListingType } from 'src/properties/schemas/property.schema';
 import { ReviewsService } from 'src/reviews/reviews.service';
+
+/**
+ * HoroHouse fee taken from host earnings. Must match the Service Fees page and the
+ * "You earn" line in the host wizard (both say 10 %).
+ */
+export const HOST_COMMISSION_RATE = 0.10;
+
+/** Formats accepted for a government ID photo. */
+export const GOVERNMENT_ID_MIME_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif'];
+export const GOVERNMENT_ID_MAX_BYTES = 10 * 1024 * 1024;
+
+/**
+ * hostProfile fields anyone may see on a public host page. Everything else
+ * (government ID, payout history, earnings, commission, co-hosts, review notes)
+ * stays private.
+ */
+const PUBLIC_HOST_PROFILE_FIELDS = [
+  'isSuperhost',
+  'superhostSince',
+  'instantBookEnabled',
+  'hostBio',
+  'hostLanguages',
+  'operatingCity',
+  'completedStays',
+  'responseRate',
+  'responseTimeMinutes',
+  'responseTimeHours',
+  'minNightsDefault',
+  'maxNightsDefault',
+  'petsAllowedDefault',
+  'smokingAllowedDefault',
+  'eventsAllowedDefault',
+  'checkInTimeDefault',
+  'checkOutTimeDefault',
+  'hostingSince',
+] as const;
 
 @Injectable()
 export class UsersService {
@@ -229,7 +265,7 @@ export class UsersService {
         totalEarnings: 0,
         currentMonthEarnings: 0,
         completedStays: 0,
-        commissionRate: 0.12,
+        commissionRate: HOST_COMMISSION_RATE,
         payoutAccounts: [],
         payoutHistory: [],
         petsAllowedDefault: false,
@@ -371,6 +407,15 @@ export class UsersService {
    * Remove property from favorites
    */
   async removeFromFavorites(userId: string, propertyId: string): Promise<User> {
+    if (!Types.ObjectId.isValid(propertyId)) {
+      throw new BadRequestException('Invalid property ID');
+    }
+    // Un-saving a place takes it out of every wishlist too (Airbnb behaviour)
+    try {
+      await (this.userModel.db as any)
+        .collection('wishlists')
+        .updateMany({ ownerId: new Types.ObjectId(userId) }, { $pull: { propertyIds: new Types.ObjectId(propertyId) } });
+    } catch { /* wishlists not set up yet */ }
     const user = await this.userModel
       .findByIdAndUpdate(
         userId,
@@ -1852,13 +1897,26 @@ export class UsersService {
       this.getAgentReviewStats(id).catch(() => ({ averageRating: 0, totalReviews: 0 })),
     ]);
 
-    // Build sanitised hostProfile — drop server-only public_id
-    const hp = host.hostProfile ? { ...host.hostProfile } as any : null;
-    if (hp?.governmentIdPublicId) delete hp.governmentIdPublicId;
+    // Public route: copy only the whitelisted fields. The old code spread the whole
+    // hostProfile, which sent the government ID photo URL, payout history, commission
+    // rate and co-host IDs to anyone who opened /users/hosts/:id.
+    const rawHp: any = (host.toObject() as any).hostProfile ?? null;
+    const hp: any = rawHp ? {} : null;
+    if (rawHp) {
+      for (const key of PUBLIC_HOST_PROFILE_FIELDS) {
+        if (rawHp[key] !== undefined) hp[key] = rawHp[key];
+      }
+      // Guests only need to know whether the identity is verified, not why a check failed.
+      hp.verificationStatus =
+        rawHp.verificationStatus === HostVerificationStatus.VERIFIED
+          ? HostVerificationStatus.VERIFIED
+          : HostVerificationStatus.UNVERIFIED;
+      hp.identityVerified = rawHp.verificationStatus === HostVerificationStatus.VERIFIED;
+    }
 
     // Strip payout account identifiers for non-admin callers;
     // the controller can decide how much to expose.
-    const payoutAccountsSummary = (hp?.payoutAccounts ?? []).map((acc: any) => ({
+    const payoutAccountsSummary = (rawHp?.payoutAccounts ?? []).map((acc: any) => ({
       method: acc.method,
       providerName: acc.providerName,
       isDefault: acc.isDefault,
@@ -1880,14 +1938,7 @@ export class UsersService {
       totalListings: listingStats.totalListings,
       activeListings: listingStats.activeListings,
       // Host profile (sensitive fields stripped)
-      hostProfile: hp
-        ? {
-          ...hp,
-          payoutAccounts: payoutAccountsSummary,
-          totalEarnings: undefined,
-          currentMonthEarnings: undefined,
-        }
-        : null,
+      hostProfile: hp ? { ...hp, payoutAccounts: payoutAccountsSummary } : null,
       createdAt: host.createdAt,
     };
   }
@@ -2003,9 +2054,15 @@ export class UsersService {
 
     // ── Government ID upload ───────────────────────────────────────────────
     if (updates.governmentIdBuffer) {
+      if (host.hostProfile?.verificationStatus === HostVerificationStatus.VERIFIED) {
+        throw new BadRequestException('Your identity is already verified');
+      }
+      const previousPublicId: string | undefined = (host.hostProfile as any)?.governmentIdPublicId;
+      // type 'authenticated': the file can't be opened from its URL alone. The old
+      // upload was public, so anyone holding the link could see the ID document.
       const uploadResult = await new Promise<any>((resolve, reject) => {
         const stream = cloudinary.uploader.upload_stream(
-          { folder: 'horohouse/host-ids', resource_type: 'image' },
+          { folder: 'horohouse/host-ids', resource_type: 'image', type: 'authenticated' },
           (err, result) => {
             if (err) reject(err);
             else resolve(result);
@@ -2018,7 +2075,15 @@ export class UsersService {
       setFields['hostProfile.governmentIdPublicId'] = uploadResult.public_id;
       setFields['hostProfile.verificationStatus'] = HostVerificationStatus.PENDING;
       setFields['hostProfile.verificationSubmittedAt'] = new Date();
+      setFields['hostProfile.verificationRejectionReason'] = null;
       this.logger.log(`📄 Government ID uploaded for host ${id}`);
+
+      if (previousPublicId && previousPublicId !== uploadResult.public_id) {
+        // Best effort: older uploads were stored as type 'upload'.
+        for (const type of ['authenticated', 'upload']) {
+          await cloudinary.uploader.destroy(previousPublicId, { type, resource_type: 'image' }).catch(() => undefined);
+        }
+      }
     }
 
     // ── Scalar preference fields ───────────────────────────────────────────
@@ -2108,6 +2173,109 @@ export class UsersService {
 
     this.logger.log(`✅ Host profile updated for ${id}`);
     return updated;
+  }
+
+  // ════════════════════════════════════════════════════════════════════════
+  // HOST IDENTITY VERIFICATION
+  // Off by default. Set HOST_ID_REQUIRED=true to require an approved ID before a
+  // host can publish. The upload, the admin queue and the badge work either way.
+  // ════════════════════════════════════════════════════════════════════════
+
+  isHostIdRequired(): boolean {
+    return String(this.configService.get<string>('HOST_ID_REQUIRED') ?? '').toLowerCase() === 'true';
+  }
+
+  /** What the app shows on the host's "Verify your identity" screen. */
+  async getMyHostVerification(id: string): Promise<{
+    status: HostVerificationStatus;
+    submittedAt: Date | null;
+    reviewedAt: Date | null;
+    rejectionReason: string | null;
+    hasDocument: boolean;
+    idRequired: boolean;
+  }> {
+    const user = await this.userModel.findById(id).select('role hostProfile').lean().exec();
+    if (!user) throw new NotFoundException('User not found');
+    const hp: any = (user as any).hostProfile ?? {};
+    return {
+      status: hp.verificationStatus ?? HostVerificationStatus.UNVERIFIED,
+      submittedAt: hp.verificationSubmittedAt ?? null,
+      reviewedAt: hp.verificationReviewedAt ?? null,
+      rejectionReason: hp.verificationRejectionReason ?? null,
+      hasDocument: !!hp.governmentIdPublicId,
+      idRequired: this.isHostIdRequired(),
+    };
+  }
+
+  /**
+   * Call this before a short-stay listing goes live (create / publish / submit for
+   * approval in PropertiesService). Does nothing while HOST_ID_REQUIRED is off.
+   */
+  async assertHostCanPublish(userId: string): Promise<void> {
+    if (!this.isHostIdRequired()) return;
+    const user = await this.userModel.findById(userId).select('role hostProfile.verificationStatus').lean().exec();
+    if (!user) throw new NotFoundException('User not found');
+    if ((user as any).role !== UserRole.HOST) return;
+    if ((user as any).hostProfile?.verificationStatus !== HostVerificationStatus.VERIFIED) {
+      throw new ForbiddenException('Verify your identity before publishing a listing');
+    }
+  }
+
+  /** Admin queue: hosts waiting for an ID review, oldest first. */
+  async getPendingHostVerifications(page = 1, limit = 20): Promise<any> {
+    const safeLimit = Math.min(Math.max(1, limit), 100);
+    const filter = {
+      role: UserRole.HOST,
+      'hostProfile.verificationStatus': HostVerificationStatus.PENDING,
+    };
+    const [items, total] = await Promise.all([
+      this.userModel
+        .find(filter)
+        .select('name email phoneNumber profilePicture city createdAt hostProfile.verificationSubmittedAt')
+        .sort({ 'hostProfile.verificationSubmittedAt': 1 })
+        .skip((Math.max(1, page) - 1) * safeLimit)
+        .limit(safeLimit)
+        .lean()
+        .exec(),
+      this.userModel.countDocuments(filter),
+    ]);
+    return {
+      hosts: items.map((u: any) => ({
+        id: String(u._id),
+        name: u.name,
+        email: u.email,
+        phoneNumber: u.phoneNumber,
+        profilePicture: u.profilePicture,
+        city: u.city,
+        joinedAt: u.createdAt,
+        submittedAt: u.hostProfile?.verificationSubmittedAt ?? null,
+      })),
+      total,
+      page: Math.max(1, page),
+      totalPages: Math.ceil(total / safeLimit),
+    };
+  }
+
+  /** Admin only: a signed link to view a host's ID photo. */
+  async getGovernmentIdViewUrl(id: string): Promise<{ url: string }> {
+    if (!Types.ObjectId.isValid(id)) throw new BadRequestException('Invalid host ID');
+    const user = await this.userModel
+      .findById(id)
+      .select('hostProfile.governmentIdPublicId hostProfile.governmentIdUrl')
+      .lean()
+      .exec();
+    const hp: any = (user as any)?.hostProfile;
+    if (!hp?.governmentIdPublicId) throw new NotFoundException('No ID document on file');
+    const isPrivate = String(hp.governmentIdUrl ?? '').includes('/authenticated/');
+    if (!isPrivate) return { url: hp.governmentIdUrl };
+    return {
+      url: cloudinary.url(hp.governmentIdPublicId, {
+        type: 'authenticated',
+        resource_type: 'image',
+        sign_url: true,
+        secure: true,
+      }),
+    };
   }
 
   /**

@@ -11,6 +11,10 @@ import {
   Min,
   Max,
   Length,
+  Matches,
+  IsIn,
+  ArrayMaxSize,
+  MaxLength,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional, PartialType } from '@nestjs/swagger';
@@ -20,7 +24,11 @@ import {
   PropertyStatus,
   PricingUnit,
   CancellationPolicy,
+  CheckInMethod,
+  CHECKOUT_TASKS,
 } from '../schemas/property.schema';
+
+const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 // ─── Sub-DTOs ─────────────────────────────────────────────────────────────────
 
@@ -43,6 +51,12 @@ export class ShortTermAmenitiesDto {
   @ApiPropertyOptional() @IsOptional() @IsBoolean() airportTransfer?: boolean;
   @ApiPropertyOptional() @IsOptional() @IsBoolean() conciergeService?: boolean;
   @ApiPropertyOptional() @IsOptional() @IsBoolean() dailyHousekeeping?: boolean;
+  // Workspace & safety — selected in the listing wizard (were never saved before)
+  @ApiPropertyOptional() @IsOptional() @IsBoolean() hasWorkspace?: boolean;
+  @ApiPropertyOptional() @IsOptional() @IsBoolean() hasSmokeDetector?: boolean;
+  @ApiPropertyOptional() @IsOptional() @IsBoolean() hasFireExtinguisher?: boolean;
+  @ApiPropertyOptional() @IsOptional() @IsBoolean() hasFirstAidKit?: boolean;
+  @ApiPropertyOptional() @IsOptional() @IsBoolean() hasSecurityCameras?: boolean;
 
   @ApiPropertyOptional({ example: 4, description: 'Maximum number of guests allowed' })
   @IsOptional()
@@ -53,15 +67,49 @@ export class ShortTermAmenitiesDto {
 
   @ApiPropertyOptional({ example: '14:00', description: 'Check-in time (HH:mm)' })
   @IsOptional()
-  @IsString()
-  @Length(5, 5)
+  @Matches(HHMM, { message: 'checkInTime must be HH:mm' })
   checkInTime?: string;
 
   @ApiPropertyOptional({ example: '11:00', description: 'Check-out time (HH:mm)' })
   @IsOptional()
-  @IsString()
-  @Length(5, 5)
+  @Matches(HHMM, { message: 'checkOutTime must be HH:mm' })
   checkOutTime?: string;
+}
+
+export class HouseRulesDto {
+  @ApiPropertyOptional() @IsOptional() @IsBoolean() childrenAllowed?: boolean;
+  @ApiPropertyOptional() @IsOptional() @IsBoolean() infantsAllowed?: boolean;
+  @ApiPropertyOptional() @IsOptional() @IsBoolean() visitorsAllowed?: boolean;
+  @ApiPropertyOptional() @IsOptional() @IsBoolean() commercialPhotographyAllowed?: boolean;
+  @ApiPropertyOptional() @IsOptional() @IsBoolean() idRequiredAtCheckIn?: boolean;
+
+  @ApiPropertyOptional({ example: '22:00', nullable: true })
+  @IsOptional() @Matches(HHMM, { message: 'quietHoursStart must be HH:mm' })
+  quietHoursStart?: string | null;
+
+  @ApiPropertyOptional({ example: '07:00', nullable: true })
+  @IsOptional() @Matches(HHMM, { message: 'quietHoursEnd must be HH:mm' })
+  quietHoursEnd?: string | null;
+
+  @ApiPropertyOptional({ example: '22:00', nullable: true, description: 'Latest check-in; null = flexible' })
+  @IsOptional() @Matches(HHMM, { message: 'checkInEndTime must be HH:mm' })
+  checkInEndTime?: string | null;
+
+  @ApiPropertyOptional({ enum: CheckInMethod })
+  @IsOptional() @IsEnum(CheckInMethod)
+  checkInMethod?: CheckInMethod;
+
+  @ApiPropertyOptional({ example: 20000, description: 'Refundable caution paid on arrival (FCFA)' })
+  @IsOptional() @IsNumber() @Min(0) @Max(5_000_000)
+  securityDeposit?: number;
+
+  @ApiPropertyOptional({ type: [String], enum: CHECKOUT_TASKS })
+  @IsOptional() @IsArray() @ArrayMaxSize(CHECKOUT_TASKS.length) @IsIn(CHECKOUT_TASKS as unknown as string[], { each: true })
+  checkoutTasks?: string[];
+
+  @ApiPropertyOptional({ maxLength: 1000 })
+  @IsOptional() @IsString() @MaxLength(1000)
+  additionalRules?: string;
 }
 
 export class UnavailableDateRangeDto {
@@ -157,6 +205,7 @@ export class CreatePropertyDto {
   @IsObject()
   amenities?: {
     bedrooms?: number;
+    beds?: number;
     bathrooms?: number;
     parkingSpaces?: number;
     hasGarden?: boolean;
@@ -168,6 +217,8 @@ export class CreatePropertyDto {
     hasAirConditioning?: boolean;
     hasInternet?: boolean;
     hasGenerator?: boolean;
+    hasWaterTank?: boolean;    // château d'eau
+    hasSolarBackup?: boolean;
     furnished?: boolean;
   };
 
@@ -238,6 +289,46 @@ export class CreatePropertyDto {
   @ValidateNested()
   @Type(() => ShortTermAmenitiesDto)
   shortTermAmenities?: ShortTermAmenitiesDto;
+
+  @ApiPropertyOptional({ example: 2, nullable: true, description: 'Guests included in the nightly price (null = all)' })
+  @IsOptional()
+  @IsNumber()
+  @Min(1)
+  @Max(50)
+  guestsIncluded?: number | null;
+
+  @ApiPropertyOptional({ example: 5000, description: 'Per extra guest per night (FCFA)' })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Max(1_000_000)
+  extraGuestFee?: number;
+
+  @ApiPropertyOptional({ description: 'Instant Book only for guests with a verified ID' })
+  @IsOptional()
+  @IsBoolean()
+  instantBookRequiresVerifiedGuest?: boolean;
+
+  @ApiPropertyOptional({ type: HouseRulesDto })
+  @IsOptional()
+  @IsObject()
+  @ValidateNested()
+  @Type(() => HouseRulesDto)
+  houseRules?: HouseRulesDto;
+
+  @ApiPropertyOptional({ example: 1, description: 'Days of notice before check-in (0 = same day)' })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Max(30)
+  noticeDays?: number;
+
+  @ApiPropertyOptional({ example: 12, nullable: true, description: 'How many months ahead guests can book (null = no limit)' })
+  @IsOptional()
+  @IsNumber()
+  @Min(1)
+  @Max(24)
+  windowMonths?: number | null;
 
   @ApiPropertyOptional({
     example: false,
@@ -478,9 +569,11 @@ export class SetCalendarPricesDto {
 export class AddExternalCalendarDto {
   @ApiProperty({ example: 'Airbnb', description: 'Calendar feed name' })
   @IsString()
+  @Length(1, 60)
   name: string;
 
-  @ApiProperty({ example: 'https://airbnb.com/calendar/ical/...', description: 'iCal URL' })
+  @ApiProperty({ example: 'https://airbnb.com/calendar/ical/...', description: 'iCal URL (https:// or webcal://)' })
   @IsString()
+  @Length(10, 2048)
   url: string;
-}
+}

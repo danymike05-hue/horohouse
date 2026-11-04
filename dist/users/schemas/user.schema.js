@@ -65,18 +65,25 @@ let User = class User {
     serviceAreas;
     emailVerified;
     phoneVerified;
+    identityVerification;
     googleId;
     password;
     averageRating;
     reviewCount;
     phoneVerificationCode;
     phoneVerificationExpires;
+    phoneVerificationSentAt;
+    phoneVerificationAttempts;
     emailVerificationToken;
     emailVerificationExpires;
     resetPasswordToken;
     resetPasswordExpires;
     twoFactorEnabled;
     twoFactorSecret;
+    oauthCodeHash;
+    oauthCodeChallenge;
+    oauthCodeExpires;
+    oauthCodeNewUser;
     sessions;
     licenseNumber;
     agency;
@@ -174,11 +181,26 @@ __decorate([
     __metadata("design:type", Boolean)
 ], User.prototype, "phoneVerified", void 0);
 __decorate([
+    (0, mongoose_1.Prop)({
+        type: {
+            status: { type: String, enum: ['unverified', 'pending', 'verified', 'rejected'], default: 'unverified' },
+            documentType: { type: String, enum: ['national_id', 'passport', 'residence_permit', 'driving_licence'] },
+            documentPublicId: { type: String },
+            submittedAt: { type: Date },
+            reviewedAt: { type: Date },
+            rejectionReason: { type: String },
+        },
+        default: { status: 'unverified' },
+        _id: false,
+    }),
+    __metadata("design:type", Object)
+], User.prototype, "identityVerification", void 0);
+__decorate([
     (0, mongoose_1.Prop)({ unique: true, sparse: true }),
     __metadata("design:type", String)
 ], User.prototype, "googleId", void 0);
 __decorate([
-    (0, mongoose_1.Prop)(),
+    (0, mongoose_1.Prop)({ select: false }),
     __metadata("design:type", String)
 ], User.prototype, "password", void 0);
 __decorate([
@@ -190,7 +212,7 @@ __decorate([
     __metadata("design:type", Number)
 ], User.prototype, "reviewCount", void 0);
 __decorate([
-    (0, mongoose_1.Prop)(),
+    (0, mongoose_1.Prop)({ select: false }),
     __metadata("design:type", String)
 ], User.prototype, "phoneVerificationCode", void 0);
 __decorate([
@@ -199,6 +221,14 @@ __decorate([
 ], User.prototype, "phoneVerificationExpires", void 0);
 __decorate([
     (0, mongoose_1.Prop)(),
+    __metadata("design:type", Date)
+], User.prototype, "phoneVerificationSentAt", void 0);
+__decorate([
+    (0, mongoose_1.Prop)({ default: 0, select: false }),
+    __metadata("design:type", Number)
+], User.prototype, "phoneVerificationAttempts", void 0);
+__decorate([
+    (0, mongoose_1.Prop)({ select: false }),
     __metadata("design:type", String)
 ], User.prototype, "emailVerificationToken", void 0);
 __decorate([
@@ -206,7 +236,7 @@ __decorate([
     __metadata("design:type", Date)
 ], User.prototype, "emailVerificationExpires", void 0);
 __decorate([
-    (0, mongoose_1.Prop)(),
+    (0, mongoose_1.Prop)({ select: false }),
     __metadata("design:type", String)
 ], User.prototype, "resetPasswordToken", void 0);
 __decorate([
@@ -218,9 +248,25 @@ __decorate([
     __metadata("design:type", Boolean)
 ], User.prototype, "twoFactorEnabled", void 0);
 __decorate([
-    (0, mongoose_1.Prop)(),
+    (0, mongoose_1.Prop)({ select: false }),
     __metadata("design:type", String)
 ], User.prototype, "twoFactorSecret", void 0);
+__decorate([
+    (0, mongoose_1.Prop)({ select: false }),
+    __metadata("design:type", String)
+], User.prototype, "oauthCodeHash", void 0);
+__decorate([
+    (0, mongoose_1.Prop)({ select: false }),
+    __metadata("design:type", String)
+], User.prototype, "oauthCodeChallenge", void 0);
+__decorate([
+    (0, mongoose_1.Prop)({ select: false }),
+    __metadata("design:type", Date)
+], User.prototype, "oauthCodeExpires", void 0);
+__decorate([
+    (0, mongoose_1.Prop)({ select: false }),
+    __metadata("design:type", Boolean)
+], User.prototype, "oauthCodeNewUser", void 0);
 __decorate([
     (0, mongoose_1.Prop)({
         type: [
@@ -235,6 +281,8 @@ __decorate([
                 lastActive: { type: Date, default: Date.now },
                 createdAt: { type: Date, default: Date.now },
                 expiresAt: { type: Date, required: true },
+                prevRefreshToken: { type: String },
+                rotatedAt: { type: Date },
             },
         ],
         default: [],
@@ -320,7 +368,7 @@ __decorate([
             totalEarnings: { type: Number, default: 0 },
             currentMonthEarnings: { type: Number, default: 0 },
             completedStays: { type: Number, default: 0 },
-            commissionRate: { type: Number, default: 0.12 },
+            commissionRate: { type: Number, default: 0.10 },
             payoutAccounts: {
                 type: [
                     {
@@ -475,6 +523,7 @@ exports.UserSchema.index({ location: '2dsphere' });
 exports.UserSchema.index({ 'preferences.preferredLocation': '2dsphere' });
 exports.UserSchema.index({ 'recentlyViewed.propertyId': 1 });
 exports.UserSchema.index({ 'sessions.id': 1 });
+exports.UserSchema.index({ oauthCodeHash: 1 }, { sparse: true });
 exports.UserSchema.index({ 'sessions.refreshToken': 1 });
 exports.UserSchema.index({ 'sessions.expiresAt': 1 });
 exports.UserSchema.index({ 'sessions.isActive': 1 });
@@ -503,6 +552,15 @@ exports.UserSchema.set('toJSON', {
         delete ret.phoneVerificationCode;
         delete ret.emailVerificationToken;
         delete ret.resetPasswordToken;
+        delete ret.twoFactorSecret;
+        delete ret.phoneVerificationAttempts;
+        delete ret.oauthCodeHash;
+        delete ret.oauthCodeChallenge;
+        delete ret.oauthCodeExpires;
+        delete ret.oauthCodeNewUser;
+        if (ret.identityVerification?.documentPublicId) {
+            delete ret.identityVerification.documentPublicId;
+        }
         if (ret.hostProfile?.governmentIdPublicId) {
             delete ret.hostProfile.governmentIdPublicId;
         }
@@ -511,7 +569,7 @@ exports.UserSchema.set('toJSON', {
         }
         if (ret.sessions && Array.isArray(ret.sessions)) {
             ret.sessions = ret.sessions.map((session) => {
-                const { refreshToken, ...sessionWithoutToken } = session;
+                const { refreshToken, prevRefreshToken, ...sessionWithoutToken } = session;
                 return sessionWithoutToken;
             });
         }

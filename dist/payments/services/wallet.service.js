@@ -79,25 +79,36 @@ let WalletService = WalletService_1 = class WalletService {
         return wallet;
     }
     async debitWallet(userId, amount, description, reference) {
-        const wallet = await this.getWallet(userId);
-        if (wallet.balance < amount) {
+        if (!(amount > 0))
+            throw new common_1.BadRequestException('Invalid amount');
+        const current = await this.getWallet(userId);
+        const now = new Date();
+        const updated = await this.walletModel.findOneAndUpdate({ _id: current._id, balance: { $gte: amount } }, [
+            {
+                $set: {
+                    balance: { $subtract: ['$balance', amount] },
+                    availableBalance: { $max: [0, { $subtract: [{ $ifNull: ['$availableBalance', '$balance'] }, amount] }] },
+                    lastTransactionDate: now,
+                    transactions: {
+                        $concatArrays: [
+                            [{
+                                    type: wallet_schema_1.WalletTransactionType.DEBIT,
+                                    amount,
+                                    balance: { $subtract: ['$balance', amount] },
+                                    description: { $literal: description },
+                                    reference: { $literal: reference ?? null },
+                                    createdAt: now,
+                                }],
+                            { $ifNull: ['$transactions', []] },
+                        ],
+                    },
+                },
+            },
+        ], { new: true });
+        if (!updated)
             throw new common_1.BadRequestException('Insufficient balance');
-        }
-        const tx = {
-            type: wallet_schema_1.WalletTransactionType.DEBIT,
-            amount,
-            balance: wallet.balance - amount,
-            description,
-            reference,
-            createdAt: new Date(),
-        };
-        wallet.balance -= amount;
-        wallet.availableBalance = Math.max(0, (wallet.availableBalance ?? 0) - amount);
-        wallet.transactions.unshift(tx);
-        wallet.lastTransactionDate = new Date();
-        await wallet.save();
         this.logger.log(`Wallet debited: ${userId} — ${amount} XAF`);
-        return wallet;
+        return updated;
     }
     async addCommission(agentId, amount, propertyId, commissionType) {
         const commissionAmount = this.calculateCommission(amount, commissionType);
@@ -112,8 +123,8 @@ let WalletService = WalletService_1 = class WalletService {
         return Math.floor(amount * (rates[type] ?? 0));
     }
     async requestWithdrawal(userId, amount, withdrawalMethod, accountDetails) {
-        const wallet = await this.getWallet(userId);
-        if (amount < this.MIN_WITHDRAWAL) {
+        const wallet = await this.getOrCreateWallet(userId);
+        if (!(amount > 0) || amount < this.MIN_WITHDRAWAL) {
             throw new common_1.BadRequestException(`Minimum withdrawal amount is ${this.MIN_WITHDRAWAL} XAF`);
         }
         const available = wallet.availableBalance ?? wallet.balance;
@@ -133,9 +144,17 @@ let WalletService = WalletService_1 = class WalletService {
             flutterwaveReference: reference,
         });
         await transaction.save();
-        wallet.totalWithdrawn = (wallet.totalWithdrawn ?? 0) + amount;
-        await wallet.save();
-        this.dispatchCamerPayPayout(amount, withdrawalMethod, accountDetails, reference, transaction._id).catch(err => this.logger.error(`Background CamerPay payout error (tx ${transaction._id}): ${err.message}`));
+        await this.walletModel.updateOne({ _id: wallet._id }, { $inc: { totalWithdrawn: amount } });
+        this.dispatchCamerPayPayout(amount, withdrawalMethod, accountDetails, reference, transaction._id).catch(async (err) => {
+            this.logger.error(`Background CamerPay payout error (tx ${transaction._id}): ${err.message}`);
+            try {
+                await this.creditWallet(userId, amount, `Withdrawal failed — refunded (${reference})`, `${reference}-REFUND`);
+                await this.walletModel.updateOne({ _id: wallet._id }, { $inc: { totalWithdrawn: -amount, totalEarned: -amount } });
+            }
+            catch (refundErr) {
+                this.logger.error(`URGENT: could not refund failed withdrawal ${reference} for ${userId}: ${refundErr?.message}`);
+            }
+        });
         this.logger.log(`Withdrawal queued: ${userId} — ${amount} XAF via ${withdrawalMethod}`);
         return {
             message: 'Withdrawal request submitted successfully',
@@ -168,13 +187,14 @@ let WalletService = WalletService_1 = class WalletService {
         catch (error) {
             this.logger.error(`CamerPay payout failed (tx ${transactionId}): ${error.message}`);
             await this.transactionModel.findByIdAndUpdate(transactionId, {
+                status: 'failed',
                 paymentProviderResponse: { error: error.message },
             });
             throw error;
         }
     }
     async updateBankAccount(userId, bankDetails) {
-        const wallet = await this.getWallet(userId);
+        const wallet = await this.getOrCreateWallet(userId);
         wallet.bankAccountName = bankDetails.accountName;
         wallet.bankAccountNumber = bankDetails.accountNumber;
         wallet.bankName = bankDetails.bankName;
@@ -184,7 +204,7 @@ let WalletService = WalletService_1 = class WalletService {
         return wallet;
     }
     async updateMobileMoneyAccount(userId, mobileMoneyDetails) {
-        const wallet = await this.getWallet(userId);
+        const wallet = await this.getOrCreateWallet(userId);
         wallet.mobileMoneyNumber = mobileMoneyDetails.phoneNumber;
         wallet.mobileMoneyProvider = mobileMoneyDetails.provider;
         await wallet.save();
@@ -192,7 +212,7 @@ let WalletService = WalletService_1 = class WalletService {
         return wallet;
     }
     async enableAutoWithdrawal(userId, threshold) {
-        const wallet = await this.getWallet(userId);
+        const wallet = await this.getOrCreateWallet(userId);
         if (threshold < this.MIN_WITHDRAWAL) {
             throw new common_1.BadRequestException(`Threshold must be at least ${this.MIN_WITHDRAWAL} XAF`);
         }
@@ -203,15 +223,15 @@ let WalletService = WalletService_1 = class WalletService {
         return wallet;
     }
     async getTransactions(userId, limit = 50) {
-        const wallet = await this.getWallet(userId);
+        const wallet = await this.getOrCreateWallet(userId);
         return wallet.transactions.slice(0, limit);
     }
     async getWalletStats(userId) {
-        const wallet = await this.getWallet(userId);
+        const wallet = await this.getOrCreateWallet(userId);
         const now = new Date();
         const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
         const thisMonthEarnings = wallet.transactions
-            .filter(t => t.type === wallet_schema_1.WalletTransactionType.CREDIT && t.createdAt >= startOfMonth)
+            .filter(t => t.type === wallet_schema_1.WalletTransactionType.CREDIT && new Date(t.createdAt) >= startOfMonth)
             .reduce((sum, t) => sum + t.amount, 0);
         return {
             balance: wallet.balance,

@@ -15,6 +15,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.WalletController = void 0;
 const common_1 = require("@nestjs/common");
 const swagger_1 = require("@nestjs/swagger");
+const class_validator_1 = require("class-validator");
 const wallet_service_1 = require("../services/wallet.service");
 const jwt_auth_guard_1 = require("../../auth/guards/jwt.auth.guard");
 const roles_guard_1 = require("../../auth/guards/roles.guard");
@@ -24,20 +25,77 @@ class CreditDebitDto {
     amount;
     description;
     reference;
+    userId;
 }
+__decorate([
+    (0, class_validator_1.IsNumber)(),
+    (0, class_validator_1.Min)(1),
+    (0, class_validator_1.Max)(100_000_000),
+    __metadata("design:type", Number)
+], CreditDebitDto.prototype, "amount", void 0);
+__decorate([
+    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.Length)(1, 200),
+    __metadata("design:type", String)
+], CreditDebitDto.prototype, "description", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.Length)(1, 100),
+    __metadata("design:type", String)
+], CreditDebitDto.prototype, "reference", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsMongoId)(),
+    __metadata("design:type", String)
+], CreditDebitDto.prototype, "userId", void 0);
 class BankDetailsDto {
     accountName;
     accountNumber;
     bankName;
     bankCode;
 }
+__decorate([
+    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.Length)(2, 100),
+    __metadata("design:type", String)
+], BankDetailsDto.prototype, "accountName", void 0);
+__decorate([
+    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.Length)(4, 40),
+    __metadata("design:type", String)
+], BankDetailsDto.prototype, "accountNumber", void 0);
+__decorate([
+    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.Length)(2, 100),
+    __metadata("design:type", String)
+], BankDetailsDto.prototype, "bankName", void 0);
+__decorate([
+    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.Length)(1, 20),
+    __metadata("design:type", String)
+], BankDetailsDto.prototype, "bankCode", void 0);
 class MobileMoneyDto {
     phoneNumber;
     provider;
 }
+__decorate([
+    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.Matches)(/^(\+?237)?6\d{8}$/, { message: 'Enter a Cameroon mobile number (6XX XX XX XX)' }),
+    __metadata("design:type", String)
+], MobileMoneyDto.prototype, "phoneNumber", void 0);
+__decorate([
+    (0, class_validator_1.IsIn)(['MTN', 'ORANGE']),
+    __metadata("design:type", String)
+], MobileMoneyDto.prototype, "provider", void 0);
 class AutoWithdrawDto {
     threshold;
 }
+__decorate([
+    (0, class_validator_1.IsNumber)(),
+    (0, class_validator_1.Min)(0),
+    __metadata("design:type", Number)
+], AutoWithdrawDto.prototype, "threshold", void 0);
 let WalletController = class WalletController {
     walletService;
     constructor(walletService) {
@@ -85,7 +143,8 @@ let WalletController = class WalletController {
         return this.walletService.enableAutoWithdrawal(req.user.id, dto.threshold);
     }
     async getTransactions(req, limit) {
-        const l = limit ? parseInt(limit, 10) : undefined;
+        const n = limit ? parseInt(limit, 10) : NaN;
+        const l = Number.isFinite(n) ? Math.min(Math.max(n, 1), 200) : undefined;
         return this.walletService.getTransactions(req.user.id, l);
     }
     async getWalletStats(req) {
@@ -197,6 +256,7 @@ exports.WalletController = WalletController = __decorate([
     (0, swagger_1.ApiTags)('Wallet'),
     (0, swagger_1.ApiBearerAuth)('JWT-auth'),
     (0, common_1.Controller)('wallet'),
+    (0, common_1.UseGuards)(jwt_auth_guard_1.JwtAuthGuard, roles_guard_1.RolesGuard),
     __metadata("design:paramtypes", [wallet_service_1.WalletService])
 ], WalletController);
 //# sourceMappingURL=wallet.controller.js.map

@@ -39,6 +39,8 @@ export declare class ReviewsController {
     getBookingReviews(bookingId: string): Promise<{
         stayReview: import("./schemas/review.schema").Review | null;
         guestReview: import("./schemas/review.schema").Review | null;
+        stayReviewSubmitted: boolean;
+        guestReviewSubmitted: boolean;
     }>;
     getGuestReviews(userId: string, query: any): Promise<any>;
     getMyReviews(req: any, query: any): Promise<any>;

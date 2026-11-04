@@ -1,5 +1,5 @@
 import { PaymentsService } from '../services/payments.service';
-import { InitializePaymentDto, VerifyPaymentDto, TransactionQueryDto, InitiateBookingPaymentDto } from '../dto/payment.dto';
+import { InitializePaymentDto, VerifyPaymentDto, TransactionQueryDto, InitiateBookingPaymentDto, AdminRefundBookingDto } from '../dto/payment.dto';
 export declare class PaymentsController {
     private readonly paymentsService;
     constructor(paymentsService: PaymentsService);
@@ -33,5 +33,10 @@ export declare class PaymentsController {
     }>;
     getPaymentAnalytics(): Promise<{
         message: string;
+    }>;
+    adminRefundBooking(bookingId: string, dto: AdminRefundBookingDto): Promise<{
+        success: boolean;
+        message: string;
+        refundAmount: number;
     }>;
 }

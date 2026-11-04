@@ -37,4 +37,10 @@ export declare class CamerPayService {
         [x: string]: unknown;
         success: boolean;
     }>;
+    refundPayment(uuid: string, amount: number, reason?: string): Promise<{
+        success: boolean;
+        refundId?: string;
+        status: string;
+        _raw?: any;
+    }>;
 }

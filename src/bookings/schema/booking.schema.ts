@@ -41,6 +41,7 @@ export interface BookingGuest {
   adults: number;
   children?: number;
   infants?: number;
+  pets?: number;
 }
 
 export interface BookingPriceBreakdown {
@@ -52,6 +53,10 @@ export interface BookingPriceBreakdown {
   taxAmount: number;
   discountAmount: number;   // Weekly / monthly discount
   totalAmount: number;
+  /** Guests above the listing's "guests included" (infants not counted) */
+  extraGuests?: number;
+  /** extraGuests × extra-guest fee × nights — already inside subtotal */
+  extraGuestFee?: number;
 }
 
 export interface BookingCancellation {
@@ -67,6 +72,10 @@ export interface BookingCancellation {
 @Schema({ timestamps: true })
 export class Booking {
   _id!: Types.ObjectId;
+
+  /** When the guest was told their check-in guide is ready (sent once) */
+  @Prop({ type: Date })
+  checkInGuideNotifiedAt?: Date;
 
   // ── Core references ──────────────────────────────────────────────────────
 
@@ -107,6 +116,7 @@ export class Booking {
       adults: { type: Number, required: true, min: 1, default: 1 },
       children: { type: Number, default: 0 },
       infants: { type: Number, default: 0 },
+      pets: { type: Number, default: 0 },
     },
     required: true,
   })

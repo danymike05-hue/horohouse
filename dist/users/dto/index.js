@@ -437,6 +437,9 @@ class UpdateOwnProfileDto extends (0, swagger_1.OmitType)(UpdateUserDto, [
     'propertiesListed',
     'propertiesSold',
     'role',
+    'firebaseUid',
+    'googleId',
+    'profilePicture',
 ]) {
 }
 exports.UpdateOwnProfileDto = UpdateOwnProfileDto;

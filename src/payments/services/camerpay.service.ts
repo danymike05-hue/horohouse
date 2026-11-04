@@ -1,9 +1,4 @@
-import {
-  Injectable,
-  Logger,
-  BadRequestException,
-  ServiceUnavailableException,
-} from '@nestjs/common';
+import { Injectable, Logger, BadRequestException, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import axios, { AxiosInstance } from 'axios';
 import * as crypto from 'crypto';
@@ -51,10 +46,7 @@ async initializePayment(payload: {
   currency: string;
   payment_method: string;
   customer_name: string;
-  /** Required for Mobile Money; optional for 'stripe' (cards, Apple Pay, Google Pay) and 'paypal'. */
-  customer_phone?: string;
-  /** Recommended for 'stripe' / 'paypal' so the payer gets a receipt. */
-  customer_email?: string;
+  customer_phone: string;
   callback_url: string;
   return_url: string;
 }): Promise<{
@@ -64,160 +56,81 @@ async initializePayment(payload: {
   status: string;
   _raw?: any;
 }> {
-  this.logger.log(`Initiating CamerPay payment: ${payload.merchant_invoice_id}`);
-
-  // payment_method values accepted by CamerPay: 'orange_money' | 'mtn_momo' | 'stripe' | 'paypal'.
-  // 'stripe' covers Visa / Mastercard / Amex and Apple Pay / Google Pay on CamerPay's hosted page.
-  // Currency must be XAF for every method (minimum 350 XAF for stripe/paypal).
-  const isMobileMoney = CamerPayService.MOBILE_MONEY.includes(payload.payment_method);
-  if (isMobileMoney && !payload.customer_phone) {
-    throw new BadRequestException('Un numéro Mobile Money est requis.');
-  }
-
-  const body: Record<string, any> = {
-    amount: Math.round(payload.amount),
-    currency: 'XAF',
-    payment_method: payload.payment_method,
-    merchant_invoice_id: payload.merchant_invoice_id,
-    merchant_callback_url: payload.callback_url,
-    merchant_return_url: payload.return_url,
-    source: 'api',
-  };
-  if (payload.customer_phone) body.customer_phone = this.formatPhone(payload.customer_phone);
-  if (payload.customer_email) body.customer_email = payload.customer_email;
-  if (payload.customer_name) body.customer_name = payload.customer_name;
-
-  // Log BEFORE the call — if CamerPay errors, we still know exactly what we sent
-  this.logger.log(`CamerPay request body: ${JSON.stringify(body)}`);
-
-  let lastError: any;
-
-  for (let attempt = 1; attempt <= CamerPayService.MAX_ATTEMPTS; attempt++) {
-    try {
-      const response = await this.axiosInstance.post('/api/payment/initiate', body);
-      const data = response.data;
-      this.logger.log(`CamerPay response: ${JSON.stringify(data)}`);
-
-      // CamerPay returns transaction_uuid (not uuid), pay_url (not checkout_url)
-      const uuid = data.uuid ?? data.transaction_uuid;
-      const checkoutUrl = data.checkout_url ?? data.pay_url ?? data.redirect_url ?? uuid;
-
-      if (!uuid) {
-        throw new BadRequestException(data.message || 'CamerPay did not return a valid UUID');
-      }
-
-      return {
-        success: true,
-        uuid,
-        checkout_url: checkoutUrl,
-        status: data.status ?? 'pending',
-        _raw: data,
-      };
-    } catch (error: any) {
-      lastError = error;
-      const kind = this.classifyInitError(error);
-
-      this.logger.error(
-        `CamerPay initializePayment error (attempt ${attempt}/${CamerPayService.MAX_ATTEMPTS}, ${kind}) | ` +
-        `status: ${error.response?.status} | data: ${JSON.stringify(error.response?.data)} | ` +
-        `message: ${error.message} | payment_method sent: ${payload.payment_method} | ` +
-        `phone sent: ${payload.customer_phone ? this.formatPhone(payload.customer_phone) : '—'}`,
-      );
-
-      // Only retry when CamerPay itself could not reach the operator (Orange/MTN).
-      // That fails at the operator's token step, BEFORE anything is pushed to the
-      // customer's phone, so retrying cannot cause a double payment prompt.
-      if (kind === 'operator_unreachable' && attempt < CamerPayService.MAX_ATTEMPTS) {
-        await this.sleep(CamerPayService.RETRY_DELAY_MS * attempt);
-        continue;
-      }
-      break;
-    }
-  }
-
-  throw this.toClientError(lastError, payload.payment_method);
-}
-
-  // ─────────────────────────────────────────────────────────────────────────
-  // Error handling for initializePayment
-  // ─────────────────────────────────────────────────────────────────────────
-
-  /** 2 attempts × ~8s CamerPay→operator timeout + 2s pause ≈ 18s worst case. */
-  private static readonly MAX_ATTEMPTS = 2;
-  private static readonly MOBILE_MONEY = ['orange_money', 'mtn_momo'];
-  private static readonly RETRY_DELAY_MS = 2_000;
-
-  /**
-   * - operator_unreachable: CamerPay answered, but couldn't reach Orange/MTN
-   *   (e.g. "cURL error 28 ... api-s1.orange.cm/token", PROVIDER_BUSINESS_ERROR).
-   * - gateway_unreachable: we couldn't reach CamerPay, or it returned 502/503/504.
-   *   NOT retried: CamerPay may already have created the payment and pushed the
-   *   prompt to the customer's phone.
-   * - other: validation errors, bad number, insufficient permissions…
-   */
-  private classifyInitError(error: any): 'operator_unreachable' | 'gateway_unreachable' | 'other' {
-    if (error instanceof BadRequestException) return 'other'; // our own "no UUID" check
-    const data = error?.response?.data;
-    const msg = String(data?.message ?? '');
-    const httpStatus = error?.response?.status;
-
-    if (
-      data?.failure_code === 'PROVIDER_BUSINESS_ERROR' &&
-      /cURL error (6|7|28|35|52|56)|timed out|could not resolve|connection (refused|reset)/i.test(msg)
-    ) {
-      return 'operator_unreachable';
-    }
-    if (
-      !error?.response ||
-      ['ECONNABORTED', 'ETIMEDOUT', 'ECONNRESET', 'ENOTFOUND', 'EAI_AGAIN'].includes(error?.code) ||
-      [502, 503, 504].includes(httpStatus)
-    ) {
-      return 'gateway_unreachable';
-    }
-    return 'other';
-  }
-
-  /** Turns a CamerPay failure into a message the app can show as-is. */
-  private toClientError(error: any, paymentMethod: string) {
-    if (error instanceof BadRequestException) return error;
-
-    const kind = this.classifyInitError(error);
-    const isOrange = paymentMethod === 'orange_money';
-    const isMobileMoney = CamerPayService.MOBILE_MONEY.includes(paymentMethod);
-    const operator = isOrange ? 'Orange Money' : 'MTN MoMo';
-    const other = isOrange ? 'MTN MoMo' : 'Orange Money';
-
-    if (kind === 'operator_unreachable') {
-      return new ServiceUnavailableException({
-        message: isMobileMoney
-          ? `${operator} est momentanément indisponible. Réessayez dans quelques minutes ou payez avec ${other}.`
-          : paymentMethod === 'paypal'
-            ? 'PayPal est momentanément indisponible. Réessayez dans quelques minutes ou payez avec Mobile Money.'
-            : 'Le paiement par carte est momentanément indisponible. Réessayez dans quelques minutes ou payez avec Mobile Money.',
-        code: 'OPERATOR_UNAVAILABLE',
-        operator: paymentMethod,
-      });
-    }
-    if (kind === 'gateway_unreachable') {
-      return new ServiceUnavailableException({
-        message:
-          'Le service de paiement ne répond pas. Si vous avez reçu une demande sur votre téléphone, ' +
-          'ne la validez qu’une fois — sinon, réessayez dans un instant.',
-        code: 'GATEWAY_UNAVAILABLE',
-        operator: paymentMethod,
-      });
-    }
-    return new BadRequestException(
-      error?.response?.data?.message ||
-      error?.response?.data?.detail ||
-      error?.message ||
-      'Failed to initiate payment with CamerPay',
+  try {
+    this.logger.log(
+      `Initiating CamerPay payment: ${payload.merchant_invoice_id}`,
     );
+
+    // Fix endpoint + field names to match dashboard curl example
+    const body = {
+      amount: Math.round(payload.amount),
+      currency: 'XAF',
+      payment_method: payload.payment_method,
+      merchant_invoice_id: payload.merchant_invoice_id,
+      customer_phone: this.formatPhone(payload.customer_phone),
+      // ✅ correct field names from dashboard
+      merchant_callback_url: payload.callback_url,
+      merchant_return_url: payload.return_url,
+      source: 'api',
+    };
+
+    // Log BEFORE the call — if CamerPay errors, we still know exactly what we sent
+    this.logger.log(`CamerPay request body: ${JSON.stringify(body)}`);
+
+    // ✅ correct endpoint: /api/payment/initiate
+    const response = await this.axiosInstance.post('/api/payment/initiate', body);
+
+    const data = response.data;
+    this.logger.log(`CamerPay response: ${JSON.stringify(data)}`);
+
+    // ✅ CamerPay returns transaction_uuid (not uuid), pay_url (not checkout_url)
+    const uuid = data.uuid ?? data.transaction_uuid;
+    const checkoutUrl = data.checkout_url ?? data.pay_url ?? data.redirect_url ?? uuid;
+
+    if (!uuid) {
+      throw new BadRequestException(
+        data.message || 'CamerPay did not return a valid UUID',
+      );
+    }
+
+    return {
+      success: true,
+      uuid,
+      checkout_url: checkoutUrl,
+      status: data.status ?? 'pending',
+      _raw: data,
+    };
+
+  } catch (error: any) {
+  const resData = error.response?.data;
+  const rawMsg: string = resData?.message ?? error.message ?? '';
+
+  this.logger.error(
+    `CamerPay initializePayment error | status: ${error.response?.status} | ` +
+    `data: ${JSON.stringify(resData)} | ` +
+    `payment_method sent: ${payload.payment_method} | ` +
+    `phone sent: ${this.formatPhone(payload.customer_phone)}`,
+  );
+
+  // Operator (Orange/MTN) unreachable, or our own call to CamerPay timed out
+  const isProviderOutage =
+    resData?.failure_code === 'PROVIDER_BUSINESS_ERROR' &&
+    /timed out|cURL error 28|could not resolve|connection refused/i.test(rawMsg);
+  const isOurTimeout = error.code === 'ECONNABORTED' || error.code === 'ETIMEDOUT';
+
+  if (isProviderOutage || isOurTimeout) {
+    const operator = payload.payment_method === 'orange_money' ? 'Orange Money' : 'MTN MoMo';
+    throw new ServiceUnavailableException({
+      code: 'PROVIDER_UNAVAILABLE',
+      message: `${operator} est momentanément indisponible. Réessayez dans quelques minutes ou choisissez un autre moyen de paiement.`,
+    });
   }
 
-  private sleep(ms: number) {
-    return new Promise((resolve) => setTimeout(resolve, ms));
-  }
+  throw new BadRequestException(
+    resData?.message || resData?.detail || error.message || 'Failed to initiate payment with CamerPay',
+  );
+}
+}
 
   // ─────────────────────────────────────────────────────────────────────────
   // GET /api/payment/{uuid}/status — poll payment status
@@ -311,17 +224,9 @@ detectOperatorFromPhone(phone: string): 'orange_money' | 'mtn_momo' {
 }
 
  
-  /**
-   * Maps whatever the app/DB calls a method to CamerPay's payment_method.
-   * Cards and wallets (Apple Pay / Google Pay) all go through CamerPay's Stripe checkout.
-   */
   mapPaymentMethod(operator: string): string {
     const m = (operator ?? '').toLowerCase();
     if (m.includes('orange')) return 'orange_money';
-    if (m.includes('paypal')) return 'paypal';
-    if (['stripe', 'card', 'visa', 'mastercard', 'apple_pay', 'google_pay'].some((k) => m.includes(k))) {
-      return 'stripe';
-    }
     return 'mtn_momo';
   }
 
@@ -405,7 +310,7 @@ detectOperatorFromPhone(phone: string): 'orange_money' | 'mtn_momo' {
         error.response?.data?.message ||
           error.response?.data?.detail ||
           error.message ||
-          'Failed to initiate refund with CamerPay iy',
+          'Failed to initiate refund with CamerPay',
       );
     }
   }

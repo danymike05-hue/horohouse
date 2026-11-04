@@ -81,6 +81,17 @@ export class Room {
     @Prop({ default: 1, min: 1 })
     bedCount: number;
 
+    /**
+     * How many identical rooms of this type the hotel has (e.g. 10 "Standard Double").
+     * Availability allows that many overlapping bookings per night. Older rooms = 1.
+     */
+    @Prop({ default: 1, min: 1 })
+    quantity: number;
+
+    /** Short guest-facing description, e.g. "City view, recently renovated, minibar" */
+    @Prop({ trim: true, maxlength: 500 })
+    description?: string;
+
     @Prop({
         type: String,
         enum: Object.values(BedType),

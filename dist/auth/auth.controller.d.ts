@@ -1,11 +1,9 @@
 import { FastifyRequest, FastifyReply } from 'fastify';
-import { AuthService, AuthTokens, RegisterWithPhoneDto, RegisterWithEmailDto, LoginWithPhoneDto, LoginWithEmailDto, SendPhoneCodeDto, VerifyPhoneDto, JwtPayload } from './auth.service';
-import { User, UserRole } from '../users/schemas/user.schema';
+import { AuthService, AuthTokens, JwtPayload } from './auth.service';
+import { RegisterEmailDto, RegisterPhoneDto, LoginEmailDto, LoginPhoneDto, SendPhoneCodeRequestDto, VerifyPhoneRequestDto, RefreshTokenDto, ChangePasswordDto, CheckEmailDto, OAuthExchangeDto, VerifyEmailDto } from './dto/auth.dto';
+import { User } from '../users/schemas/user.schema';
 import { ForgotPasswordDto, ResetPasswordDto, ValidateResetTokenDto } from './dto/password-reset.dto';
 import { SelectRoleDto, SetPhoneDto } from './dto/google-onboarding.dto';
-declare class RefreshTokenDto {
-    refreshToken: string;
-}
 declare module 'fastify' {
     interface FastifyRequest {
         user?: User | JwtPayload;
@@ -13,20 +11,21 @@ declare module 'fastify' {
 }
 export declare class AuthController {
     private authService;
+    private readonly logger;
     constructor(authService: AuthService);
     private setAuthCookies;
     private clearAuthCookies;
-    sendPhoneCode(dto: SendPhoneCodeDto): Promise<{
+    sendPhoneCode(dto: SendPhoneCodeRequestDto): Promise<{
         message: string;
     }>;
-    registerWithPhone(dto: RegisterWithPhoneDto, req: FastifyRequest, res: FastifyReply): Promise<AuthTokens>;
-    registerWithEmail(dto: RegisterWithEmailDto, req: FastifyRequest, res: FastifyReply): Promise<AuthTokens>;
-    loginWithPhone(dto: LoginWithPhoneDto, req: FastifyRequest, res: FastifyReply): Promise<AuthTokens>;
-    loginWithEmail(dto: LoginWithEmailDto, req: FastifyRequest, res: FastifyReply): Promise<AuthTokens>;
-    verifyPhone(dto: VerifyPhoneDto): Promise<{
+    registerWithPhone(dto: RegisterPhoneDto, req: FastifyRequest, res: FastifyReply): Promise<AuthTokens>;
+    registerWithEmail(dto: RegisterEmailDto, req: FastifyRequest, res: FastifyReply): Promise<AuthTokens>;
+    loginWithPhone(dto: LoginPhoneDto, req: FastifyRequest, res: FastifyReply): Promise<AuthTokens>;
+    loginWithEmail(dto: LoginEmailDto, req: FastifyRequest, res: FastifyReply): Promise<AuthTokens>;
+    verifyPhone(dto: VerifyPhoneRequestDto): Promise<{
         message: string;
     }>;
-    refreshToken(body: Partial<RefreshTokenDto>, req: FastifyRequest & {
+    refreshToken(body: RefreshTokenDto, req: FastifyRequest & {
         cookies?: Record<string, string>;
     }, res: FastifyReply): Promise<AuthTokens>;
     forgotPassword(dto: ForgotPasswordDto): Promise<{
@@ -39,6 +38,15 @@ export declare class AuthController {
     resetPassword(dto: ResetPasswordDto): Promise<{
         message: string;
     }>;
+    checkEmail(dto: CheckEmailDto): Promise<{
+        exists: boolean;
+        hasPassword: boolean;
+        hasGoogle: boolean;
+    }>;
+    verifyEmail(dto: VerifyEmailDto): Promise<{
+        message: string;
+    }>;
+    googleExchange(dto: OAuthExchangeDto, req: FastifyRequest): Promise<AuthTokens>;
     googleAuth(): Promise<void>;
     googleAuthRedirect(req: FastifyRequest, res: FastifyReply): Promise<never>;
     logout(req: FastifyRequest & {
@@ -58,7 +66,7 @@ export declare class AuthController {
             name: string;
             email: string;
             phoneNumber: string;
-            role: UserRole;
+            role: import("../users/schemas/user.schema").UserRole;
             profilePicture: string | undefined;
             emailVerified: boolean;
             phoneVerified: boolean;
@@ -68,10 +76,7 @@ export declare class AuthController {
             onboardingStatus: any;
         };
     }>;
-    changePassword(body: {
-        currentPassword: string;
-        newPassword: string;
-    }, req: FastifyRequest & {
+    changePassword(body: ChangePasswordDto, req: FastifyRequest & {
         user: User | JwtPayload;
     }): Promise<{
         message: string;
@@ -102,14 +107,16 @@ export declare class AuthController {
             lastActive: Date;
             createdAt: Date;
             expiresAt: Date;
+            prevRefreshToken?: string;
+            rotatedAt?: Date;
         }[];
     }>;
-    terminateSession(sessionId: string, req: FastifyRequest & {
+    terminateAllSessions(req: FastifyRequest & {
         user: User;
     }): Promise<{
         message: string;
     }>;
-    terminateAllSessions(req: FastifyRequest & {
+    terminateSession(sessionId: string, req: FastifyRequest & {
         user: User;
     }): Promise<{
         message: string;
@@ -138,7 +145,7 @@ export declare class AuthController {
         user: User | JwtPayload;
     }): Promise<{
         onboardingStatus: import("../users/schemas/user.schema").OnboardingStatus;
-        role: UserRole;
+        role: import("../users/schemas/user.schema").UserRole;
         phoneNumber: string | null;
         name: string;
         email: string | null;
@@ -148,7 +155,7 @@ export declare class AuthController {
         user: User | JwtPayload;
     }): Promise<{
         onboardingStatus: import("../users/schemas/user.schema").OnboardingStatus;
-        role: UserRole;
+        role: import("../users/schemas/user.schema").UserRole;
     }>;
     setOnboardingPhone(dto: SetPhoneDto, req: FastifyRequest & {
         user: User | JwtPayload;
@@ -160,4 +167,3 @@ export declare class AuthController {
         user: User | JwtPayload;
     }, res: FastifyReply): Promise<AuthTokens>;
 }
-export {};

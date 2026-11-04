@@ -11,127 +11,35 @@ import {
   HttpCode,
   HttpStatus,
   BadRequestException,
+  UnauthorizedException,
+  Logger,
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiBody } from '@nestjs/swagger';
-import { IsString, IsNotEmpty, IsOptional, IsEmail, IsEnum } from 'class-validator';
 import { FastifyRequest, FastifyReply } from 'fastify';
 
 import { Throttle } from '@nestjs/throttler';
+import { AuthService, AuthTokens, JwtPayload } from './auth.service';
 import {
-  AuthService,
-  AuthTokens,
-  RegisterWithPhoneDto,
-  RegisterWithEmailDto,
-  LoginWithPhoneDto,
-  LoginWithEmailDto,
-  SendPhoneCodeDto,
-  VerifyPhoneDto,
-  GoogleAuthDto,
-  JwtPayload
-} from './auth.service';
+  RegisterEmailDto,
+  RegisterPhoneDto,
+  LoginEmailDto,
+  LoginPhoneDto,
+  SendPhoneCodeRequestDto,
+  VerifyPhoneRequestDto,
+  RefreshTokenDto,
+  ChangePasswordDto,
+  CheckEmailDto,
+  OAuthExchangeDto,
+  VerifyEmailDto,
+} from './dto/auth.dto';
 import { Public } from './guards/roles.guard';
 import { JwtAuthGuard } from './guards/jwt.auth.guard';
-import { User, UserRole } from '../users/schemas/user.schema';
+import { User } from '../users/schemas/user.schema';
 import { GoogleOAuthGuard } from './guards/google-oauth.guard';
 import { AllowIncompleteOnboarding } from './guards/onboarding.guard';
 import { ForgotPasswordDto, ResetPasswordDto, ValidateResetTokenDto } from './dto/password-reset.dto';
 import { SelectRoleDto, SetPhoneDto } from './dto/google-onboarding.dto';
-
-// DTOs for API documentation
-class SendPhoneCodeRequestDto {
-  @IsString()
-  @IsNotEmpty()
-  phoneNumber: string;
-}
-
-class RegisterPhoneDto {
-  @IsString()
-  @IsNotEmpty()
-  name: string;
-
-  @IsString()
-  @IsNotEmpty()
-  phoneNumber: string;
-
-  @IsEmail()
-  @IsOptional()
-  email?: string;
-
-  @IsOptional()
-  @IsEnum(UserRole)
-  role?: UserRole;
-
-  @IsOptional()
-  deviceInfo?: any;
-}
-
-class RegisterEmailDto {
-  @IsString()
-  @IsNotEmpty()
-  name: string;
-
-  @IsEmail()
-  @IsNotEmpty()
-  email: string;
-
-  @IsString()
-  @IsNotEmpty()
-  password: string;
-
-  @IsString()
-  @IsOptional()
-  phoneNumber?: string;
-
-  @IsOptional()
-  @IsEnum(UserRole)
-  role?: UserRole;
-
-  @IsOptional()
-  deviceInfo?: any;
-}
-
-class LoginPhoneDto {
-  @IsString()
-  @IsNotEmpty()
-  phoneNumber: string;
-
-  @IsString()
-  @IsNotEmpty()
-  verificationCode: string;
-
-  @IsOptional()
-  deviceInfo?: any;
-}
-
-class LoginEmailDto {
-  @IsEmail()
-  @IsNotEmpty()
-  email: string;
-
-  @IsString()
-  @IsNotEmpty()
-  password: string;
-
-  @IsOptional()
-  deviceInfo?: any;
-}
-
-class VerifyPhoneRequestDto {
-  @IsString()
-  @IsNotEmpty()
-  phoneNumber: string;
-
-  @IsString()
-  @IsNotEmpty()
-  verificationCode: string;
-}
-
-class RefreshTokenDto {
-  @IsString()
-  @IsNotEmpty()
-  refreshToken: string;
-}
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -142,6 +50,8 @@ declare module 'fastify' {
 @ApiTags('Authentication')
 @Controller('auth')
 export class AuthController {
+  private readonly logger = new Logger(AuthController.name);
+
   constructor(private authService: AuthService) { }
 
   private setAuthCookies(res: FastifyReply, tokens: AuthTokens) {
@@ -179,7 +89,7 @@ export class AuthController {
   @ApiBody({ type: SendPhoneCodeRequestDto })
   @ApiResponse({ status: 200, description: 'Verification code sent successfully' })
   @ApiResponse({ status: 400, description: 'Invalid phone number' })
-  async sendPhoneCode(@Body() dto: SendPhoneCodeDto) {
+  async sendPhoneCode(@Body() dto: SendPhoneCodeRequestDto) {
     return this.authService.sendPhoneVerificationCode(dto);
   }
 
@@ -192,7 +102,7 @@ export class AuthController {
   @ApiResponse({ status: 400, description: 'Bad request' })
   @ApiResponse({ status: 409, description: 'User already exists' })
   async registerWithPhone(
-    @Body() dto: RegisterWithPhoneDto,
+    @Body() dto: RegisterPhoneDto,
     @Req() req: FastifyRequest,
     @Res({ passthrough: true }) res: FastifyReply,
   ): Promise<AuthTokens> {
@@ -210,7 +120,7 @@ export class AuthController {
   @ApiResponse({ status: 400, description: 'Bad request' })
   @ApiResponse({ status: 409, description: 'User already exists' })
   async registerWithEmail(
-    @Body() dto: RegisterWithEmailDto,
+    @Body() dto: RegisterEmailDto,
     @Req() req: FastifyRequest,
     @Res({ passthrough: true }) res: FastifyReply,
   ): Promise<AuthTokens> {
@@ -228,7 +138,7 @@ export class AuthController {
   @ApiResponse({ status: 200, description: 'Login successful' })
   @ApiResponse({ status: 401, description: 'Invalid credentials' })
   async loginWithPhone(
-    @Body() dto: LoginWithPhoneDto,
+    @Body() dto: LoginPhoneDto,
     @Req() req: FastifyRequest,
     @Res({ passthrough: true }) res: FastifyReply,
   ): Promise<AuthTokens> {
@@ -246,7 +156,7 @@ export class AuthController {
   @ApiResponse({ status: 200, description: 'Login successful' })
   @ApiResponse({ status: 401, description: 'Invalid credentials' })
   async loginWithEmail(
-    @Body() dto: LoginWithEmailDto,
+    @Body() dto: LoginEmailDto,
     @Req() req: FastifyRequest,
     @Res({ passthrough: true }) res: FastifyReply,
   ): Promise<AuthTokens> {
@@ -256,17 +166,19 @@ export class AuthController {
   }
 
   @Public()
+  @Throttle({ default: { limit: 10, ttl: 60000 } })
   @Post('verify-phone')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Verify phone number' })
   @ApiBody({ type: VerifyPhoneRequestDto })
   @ApiResponse({ status: 200, description: 'Phone verified successfully' })
   @ApiResponse({ status: 401, description: 'Invalid verification code' })
-  async verifyPhone(@Body() dto: VerifyPhoneDto) {
+  async verifyPhone(@Body() dto: VerifyPhoneRequestDto) {
     return this.authService.verifyPhone(dto);
   }
 
   @Public()
+  @Throttle({ default: { limit: 30, ttl: 60000 } })
   @Post('refresh')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Refresh access token' })
@@ -274,7 +186,7 @@ export class AuthController {
   @ApiResponse({ status: 200, description: 'Token refreshed successfully' })
   @ApiResponse({ status: 401, description: 'Invalid refresh token' })
   async refreshToken(
-    @Body() body: Partial<RefreshTokenDto>,
+    @Body() body: RefreshTokenDto,
     @Req() req: FastifyRequest & { cookies?: Record<string, string> },
     @Res({ passthrough: true }) res: FastifyReply,
   ): Promise<AuthTokens> {
@@ -300,6 +212,7 @@ export class AuthController {
   }
 
   @Public()
+  @Throttle({ default: { limit: 10, ttl: 60000 } })
   @Post('validate-reset-token')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Validate password reset token' })
@@ -321,6 +234,36 @@ export class AuthController {
     return this.authService.resetPassword(dto.token, dto.newPassword);
   }
 
+  @Public()
+  @Throttle({ default: { limit: 10, ttl: 60000 } })
+  @Post('check-email')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Does an account exist for this email? (sign-up asks before the last step)' })
+  async checkEmail(@Body() dto: CheckEmailDto) {
+    return this.authService.checkEmail(dto.email);
+  }
+
+  @Public()
+  @Throttle({ default: { limit: 10, ttl: 60000 } })
+  @Post('verify-email')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Confirm an email address with the token from the verification email' })
+  async verifyEmail(@Body() dto: VerifyEmailDto) {
+    return this.authService.verifyEmail(dto.token);
+  }
+
+  @Public()
+  @Throttle({ default: { limit: 10, ttl: 60000 } })
+  @Post('google/exchange')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'App: swap the one-time Google sign-in code (+ PKCE verifier) for tokens' })
+  async googleExchange(
+    @Body() dto: OAuthExchangeDto,
+    @Req() req: FastifyRequest,
+  ): Promise<AuthTokens> {
+    return this.authService.exchangeOAuthCode(dto.code, dto.codeVerifier, req);
+  }
+
   // 🔥 FIX: Manually handle redirect for Fastify compatibility
   // Remove @Res() injection and let NestJS handle the response
   @Public()
@@ -337,49 +280,74 @@ export class AuthController {
   @ApiOperation({ summary: 'Google OAuth callback' })
   async googleAuthRedirect(@Req() req: FastifyRequest, @Res() res: FastifyReply) {
     const googleUser = req.user as any;
-    const state = (req.query as any)?.state;
+    const state = String((req.query as any)?.state ?? '');
+    // Only the app's own schemes and our web origins are accepted
+    const target = this.authService.resolveOAuthRedirect(state);
+    const withParams = (base: string, params: Record<string, string>) =>
+      `${base}${base.includes('?') ? '&' : '?'}${new URLSearchParams(params).toString()}`;
+
+    // A return link we don't allow: stop here with a readable page. Nothing is
+    // issued, and we don't silently fall back to the website (that gave a 404).
+    if (target.kind === 'rejected') {
+      const esc = (v: string) => v.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c] as string));
+      res.status(400).type('text/html; charset=utf-8').send(
+        `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">` +
+        `<title>HoroHouse</title></head><body style="font-family:system-ui,sans-serif;padding:32px;max-width:520px;margin:auto;color:#222">` +
+        `<h2>Sign-in could not be completed</h2><p>La connexion n'a pas pu aboutir.</p>` +
+        `<p style="color:#6a6a6a">${esc(target.reason || '')}</p>` +
+        `<p>Close this page and go back to the app. / Fermez cette page et revenez à l'application.</p></body></html>`,
+      );
+      return res;
+    }
 
     try {
-      const authResult = await this.authService.googleAuth({
+      const dto = {
         googleId: googleUser.id,
         email: googleUser.email,
         name: googleUser.displayName,
         picture: googleUser.picture,
-      }, req);
+        emailVerified: googleUser.emailVerified,
+      };
 
+      if (target.kind === 'app') {
+        // App: never put tokens in the URL. Hand over a one-time code that only
+        // the app holding the matching PKCE verifier can exchange.
+        if (!target.challenge) throw new BadRequestException('Missing sign-in challenge');
+        const { user, isNewUser } = await this.authService.googleSignIn(dto);
+        const code = await this.authService.issueOAuthCode(user, target.challenge, isNewUser);
+        res.redirect(withParams(target.url, {
+          code,
+          ...(isNewUser ? { isNewUser: 'true' } : {}),
+          ...(user.onboardingStatus ? { onboardingStatus: user.onboardingStatus } : {}),
+        }), 302);
+        return res;
+      }
+
+      // Web (same-site): httpOnly cookies carry the session.
+      // TODO(web): the web app should stop reading tokens from this URL and rely
+      // on the cookies; then drop `token`/`refresh` below.
+      const authResult = await this.authService.googleAuth(dto, req);
       this.setAuthCookies(res, authResult);
-
-      let redirectUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
-
-      // Build query params including onboarding status
-      const params = new URLSearchParams({
+      res.redirect(withParams(target.url, {
         token: authResult.accessToken,
         refresh: authResult.refreshToken,
         ...(authResult.isNewUser ? { isNewUser: 'true' } : {}),
         ...(authResult.onboardingStatus ? { onboardingStatus: authResult.onboardingStatus } : {}),
-      });
-
-      // If state contains deep link (e.g., exp://... or horohouse://...), use it
-      if (state && (state.startsWith('exp://') || state.startsWith('horohouse://') || state.startsWith('http'))) {
-        const separator = state.includes('?') ? '&' : '?';
-        redirectUrl = `${state}${separator}${params.toString()}`;
-      } else {
-        redirectUrl = `${redirectUrl}/auth/callback?${params.toString()}`;
-      }
-
-      // ✅ Fastify redirect signature: redirect(url, statusCode?)
-      res.redirect(redirectUrl, 302);
+      }), 302);
       return res;
     } catch (error) {
-      let errorUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
-      if (state && (state.startsWith('exp://') || state.startsWith('horohouse://') || state.startsWith('http'))) {
-        const separator = state.includes('?') ? '&' : '?';
-        errorUrl = `${state}${separator}error=oauth_failed`;
-      } else {
-        errorUrl = `${errorUrl}/auth/login?error=oauth_failed`;
-      }
-
-      res.redirect(errorUrl, 302);
+      const msg = String((error as any)?.message || error);
+      // This used to fail silently; log the real cause
+      this.logger.error(`Google callback failed: ${msg}`, (error as any)?.stack);
+      const reason = msg.includes('deactivated') ? 'account_deactivated' : 'oauth_failed';
+      // In development, also tell the app why (never in production)
+      const detail = process.env.NODE_ENV !== 'production' ? { detail: msg.slice(0, 200) } : {};
+      const base = target.kind === 'app' && target.url
+        ? target.url
+        : `${(process.env.FRONTEND_URL || 'http://localhost:3000').replace(/\/+$/, '')}/auth/login`;
+      const errorParams: Record<string, string> = { error: reason };
+      if (process.env.NODE_ENV !== 'production') errorParams.detail = msg.slice(0, 200);
+      res.redirect(withParams(base, errorParams), 302);
       return res;
     }
   }
@@ -394,17 +362,12 @@ export class AuthController {
     @Req() req: FastifyRequest & { user: User | JwtPayload },
     @Res({ passthrough: true }) res: FastifyReply,
   ) {
-    let userId: string;
-    let sessionId: string | undefined;
-
-    if ('_id' in req.user) {
-      userId = req.user._id.toString();
-    } else {
-      userId = req.user.sub;
-      sessionId = req.user.sessionId;
-    }
-
-    await this.authService.logout(userId, sessionId);
+    const u = req.user as any;
+    const userId: string = u.userId || u._id?.toString() || u.sub;
+    // This device only. If the token somehow has no session id, do nothing
+    // rather than signing the person out everywhere.
+    const sessionId: string | undefined = u.sessionId;
+    if (sessionId) await this.authService.logout(userId, sessionId);
     this.clearAuthCookies(res);
   }
 
@@ -461,8 +424,7 @@ export class AuthController {
         },
       };
     } catch (error) {
-      console.error('Error in verifyToken:', error);
-      throw new Error('Failed to verify token');
+      throw new UnauthorizedException('Invalid token');
     }
   }
 
@@ -474,11 +436,12 @@ export class AuthController {
   @ApiResponse({ status: 200, description: 'Password changed successfully' })
   @ApiResponse({ status: 400, description: 'Invalid current password' })
   async changePassword(
-    @Body() body: { currentPassword: string; newPassword: string },
+    @Body() body: ChangePasswordDto,
     @Req() req: FastifyRequest & { user: User | JwtPayload }
   ) {
     const userId = '_id' in req.user ? req.user._id.toString() : req.user.sub;
-    return this.authService.changePassword(userId, body.currentPassword, body.newPassword);
+    // Other devices are signed out; this one stays signed in
+    return this.authService.changePassword(userId, body.currentPassword, body.newPassword, (req.user as any).sessionId);
   }
 
   @Post('enable-2fa')
@@ -516,6 +479,20 @@ export class AuthController {
     return { sessions: sessionsWithCurrent };
   }
 
+  @Delete('sessions/all')
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({ summary: 'Terminate all other sessions' })
+  @ApiResponse({ status: 204, description: 'All other sessions terminated successfully' })
+  async terminateAllSessions(@Req() req: FastifyRequest & { user: User }) {
+    // The JWT carries the current session id (req.user.sessions isn't loaded,
+    // so this used to end every session, including the current one)
+    const currentSessionId = (req.user as any).sessionId;
+    if (!currentSessionId) throw new BadRequestException('Current session unknown');
+    return this.authService.terminateAllSessions(req.user, currentSessionId);
+  }
+
   @Delete('sessions/:sessionId')
   @ApiBearerAuth()
   @UseGuards(JwtAuthGuard)
@@ -527,17 +504,6 @@ export class AuthController {
     @Req() req: FastifyRequest & { user: User }
   ) {
     return this.authService.terminateSession(req.user, sessionId);
-  }
-
-  @Delete('sessions/all')
-  @ApiBearerAuth()
-  @UseGuards(JwtAuthGuard)
-  @HttpCode(HttpStatus.NO_CONTENT)
-  @ApiOperation({ summary: 'Terminate all other sessions' })
-  @ApiResponse({ status: 204, description: 'All other sessions terminated successfully' })
-  async terminateAllSessions(@Req() req: FastifyRequest & { user: User }) {
-    const currentSessionId = req.user.sessions?.[0]?.id;
-    return this.authService.terminateAllSessions(req.user, currentSessionId);
   }
 
   @Post('resend-email-verification')
@@ -651,7 +617,8 @@ export class AuthController {
     @Res({ passthrough: true }) res: FastifyReply,
   ) {
     const userId = '_id' in req.user ? req.user._id.toString() : req.user.sub;
-    const result = await this.authService.completeGoogleOnboarding(userId);
+    // Rotate this device's session so the new tokens carry the chosen role
+    const result = await this.authService.completeGoogleOnboarding(userId, req, (req.user as any).sessionId);
     this.setAuthCookies(res, result);
     return result;
   }

@@ -12,10 +12,12 @@ const passport_1 = require("@nestjs/passport");
 let GoogleOAuthGuard = class GoogleOAuthGuard extends (0, passport_1.AuthGuard)('google') {
     getAuthenticateOptions(context) {
         const request = context.switchToHttp().getRequest();
-        const redirectUri = request.query?.redirectUri;
-        return {
-            state: redirectUri,
-        };
+        const q = request.query || {};
+        if (q.code)
+            return {};
+        const raw = typeof q.state === 'string' ? q.state : typeof q.redirectUri === 'string' ? q.redirectUri : undefined;
+        const state = raw && raw.length <= 2048 ? raw : undefined;
+        return state ? { state } : {};
     }
     async canActivate(context) {
         const request = context.switchToHttp().getRequest();
@@ -42,6 +44,7 @@ let GoogleOAuthGuard = class GoogleOAuthGuard extends (0, passport_1.AuthGuard)(
                 }
             };
         }
+        void request;
         const activate = (await super.canActivate(context));
         return activate;
     }

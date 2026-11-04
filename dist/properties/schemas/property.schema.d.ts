@@ -74,6 +74,7 @@ export declare enum GenderRestriction {
 }
 export interface PropertyAmenities {
     bedrooms?: number;
+    beds?: number;
     bathrooms?: number;
     parkingSpaces?: number;
     hasGarden?: boolean;
@@ -85,6 +86,8 @@ export interface PropertyAmenities {
     hasAirConditioning?: boolean;
     hasInternet?: boolean;
     hasGenerator?: boolean;
+    hasWaterTank?: boolean;
+    hasSolarBackup?: boolean;
     furnished?: boolean;
 }
 export interface ShortTermAmenities {
@@ -109,6 +112,50 @@ export interface ShortTermAmenities {
     airportTransfer?: boolean;
     conciergeService?: boolean;
     dailyHousekeeping?: boolean;
+    hasWorkspace?: boolean;
+    hasSmokeDetector?: boolean;
+    hasFireExtinguisher?: boolean;
+    hasFirstAidKit?: boolean;
+    hasSecurityCameras?: boolean;
+}
+export interface CheckInGuidePhoto {
+    url: string;
+    publicId: string;
+    caption?: string;
+}
+export interface CheckInGuide {
+    wifiName?: string;
+    wifiPassword?: string;
+    directions?: string;
+    accessInstructions?: string;
+    parking?: string;
+    houseManual?: string;
+    emergencyPhone?: string;
+    photos?: CheckInGuidePhoto[];
+    updatedAt?: Date;
+}
+export declare enum CheckInMethod {
+    HOST_GREETS = "host_greets",
+    STAFF = "staff",
+    LOCKBOX = "lockbox",
+    SMART_LOCK = "smart_lock",
+    KEYPAD = "keypad"
+}
+export declare const CHECKOUT_TASKS: readonly ["gather_towels", "strip_beds", "take_out_trash", "turn_things_off", "lock_up", "return_keys", "wash_dishes"];
+export type CheckoutTask = (typeof CHECKOUT_TASKS)[number];
+export interface HouseRules {
+    childrenAllowed?: boolean;
+    infantsAllowed?: boolean;
+    visitorsAllowed?: boolean;
+    quietHoursStart?: string | null;
+    quietHoursEnd?: string | null;
+    commercialPhotographyAllowed?: boolean;
+    checkInEndTime?: string | null;
+    checkInMethod?: CheckInMethod;
+    idRequiredAtCheckIn?: boolean;
+    securityDeposit?: number;
+    checkoutTasks?: CheckoutTask[];
+    additionalRules?: string;
 }
 export interface StudentDetails {
     campusProximityMeters?: number;
@@ -147,6 +194,8 @@ export interface UnavailableDateRange {
     from: Date;
     to: Date;
     reason?: string;
+    source?: string;
+    calendarId?: string;
 }
 export declare class Property {
     _id: Types.ObjectId;
@@ -179,6 +228,8 @@ export declare class Property {
     weeklyDiscountPercent: number;
     monthlyDiscountPercent: number;
     customDiscountNights?: number | null;
+    guestsIncluded?: number | null;
+    extraGuestFee: number;
     customDiscountPercent?: number | null;
     unavailableDates: UnavailableDateRange[];
     weekendPrice?: number | null;
@@ -190,8 +241,14 @@ export declare class Property {
         name: string;
         url: string;
         lastSyncedAt?: Date | null;
+        lastSyncError?: string | null;
+        lastSyncedCount?: number;
     }>;
+    icalExportToken?: string;
     shortTermAmenities: ShortTermAmenities;
+    houseRules: HouseRules;
+    checkInGuide?: CheckInGuide;
+    instantBookRequiresVerifiedGuest: boolean;
     isInstantBookable: boolean;
     cancellationPolicy: CancellationPolicy;
     advanceNoticeDays: number;
@@ -226,6 +283,7 @@ export declare class Property {
     isActive: boolean;
     averageRating?: number;
     reviewCount?: number;
+    stayRatingBreakdown?: Record<string, number>;
     starRating?: number;
     virtualTourUrl?: string;
     videoUrl?: string;

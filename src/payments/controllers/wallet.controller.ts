@@ -9,37 +9,48 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiOperation, ApiResponse, ApiQuery } from '@nestjs/swagger';
+import { IsIn, IsMongoId, IsNumber, IsOptional, IsString, Length, Matches, Max, Min } from 'class-validator';
 import { WalletService } from '../services/wallet.service';
 import { JwtAuthGuard } from '../../auth/guards/jwt.auth.guard';
-import { Roles } from '../../auth/guards/roles.guard';
+import { Roles, RolesGuard } from '../../auth/guards/roles.guard';
 import { UserRole } from '../../users/schemas/user.schema';
 import { WithdrawFundsDto } from '../dto/payment.dto';
 
+// The global ValidationPipe (whitelist + forbidNonWhitelisted) rejects any field without a
+// class-validator decorator. These DTOs had none, so saving bank / Mobile Money details
+// and the auto-withdraw setting always failed with 400 "property … should not exist".
 class CreditDebitDto {
-  amount: number;
-  description: string;
-  reference?: string;
+  @IsNumber() @Min(1) @Max(100_000_000) amount: number;
+  @IsString() @Length(1, 200) description: string;
+  @IsOptional() @IsString() @Length(1, 100) reference?: string;
+  /** Admin: the user to credit / debit */
+  @IsOptional() @IsMongoId() userId?: string;
 }
 
 class BankDetailsDto {
-  accountName: string;
-  accountNumber: string;
-  bankName: string;
-  bankCode: string;
+  @IsString() @Length(2, 100) accountName: string;
+  @IsString() @Length(4, 40) accountNumber: string;
+  @IsString() @Length(2, 100) bankName: string;
+  @IsString() @Length(1, 20) bankCode: string;
 }
 
 class MobileMoneyDto {
+  /** Cameroon mobile number: 6XXXXXXXX, optionally with +237 / 237 */
+  @IsString() @Matches(/^(\+?237)?6\d{8}$/, { message: 'Enter a Cameroon mobile number (6XX XX XX XX)' })
   phoneNumber: string;
-  provider: 'MTN' | 'ORANGE';
+  @IsIn(['MTN', 'ORANGE']) provider: 'MTN' | 'ORANGE';
 }
 
 class AutoWithdrawDto {
-  threshold: number;
+  @IsNumber() @Min(0) threshold: number;
 }
 
 @ApiTags('Wallet')
 @ApiBearerAuth('JWT-auth')
 @Controller('wallet')
+// RolesGuard is what enforces @Roles(...). Without it, @Roles(UserRole.ADMIN) on credit/debit
+// did nothing: any logged-in user could credit their own wallet and withdraw real money.
+@UseGuards(JwtAuthGuard, RolesGuard)
 export class WalletController {
   constructor(private readonly walletService: WalletService) {}
 
@@ -60,8 +71,7 @@ export class WalletController {
     if (!dto || !dto.amount || !dto.description) {
       throw new BadRequestException('amount and description are required');
     }
-    // Expect admin to pass a target user id in metadata or reference; fallback to self
-    const targetUserId = (dto as any).userId || req.user.id;
+    const targetUserId = dto.userId || req.user.id;
     return this.walletService.creditWallet(
       targetUserId,
       dto.amount,
@@ -79,7 +89,7 @@ export class WalletController {
     if (!dto || !dto.amount || !dto.description) {
       throw new BadRequestException('amount and description are required');
     }
-    const targetUserId = (dto as any).userId || req.user.id;
+    const targetUserId = dto.userId || req.user.id;
     return this.walletService.debitWallet(targetUserId, dto.amount, dto.description, dto.reference);
   }
 
@@ -134,7 +144,8 @@ export class WalletController {
   @ApiQuery({ name: 'limit', required: false, type: Number })
   @ApiResponse({ status: 200, description: 'Transactions retrieved' })
   async getTransactions(@Req() req: any, @Query('limit') limit?: string) {
-    const l = limit ? parseInt(limit, 10) : undefined;
+    const n = limit ? parseInt(limit, 10) : NaN;
+    const l = Number.isFinite(n) ? Math.min(Math.max(n, 1), 200) : undefined;
     return this.walletService.getTransactions(req.user.id, l);
   }
 

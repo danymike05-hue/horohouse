@@ -23,6 +23,31 @@ const property_schema_1 = require("../properties/schemas/property.schema");
 const user_schema_1 = require("../users/schemas/user.schema");
 const cloudinary_1 = require("../utils/cloudinary");
 const MULTI_ROOM_TYPES = ['hotel', 'motel', 'hostel', 'resort', 'guesthouse', 'serviced_apartment'];
+const ICAL_TIMEOUT_MS = 10_000;
+const ICAL_MAX_BYTES = 5 * 1024 * 1024;
+function activeHoldFilter(now = new Date()) {
+    return {
+        $or: [
+            { paymentStatus: booking_schema_1.PaymentStatus.PAID },
+            { expiresAt: { $exists: false } },
+            { expiresAt: null },
+            { expiresAt: { $gt: now } },
+        ],
+    };
+}
+function roomCapacity(room) {
+    const q = Number(room?.quantity);
+    return Number.isFinite(q) && q >= 1 ? Math.floor(q) : 1;
+}
+function nightsOf(checkIn, checkOut) {
+    const out = [];
+    const d = new Date(Date.UTC(checkIn.getUTCFullYear(), checkIn.getUTCMonth(), checkIn.getUTCDate()));
+    for (let i = 0; d < checkOut && i < 730; i++) {
+        out.push(d.toISOString().slice(0, 10));
+        d.setUTCDate(d.getUTCDate() + 1);
+    }
+    return out;
+}
 let RoomsService = RoomsService_1 = class RoomsService {
     roomModel;
     bookingModel;
@@ -56,6 +81,8 @@ let RoomsService = RoomsService_1 = class RoomsService {
             bedType: dto.bedType,
             price: dto.price,
             cleaningFee: dto.cleaningFee,
+            quantity: Math.max(1, Math.floor(dto.quantity ?? 1)),
+            description: dto.description,
             amenities: dto.amenities ?? {},
             isActive: true,
         });
@@ -187,17 +214,26 @@ let RoomsService = RoomsService_1 = class RoomsService {
         if (!property)
             throw new common_1.NotFoundException('Parent property not found');
         this.assertCanManage(property, user);
+        const icalUrl = String(dto.icalUrl ?? '').trim().replace(/^webcal:\/\//i, 'https://');
+        this.assertSafeIcalUrl(icalUrl);
         const updated = await this.roomModel
-            .findByIdAndUpdate(roomId, { icalUrl: dto.icalUrl, icalLastSyncedAt: null, icalSyncedRangesCount: 0 }, { new: true })
+            .findByIdAndUpdate(roomId, { icalUrl, icalLastSyncedAt: null, icalSyncedRangesCount: 0 }, { new: true })
             .exec();
-        this.logger.log(`iCal URL set on room ${roomId}: ${dto.icalUrl}`);
+        this.logger.log(`iCal URL set on room ${roomId}: ${icalUrl}`);
         return updated;
     }
-    async syncIcal(roomId) {
+    async syncIcal(roomId, user) {
         const room = await this.findRoomOrThrow(roomId);
+        if (user) {
+            const property = await this.propertyModel.findById(room.propertyId).exec();
+            if (!property)
+                throw new common_1.NotFoundException('Parent property not found');
+            this.assertCanManage(property, user);
+        }
         if (!room.icalUrl) {
             throw new common_1.BadRequestException('No iCal URL set for this room');
         }
+        this.assertSafeIcalUrl(room.icalUrl);
         const ranges = await this.fetchAndParseIcal(room.icalUrl);
         await this.roomModel.findByIdAndUpdate(roomId, {
             $pull: { unavailableDates: { source: 'ical' } },
@@ -227,15 +263,29 @@ let RoomsService = RoomsService_1 = class RoomsService {
             status: { $in: [booking_schema_1.BookingStatus.CONFIRMED, booking_schema_1.BookingStatus.PENDING] },
             checkIn: { $lt: to },
             checkOut: { $gt: from },
+            ...activeHoldFilter(),
         })
             .select('checkIn checkOut _id')
             .lean()
             .exec();
-        const bookedRanges = platformBookings.map((b) => ({
-            checkIn: b.checkIn,
-            checkOut: b.checkOut,
-            bookingId: b._id,
-        }));
+        const capacity = roomCapacity(room);
+        let bookedRanges;
+        if (capacity === 1) {
+            bookedRanges = platformBookings.map((b) => ({ checkIn: b.checkIn, checkOut: b.checkOut, bookingId: b._id }));
+        }
+        else {
+            const counts = new Map();
+            platformBookings.forEach((b) => nightsOf(b.checkIn, b.checkOut).forEach((n) => counts.set(n, (counts.get(n) ?? 0) + 1)));
+            bookedRanges = [...counts.entries()]
+                .filter(([, n]) => n >= capacity)
+                .sort(([a], [b]) => a.localeCompare(b))
+                .map(([night]) => {
+                const start = new Date(`${night}T00:00:00Z`);
+                const end = new Date(start);
+                end.setUTCDate(end.getUTCDate() + 1);
+                return { checkIn: start, checkOut: end, bookingId: undefined };
+            });
+        }
         const available = blocked.length === 0 && bookedRanges.length === 0;
         return {
             available,
@@ -254,18 +304,31 @@ let RoomsService = RoomsService_1 = class RoomsService {
             status: { $in: [booking_schema_1.BookingStatus.CONFIRMED, booking_schema_1.BookingStatus.PENDING] },
             checkIn: { $lt: checkOut },
             checkOut: { $gt: checkIn },
+            ...activeHoldFilter(),
         };
         if (excludeBookingId) {
             filter._id = { $ne: new mongoose_2.Types.ObjectId(excludeBookingId) };
         }
-        const conflict = await this.bookingModel
-            .findOne(filter)
+        const overlapping = await this.bookingModel
+            .find(filter)
             .select('_id checkIn checkOut')
-            .lean();
-        if (conflict) {
-            throw new common_1.ConflictException(`Room is already booked from ` +
-                `${conflict.checkIn.toISOString().split('T')[0]} to ` +
-                `${conflict.checkOut.toISOString().split('T')[0]}`);
+            .lean()
+            .exec();
+        const capacity = roomCapacity(room);
+        const wanted = new Set(nightsOf(checkIn, checkOut));
+        const counts = new Map();
+        for (const b of overlapping) {
+            for (const n of nightsOf(b.checkIn, b.checkOut)) {
+                if (!wanted.has(n))
+                    continue;
+                const c = (counts.get(n) ?? 0) + 1;
+                counts.set(n, c);
+                if (c >= capacity) {
+                    throw new common_1.ConflictException(capacity === 1
+                        ? `Room is already booked on ${n}`
+                        : `All ${capacity} rooms of this type are booked on ${n}`);
+                }
+            }
         }
     }
     async findRoomOrThrow(roomId) {
@@ -290,19 +353,50 @@ let RoomsService = RoomsService_1 = class RoomsService {
         return this.parseIcalEvents(raw);
     }
     fetchUrl(url) {
+        this.assertSafeIcalUrl(url);
         return new Promise((resolve, reject) => {
-            const lib = url.startsWith('https') ? require('https') : require('http');
+            const https = require('https');
             let data = '';
-            lib.get(url, (res) => {
+            let size = 0;
+            const req = https.get(url, { timeout: ICAL_TIMEOUT_MS }, (res) => {
                 if (res.statusCode !== 200) {
+                    res.resume();
                     reject(new Error(`HTTP ${res.statusCode} fetching iCal: ${url}`));
                     return;
                 }
-                res.on('data', (chunk) => (data += chunk));
+                res.setEncoding('utf8');
+                res.on('data', (chunk) => {
+                    size += Buffer.byteLength(chunk);
+                    if (size > ICAL_MAX_BYTES) {
+                        req.destroy(new Error('iCal feed is too large'));
+                        return;
+                    }
+                    data += chunk;
+                });
                 res.on('end', () => resolve(data));
                 res.on('error', reject);
-            }).on('error', reject);
+            });
+            req.on('timeout', () => req.destroy(new Error('iCal feed timed out')));
+            req.on('error', reject);
         });
+    }
+    assertSafeIcalUrl(raw) {
+        let u;
+        try {
+            u = new URL(raw);
+        }
+        catch {
+            throw new common_1.BadRequestException('Invalid iCal URL');
+        }
+        if (u.protocol !== 'https:')
+            throw new common_1.BadRequestException('The iCal link must start with https://');
+        const host = u.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+        const isPrivateV4 = /^(127\.|10\.|192\.168\.|169\.254\.|0\.|172\.(1[6-9]|2\d|3[01])\.)/.test(host);
+        const isPrivateV6 = host === '::1' || /^f[cd][0-9a-f]{2}:/.test(host) || /^fe80:/.test(host);
+        const isInternalName = host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.internal') || host.endsWith('.local') || !host.includes('.');
+        if (isPrivateV4 || isPrivateV6 || isInternalName) {
+            throw new common_1.BadRequestException('This iCal link is not allowed');
+        }
     }
     parseIcalEvents(raw) {
         const results = [];

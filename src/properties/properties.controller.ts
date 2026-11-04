@@ -14,6 +14,10 @@ import {
   HttpCode,
   HttpStatus,
   Logger,
+  Inject,
+  forwardRef,
+  Header,
+  NotFoundException,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiQuery, ApiParam } from '@nestjs/swagger';
 import { FastifyRequest } from 'fastify';
@@ -21,6 +25,7 @@ import { MultipartFile } from '@fastify/multipart';
 // Fastify multipart provides files on request via parts()
 
 import { PropertiesService, PropertySearchFilters, PropertySearchOptions } from './properties.service';
+import { UsersService } from '../users/users.service';
 import {
   CreatePropertyDto,
   UpdatePropertyDto,
@@ -72,7 +77,15 @@ class UpdatePropertyRequestDto extends CreatePropertyRequestDto {
 export class PropertiesController {
   private readonly logger = new Logger(PropertiesController.name);
 
-  constructor(private readonly propertiesService: PropertiesService) { }
+  constructor(
+    private readonly propertiesService: PropertiesService,
+    // Only for the host ID check (off unless HOST_ID_REQUIRED=true).
+    @Inject(forwardRef(() => UsersService)) private readonly usersService: UsersService,
+  ) { }
+
+  private userIdOf(user: any): string {
+    return String(user?._id ?? user?.id ?? '');
+  }
 
   @Post()
   @Roles(UserRole.HOST, UserRole.AGENT, UserRole.LANDLORD, UserRole.ADMIN)
@@ -85,6 +98,7 @@ export class PropertiesController {
     @Body() createPropertyDto: CreatePropertyDto,
     @Req() req: FastifyRequest & { user: User },
   ) {
+    await this.usersService.assertHostCanPublish(this.userIdOf(req.user));
     return this.propertiesService.create(createPropertyDto, req.user);
   }
 
@@ -147,6 +161,9 @@ export class PropertiesController {
       maxArea: query.maxArea ? parseFloat(query.maxArea) : undefined,
       furnished: query.furnished !== undefined ? query.furnished === 'true' : undefined,
       neighborhood: query.neighborhood,
+      isStudentFriendly: query.isStudentFriendly === 'true' ? true : undefined,
+      // "isPromoted" is what the home screen sent; both mean "featured".
+      isFeatured: query.isFeatured === 'true' || query.isPromoted === 'true' ? true : undefined,
     };
 
     // Handle bounding box search
@@ -265,10 +282,11 @@ export class PropertiesController {
   @Public()
   @ApiOperation({ summary: 'Get popular cities with property counts' })
   @ApiQuery({ name: 'limit', required: false, type: Number, description: 'Maximum results (default: 10)' })
+  @ApiQuery({ name: 'listingType', required: false, enum: ListingType, description: 'Only count this listing type' })
   @ApiResponse({ status: 200, description: 'Popular cities' })
-  async getPopularCities(@Query('limit') limit?: string) {
+  async getPopularCities(@Query('limit') limit?: string, @Query('listingType') listingType?: ListingType) {
     const maxResults = limit ? parseInt(limit) : 10;
-    return this.propertiesService.getPopularCities(maxResults);
+    return this.propertiesService.getPopularCities(maxResults, listingType);
   }
 
   // ─── Admin approval endpoints ───────────────────────────────────────────────
@@ -498,6 +516,34 @@ export class PropertiesController {
     return this.propertiesService.addExternalCalendar(id, dto, req.user);
   }
 
+  @Post(':id/calendar/external/:calendarId/sync')
+  @Roles(UserRole.HOST, UserRole.AGENT, UserRole.LANDLORD, UserRole.ADMIN)
+  @ApiBearerAuth()
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Re-import an external iCal calendar now' })
+  async syncExternalCalendar(
+    @Param('id') id: string,
+    @Param('calendarId') calendarId: string,
+    @Req() req: FastifyRequest & { user: User },
+  ) {
+    return this.propertiesService.syncExternalCalendarForHost(id, calendarId, req.user);
+  }
+
+  /**
+   * Public iCal feed for Airbnb / Booking.com / Google Calendar (the "export" link in
+   * the host calendar). The token in the URL is the secret; no login, by design.
+   */
+  @Get('ical/:token')
+  @Public()
+  @Header('Content-Type', 'text/calendar; charset=utf-8')
+  @Header('Cache-Control', 'no-cache, max-age=0')
+  @ApiOperation({ summary: 'iCal export feed for other platforms (secret token link)' })
+  async getIcalFeed(@Param('token') token: string) {
+    const clean = String(token ?? '').replace(/\.ics$/i, '');
+    if (!clean) throw new NotFoundException('Calendar not found');
+    return this.propertiesService.getIcalFeed(clean);
+  }
+
   @Delete(':id/calendar/external/:calendarId')
   @Roles(UserRole.HOST, UserRole.AGENT, UserRole.LANDLORD, UserRole.ADMIN)
   @ApiBearerAuth()
@@ -551,6 +597,18 @@ export class PropertiesController {
     @Body() updatePropertyDto: UpdatePropertyDto,
     @Req() req: FastifyRequest & { user: User },
   ) {
+    // "Verified" and "Featured" are badges HoroHouse gives, not the host. The DTO
+    // accepted them from anyone, so a host could mark their own listing verified.
+    if ((req.user as any)?.role !== UserRole.ADMIN) {
+      if (updatePropertyDto.isVerified !== undefined || updatePropertyDto.isFeatured !== undefined) {
+        this.logger.warn(`Ignored isVerified/isFeatured from non-admin ${this.userIdOf(req.user)} on ${id}`);
+      }
+      delete updatePropertyDto.isVerified;
+      delete updatePropertyDto.isFeatured;
+      if (updatePropertyDto.isActive === true) {
+        await this.usersService.assertHostCanPublish(this.userIdOf(req.user));
+      }
+    }
     return this.propertiesService.update(id, updatePropertyDto, req.user);
   }
 
@@ -655,40 +713,14 @@ export class PropertiesController {
     @Body() body: { isActive: boolean },
     @Req() req: FastifyRequest & { user: User },
   ) {
+    if (body?.isActive === true && (req.user as any)?.role !== UserRole.ADMIN) {
+      await this.usersService.assertHostCanPublish(this.userIdOf(req.user));
+    }
     return this.propertiesService.update(id, { isActive: body.isActive }, req.user);
   }
 
-  @Post(':id/favorite')
-  @Roles(UserRole.REGISTERED_USER, UserRole.HOST, UserRole.AGENT, UserRole.LANDLORD, UserRole.ADMIN)
-  @ApiOperation({ summary: 'Add property to favorites' })
-  @ApiBearerAuth()
-  @ApiParam({ name: 'id', description: 'Property ID' })
-  @ApiResponse({ status: 200, description: 'Property added to favorites' })
-  @ApiResponse({ status: 404, description: 'Property not found' })
-  async addToFavorites(
-    @Param('id') id: string,
-    @Req() req: FastifyRequest & { user: User },
-  ) {
-    // This would typically be handled by a user service
-    // For now, return a success response
-    return { message: 'Property added to favorites', propertyId: id };
-  }
-
-  @Delete(':id/favorite')
-  @Roles(UserRole.REGISTERED_USER, UserRole.HOST, UserRole.AGENT, UserRole.LANDLORD, UserRole.ADMIN)
-  @ApiOperation({ summary: 'Remove property from favorites' })
-  @ApiBearerAuth()
-  @ApiParam({ name: 'id', description: 'Property ID' })
-  @ApiResponse({ status: 200, description: 'Property removed from favorites' })
-  @ApiResponse({ status: 404, description: 'Property not found' })
-  async removeFromFavorites(
-    @Param('id') id: string,
-    @Req() req: FastifyRequest & { user: User },
-  ) {
-    // This would typically be handled by a user service
-    // For now, return a success response
-    return { message: 'Property removed from favorites', propertyId: id };
-  }
+  // The old POST / DELETE :id/favorite routes were stubs that replied "success" without
+  // saving anything. The app uses /users/me/favorites (UsersController), which works.
 
   @Get('my/favorites')
   @Roles(UserRole.REGISTERED_USER, UserRole.HOST, UserRole.AGENT, UserRole.LANDLORD, UserRole.ADMIN)

@@ -46,6 +46,12 @@ const newsletter_module_1 = require("./newsletter/newsletter.module");
 const insights_module_1 = require("./insights/insights.module");
 const community_module_1 = require("./community/community.module");
 const devices_module_1 = require("./devices/devices.module");
+const checkout_module_1 = require("./checkout/checkout.module");
+const geocoding_module_1 = require("./geocoding/geocoding.module");
+const share_module_1 = require("./share/share.module");
+const trust_module_1 = require("./trust/trust.module");
+const host_messages_module_1 = require("./host-messages/host-messages.module");
+const wishlists_module_1 = require("./wishlists/wishlists.module");
 let AppModule = class AppModule {
 };
 exports.AppModule = AppModule;
@@ -117,6 +123,12 @@ exports.AppModule = AppModule = __decorate([
             insights_module_1.InsightsModule,
             community_module_1.CommunityModule,
             devices_module_1.DevicesModule,
+            checkout_module_1.CheckoutModule,
+            geocoding_module_1.GeocodingModule,
+            share_module_1.ShareModule,
+            trust_module_1.TrustModule,
+            host_messages_module_1.HostMessagesModule,
+            wishlists_module_1.WishlistsModule,
         ],
         controllers: [app_controller_1.AppController],
         providers: [

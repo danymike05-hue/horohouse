@@ -17,6 +17,7 @@ const bookings_controller_1 = require("./bookings.controller");
 const bookings_scheduler_1 = require("./bookings.scheduler");
 const rooms_module_1 = require("../rooms/rooms.module");
 const notifications_module_1 = require("../notifications/notifications.module");
+const payments_module_1 = require("../payments/payments.module");
 let BookingsModule = class BookingsModule {
 };
 exports.BookingsModule = BookingsModule;
@@ -29,7 +30,8 @@ exports.BookingsModule = BookingsModule = __decorate([
                 { name: user_schema_1.User.name, schema: user_schema_1.UserSchema },
             ]),
             (0, common_1.forwardRef)(() => rooms_module_1.RoomsModule),
-            notifications_module_1.NotificationsModule
+            (0, common_1.forwardRef)(() => payments_module_1.PaymentsModule),
+            notifications_module_1.NotificationsModule,
         ],
         controllers: [bookings_controller_1.BookingsController],
         providers: [bookings_service_1.BookingsService, bookings_scheduler_1.BookingsScheduler],

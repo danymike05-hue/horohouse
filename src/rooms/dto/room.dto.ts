@@ -6,7 +6,6 @@ import {
     IsEnum,
     IsArray,
     IsDateString,
-    IsUrl,
     IsObject,
     ValidateNested,
     Min,
@@ -85,6 +84,14 @@ export class CreateRoomDto {
     @IsOptional() @IsNumber() @Min(1) @Max(10)
     bedCount?: number;
 
+    @ApiPropertyOptional({ example: 10, description: 'How many identical rooms of this type the hotel has' })
+    @IsOptional() @IsNumber() @Min(1) @Max(500)
+    quantity?: number;
+
+    @ApiPropertyOptional({ example: 'City view, recently renovated, minibar' })
+    @IsOptional() @IsString() @Length(0, 500)
+    description?: string;
+
     @ApiPropertyOptional({ enum: BedType, example: BedType.QUEEN })
     @IsOptional() @IsEnum(BedType)
     bedType?: BedType;
@@ -137,7 +144,10 @@ export class SetIcalUrlDto {
         example: 'https://www.airbnb.com/calendar/ical/XXXXXX.ics',
         description: 'Public iCal (.ics) feed URL from an external booking platform',
     })
-    @IsUrl({ protocols: ['http', 'https'] })
+    // Accepts https:// and webcal:// (converted to https). RoomsService.assertSafeIcalUrl
+    // does the real check: https only, no private / internal hosts.
+    @IsString()
+    @Length(10, 2048)
     icalUrl: string;
 }
 

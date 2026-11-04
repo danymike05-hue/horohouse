@@ -9,7 +9,7 @@ var __metadata = (this && this.__metadata) || function (k, v) {
     if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.PropertySchema = exports.Property = exports.GenderRestriction = exports.FurnishingStatus = exports.ElectricityBackup = exports.WaterSource = exports.CancellationPolicy = exports.PricingUnit = exports.ListingType = exports.ApprovalStatus = exports.PropertyStatus = exports.PropertyType = void 0;
+exports.PropertySchema = exports.Property = exports.CHECKOUT_TASKS = exports.CheckInMethod = exports.GenderRestriction = exports.FurnishingStatus = exports.ElectricityBackup = exports.WaterSource = exports.CancellationPolicy = exports.PricingUnit = exports.ListingType = exports.ApprovalStatus = exports.PropertyStatus = exports.PropertyType = void 0;
 const mongoose_1 = require("@nestjs/mongoose");
 const mongoose_2 = require("mongoose");
 var PropertyType;
@@ -94,6 +94,23 @@ var GenderRestriction;
     GenderRestriction["WOMEN_ONLY"] = "women_only";
     GenderRestriction["MEN_ONLY"] = "men_only";
 })(GenderRestriction || (exports.GenderRestriction = GenderRestriction = {}));
+var CheckInMethod;
+(function (CheckInMethod) {
+    CheckInMethod["HOST_GREETS"] = "host_greets";
+    CheckInMethod["STAFF"] = "staff";
+    CheckInMethod["LOCKBOX"] = "lockbox";
+    CheckInMethod["SMART_LOCK"] = "smart_lock";
+    CheckInMethod["KEYPAD"] = "keypad";
+})(CheckInMethod || (exports.CheckInMethod = CheckInMethod = {}));
+exports.CHECKOUT_TASKS = [
+    'gather_towels',
+    'strip_beds',
+    'take_out_trash',
+    'turn_things_off',
+    'lock_up',
+    'return_keys',
+    'wash_dishes',
+];
 let Property = class Property {
     _id;
     title;
@@ -122,6 +139,8 @@ let Property = class Property {
     weeklyDiscountPercent;
     monthlyDiscountPercent;
     customDiscountNights;
+    guestsIncluded;
+    extraGuestFee;
     customDiscountPercent;
     unavailableDates;
     weekendPrice;
@@ -129,7 +148,11 @@ let Property = class Property {
     noticeDays;
     windowMonths;
     externalCalendars;
+    icalExportToken;
     shortTermAmenities;
+    houseRules;
+    checkInGuide;
+    instantBookRequiresVerifiedGuest;
     isInstantBookable;
     cancellationPolicy;
     advanceNoticeDays;
@@ -164,6 +187,7 @@ let Property = class Property {
     isActive;
     averageRating;
     reviewCount;
+    stayRatingBreakdown;
     starRating;
     virtualTourUrl;
     videoUrl;
@@ -281,17 +305,25 @@ __decorate([
     __metadata("design:type", Number)
 ], Property.prototype, "serviceFee", void 0);
 __decorate([
-    (0, mongoose_1.Prop)({ default: 10, min: 0, max: 100 }),
+    (0, mongoose_1.Prop)({ default: 0, min: 0, max: 100 }),
     __metadata("design:type", Number)
 ], Property.prototype, "weeklyDiscountPercent", void 0);
 __decorate([
-    (0, mongoose_1.Prop)({ default: 15, min: 0, max: 100 }),
+    (0, mongoose_1.Prop)({ default: 0, min: 0, max: 100 }),
     __metadata("design:type", Number)
 ], Property.prototype, "monthlyDiscountPercent", void 0);
 __decorate([
     (0, mongoose_1.Prop)({ type: Number, default: null }),
     __metadata("design:type", Object)
 ], Property.prototype, "customDiscountNights", void 0);
+__decorate([
+    (0, mongoose_1.Prop)({ type: Number, default: null, min: 1 }),
+    __metadata("design:type", Object)
+], Property.prototype, "guestsIncluded", void 0);
+__decorate([
+    (0, mongoose_1.Prop)({ default: 0, min: 0 }),
+    __metadata("design:type", Number)
+], Property.prototype, "extraGuestFee", void 0);
 __decorate([
     (0, mongoose_1.Prop)({ type: Number, default: null }),
     __metadata("design:type", Object)
@@ -303,6 +335,8 @@ __decorate([
                 from: { type: Date, required: true },
                 to: { type: Date, required: true },
                 reason: { type: String },
+                source: { type: String, default: 'manual' },
+                calendarId: { type: String },
             },
         ],
         default: [],
@@ -333,6 +367,8 @@ __decorate([
                 name: { type: String, required: true },
                 url: { type: String, required: true },
                 lastSyncedAt: { type: Date, default: null },
+                lastSyncError: { type: String, default: null },
+                lastSyncedCount: { type: Number, default: 0 },
             },
         ],
         default: [],
@@ -340,9 +376,25 @@ __decorate([
     __metadata("design:type", Array)
 ], Property.prototype, "externalCalendars", void 0);
 __decorate([
+    (0, mongoose_1.Prop)({ type: String, index: { unique: true, sparse: true } }),
+    __metadata("design:type", String)
+], Property.prototype, "icalExportToken", void 0);
+__decorate([
     (0, mongoose_1.Prop)({ type: Object, default: {} }),
     __metadata("design:type", Object)
 ], Property.prototype, "shortTermAmenities", void 0);
+__decorate([
+    (0, mongoose_1.Prop)({ type: Object, default: {} }),
+    __metadata("design:type", Object)
+], Property.prototype, "houseRules", void 0);
+__decorate([
+    (0, mongoose_1.Prop)({ type: Object, default: {}, select: false }),
+    __metadata("design:type", Object)
+], Property.prototype, "checkInGuide", void 0);
+__decorate([
+    (0, mongoose_1.Prop)({ default: false }),
+    __metadata("design:type", Boolean)
+], Property.prototype, "instantBookRequiresVerifiedGuest", void 0);
 __decorate([
     (0, mongoose_1.Prop)({ default: false }),
     __metadata("design:type", Boolean)
@@ -511,6 +563,10 @@ __decorate([
     (0, mongoose_1.Prop)({ default: 0 }),
     __metadata("design:type", Number)
 ], Property.prototype, "reviewCount", void 0);
+__decorate([
+    (0, mongoose_1.Prop)({ type: Object, default: {} }),
+    __metadata("design:type", Object)
+], Property.prototype, "stayRatingBreakdown", void 0);
 __decorate([
     (0, mongoose_1.Prop)({ min: 1, max: 5 }),
     __metadata("design:type", Number)

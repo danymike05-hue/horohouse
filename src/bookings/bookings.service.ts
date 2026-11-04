@@ -35,8 +35,36 @@ import { HostStatsDto } from './dto/host-stats.dto';
  */
 const SERVICE_FEE_RATE = 0;
 
-/** How many hours after creation an unpaid PENDING booking is auto-cancelled */
-const AUTO_CANCEL_HOURS = 24;
+/**
+ * Unpaid holds that block a calendar at the same time, per guest. Stops one account from
+ * locking many listings with requests it never pays (security audit: calendar blocking).
+ */
+const MAX_OPEN_HOLDS_PER_GUEST = 3;
+
+/** Instant-book: the guest must pay within this window or the dates are released. */
+const INSTANT_BOOK_PAYMENT_MINUTES = 30;
+
+/** Request-to-book: the host must answer within this window or the request expires. */
+const REQUEST_RESPONSE_HOURS = 48;
+
+/** After the host accepts a request, the guest has this long to pay. */
+const PAYMENT_AFTER_ACCEPT_HOURS = 24;
+
+/**
+ * A booking only holds its dates while it is paid, has no deadline (legacy / cash), or its
+ * deadline hasn't passed. Expired unpaid bookings stop blocking the calendar immediately,
+ * even before the expiry job cancels them.
+ */
+function activeHoldFilter(now = new Date()) {
+  return {
+    $or: [
+      { paymentStatus: PaymentStatus.PAID },
+      { expiresAt: { $exists: false } },
+      { expiresAt: null },
+      { expiresAt: { $gt: now } },
+    ],
+  };
+}
 
 // ─── Interfaces ───────────────────────────────────────────────────────────────
 
@@ -49,10 +77,15 @@ export interface PaginatedBookings {
 
 export interface AvailabilityResult {
   available: boolean;
-  unavailableDates: { from: Date; to: Date }[];  // host-blocked ranges
+  /** Host-blocked ranges. source = 'manual' | 'ical' on room calendars (only manual can be unblocked). */
+  unavailableDates: { from: Date; to: Date; reason?: string; source?: string }[];
+  /** Room calendars only: how many identical rooms this type has. */
+  capacity?: number;
   bookedRanges: Array<{
     checkIn: Date;
     checkOut: Date;
+    roomId?: string;
+    // Guest details below are only included for the host / admin (see getAvailability)
     status?: string;
     guests?: number;
     guestCount?: number;
@@ -152,8 +185,20 @@ export class BookingsService {
     }
 
     // ── 2b. Advance notice & booking window validation ───────────────────────
-    const advanceNoticeDays = (property as any).advanceNoticeDays ?? 0;
-    const bookingWindowDays = (property as any).bookingWindowDays ?? 365;
+    // The host calendar saves noticeDays / windowMonths; older listings use
+    // advanceNoticeDays / bookingWindowDays. Only the old fields were checked, so the
+    // calendar's settings had no effect. windowMonths null = "Any time".
+    const advanceNoticeDays = Math.max(
+      Number((property as any).noticeDays ?? 0),
+      Number((property as any).advanceNoticeDays ?? 0),
+    );
+    const windowMonths = (property as any).windowMonths;
+    const bookingWindowDays =
+      windowMonths === null
+        ? Number.POSITIVE_INFINITY
+        : typeof windowMonths === 'number' && windowMonths > 0
+          ? Math.round(windowMonths * 30.44)
+          : Number((property as any).bookingWindowDays ?? 365);
     const daysTilCheckin = Math.ceil(
       (checkIn.getTime() - today.getTime()) / (1000 * 60 * 60 * 24),
     );
@@ -170,13 +215,80 @@ export class BookingsService {
       );
     }
 
+    // ── 2c. Hotel room: load it so price, fees and capacity come from the room ─
+    // (computePrice used to charge property.price for every room type.)
+    let room: any = null;
+    if (dto.roomId) {
+      room = await this.roomsService.getRoomById(dto.roomId); // 400 / 404 on a bad ID
+      if (String(room.propertyId) !== String(dto.propertyId)) {
+        throw new BadRequestException('This room does not belong to this property');
+      }
+      if (room.isActive === false) {
+        throw new BadRequestException('This room type is no longer available');
+      }
+    }
+
     // ── 3. Check guest count ─────────────────────────────────────────────────
-    const maxGuests = (property as any).shortTermAmenities?.maxGuests ?? 99;
+    const maxGuests = room?.maxGuests ?? (property as any).shortTermAmenities?.maxGuests ?? 99;
     const totalGuests = dto.guests.adults + (dto.guests.children ?? 0);
 
     if (totalGuests > maxGuests) {
       throw new BadRequestException(
         `This property accommodates a maximum of ${maxGuests} guest(s)`,
+      );
+    }
+
+    // House rules the host set (missing = allowed, as on listings created before the rules)
+    const rules = (property as any).houseRules ?? {};
+    if (rules.childrenAllowed === false && (dto.guests.children ?? 0) > 0) {
+      throw new BadRequestException('This place is not suitable for children (house rules).');
+    }
+    if (rules.infantsAllowed === false && (dto.guests.infants ?? 0) > 0) {
+      throw new BadRequestException('This place is not suitable for infants (house rules).');
+    }
+
+    // ── 3b. Same guest, same stay, still unpaid → hand back that booking ─────
+    // (guest went back from the payment step and tapped Reserve again). Without this the
+    // guest's own hold makes the availability check below fail with a 409.
+    const now = new Date();
+    const RESUME_MIN_MS = 5 * 60_000; // the gateway refuses to start a payment with < 2 min left
+    const existingHold = await this.bookingModel.findOne({
+      guestId: guest._id,
+      propertyId: new Types.ObjectId(dto.propertyId),
+      roomId: dto.roomId ? new Types.ObjectId(dto.roomId) : null,
+      checkIn,
+      checkOut,
+      status: BookingStatus.PENDING,
+      paymentStatus: { $ne: PaymentStatus.PAID },
+      expiresAt: { $gt: now },
+    }).exec();
+    if (existingHold) {
+      if (existingHold.expiresAt!.getTime() > now.getTime() + RESUME_MIN_MS) {
+        return existingHold;
+      }
+      // Almost expired: release it now, or its own hold would make this new attempt a 409.
+      await this.bookingModel.updateOne(
+        { _id: existingHold._id, status: BookingStatus.PENDING, paymentStatus: { $ne: PaymentStatus.PAID } },
+        {
+          $set: {
+            status: BookingStatus.CANCELLED,
+            cancellation: { cancelledBy: CancelledBy.SYSTEM, cancelledAt: now, reason: 'replaced_by_new_attempt', refundAmount: 0 },
+          },
+        },
+      );
+    }
+
+    // ── 3c. Limit open unpaid holds per guest ────────────────────────────────
+    const openHolds = await this.bookingModel.countDocuments({
+      guestId: guest._id,
+      status: BookingStatus.PENDING,
+      paymentStatus: { $ne: PaymentStatus.PAID },
+      expiresAt: { $gt: now },
+    });
+    if (openHolds >= MAX_OPEN_HOLDS_PER_GUEST) {
+      throw new BadRequestException(
+        `You already have ${openHolds} reservations waiting for payment or a host reply. ` +
+        `Finish or cancel one before booking another.`,
       );
     }
 
@@ -189,7 +301,7 @@ export class BookingsService {
     }
 
     // ── 5. Build price breakdown ─────────────────────────────────────────────
-    const priceBreakdown = this.computePrice(property, nights);
+    const priceBreakdown = this.computePrice(property, nights, room, checkIn, totalGuests);
 
     // ── 6. Determine host ────────────────────────────────────────────────────
     const rawHostRef = property.ownerId ?? property.agentId;
@@ -201,15 +313,29 @@ export class BookingsService {
       : undefined;
 
     // ── 7. Instant book? Payment required before confirmation either way ────
-    const isInstantBook = !!(property as any).isInstantBookable;
+    // Hosts can keep Instant Book for verified guests only; everyone else sends a request.
+    let guestVerified = false;
+    if ((property as any).instantBookRequiresVerifiedGuest) {
+      const fresh: any = await this.userModel
+        .findById(guest._id)
+        .select('identityVerification.status hostProfile.verificationStatus')
+        .lean()
+        .exec();
+      guestVerified =
+        fresh?.identityVerification?.status === 'verified' ||
+        fresh?.hostProfile?.verificationStatus === 'verified';
+    }
+    const isInstantBook =
+      !!(property as any).isInstantBookable &&
+      (!(property as any).instantBookRequiresVerifiedGuest || guestVerified);
     const initialStatus = BookingStatus.PENDING;
     const confirmedAt = undefined;
 
     // Instant-book: guest must pay within 30 min or the slot releases.
     // Non-instant: host must respond within 48h or the request expires.
     const expiresAt = isInstantBook
-      ? new Date(Date.now() + 30 * 60 * 1000)
-      : new Date(Date.now() + 48 * 60 * 60 * 1000);
+      ? new Date(Date.now() + INSTANT_BOOK_PAYMENT_MINUTES * 60 * 1000)
+      : new Date(Date.now() + REQUEST_RESPONSE_HOURS * 60 * 60 * 1000);
 
     // ── 8. Persist ───────────────────────────────────────────────────────────
     const booking = new this.bookingModel({
@@ -224,6 +350,7 @@ export class BookingsService {
         adults: dto.guests.adults,
         children: dto.guests.children ?? 0,
         infants: dto.guests.infants ?? 0,
+        pets: dto.guests.pets ?? 0,
       },
       priceBreakdown,
       currency: dto.currency ?? (property as any).currency ?? 'XAF',
@@ -231,6 +358,7 @@ export class BookingsService {
       paymentStatus: PaymentStatus.UNPAID,
       isInstantBook,
       confirmedAt,
+      expiresAt,
       guestNote: dto.guestNote,
     });
 
@@ -244,25 +372,9 @@ export class BookingsService {
     // ── Send notifications (non-fatal — booking already persisted) ────────────
     try {
       if (isInstantBook) {
-        // Guest: booking confirmed (instant-book triggers immediately)
-        await this.notificationsService.notifyBookingConfirmed(guestIdStr, {
-          bookingId: bookingIdStr,
-          propertyId: dto.propertyId,
-          propertyTitle,
-          hostName: (property.ownerId as any)?.name ?? 'Host',
-          checkIn: fmt(checkIn),
-          checkOut: fmt(checkOut),
-        });
-        // Host: notified of the instant booking
-        await this.notificationsService.notifyBookingRequest(hostIdStr ?? '', {
-          guestId: guestIdStr,
-          bookingId: bookingIdStr,
-          propertyId: dto.propertyId,
-          propertyTitle,
-          guestName: guest.name,
-          checkIn: fmt(checkIn),
-          checkOut: fmt(checkOut),
-        });
+        // Nothing yet: this is an unpaid 30-minute hold. Once the payment lands,
+        // BookingPaymentGateway.markPaid → PaymentsService.processSuccessfulPayment confirms the
+        // booking and notifies the host. (Telling the guest "confirmed" here was premature.)
       } else {
         // Host & Guest: booking request submitted (non-instant)
         await this.notificationsService.notifyBookingRequest(hostIdStr ?? '', {
@@ -319,8 +431,10 @@ export class BookingsService {
         ? CancelledBy.GUEST
         : CancelledBy.HOST;
 
-    // Compute refund based on cancellation policy
-    const refundAmount = await this.computeRefund(booking);
+    // Guest cancels: the listing's cancellation policy decides. Host or admin cancels:
+    // the guest gets everything back (it used to apply the guest policy here too, so a
+    // host cancelling a week before a strict listing kept half the guest's money).
+    const refundAmount = await this.computeRefund(booking, cancelledBy);
 
     const updated = await this.bookingModel
       .findByIdAndUpdate(
@@ -419,16 +533,37 @@ export class BookingsService {
       );
     }
 
-    // Re-check availability (another booking may have snuck in)
-    await this.assertDatesAvailable(
-      booking.propertyId.toString(),
-      booking.checkIn,
-      booking.checkOut,
-      bookingId, // exclude the current booking itself
-    );
+    // Instant book: the guest's payment confirms it. A host "approving" an unpaid
+    // instant hold turned its 30-minute payment window into a 24-hour one.
+    if (booking.isInstantBook) {
+      throw new BadRequestException('Instant bookings are confirmed when the guest pays — there is nothing to approve');
+    }
+
+    if (booking.expiresAt && booking.expiresAt.getTime() <= Date.now() && booking.paymentStatus !== PaymentStatus.PAID) {
+      throw new BadRequestException('This request has expired. The guest needs to send a new one.');
+    }
+
+    // Re-check availability (another booking may have snuck in), excluding this booking.
+    // Hotel bookings are checked against their room type (and its number of units);
+    // a property-wide check would wrongly clash with the hotel's other rooms.
+    if (booking.roomId) {
+      await this.roomsService.assertRoomDatesAvailable(
+        booking.roomId.toString(),
+        booking.checkIn,
+        booking.checkOut,
+        bookingId,
+      );
+    } else {
+      await this.assertDatesAvailable(
+        booking.propertyId.toString(),
+        booking.checkIn,
+        booking.checkOut,
+        bookingId,
+      );
+    }
 
     // Guest now has 24h to pay, or the confirmed slot auto-releases
-    const paymentDeadline = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    const paymentDeadline = new Date(Date.now() + PAYMENT_AFTER_ACCEPT_HOURS * 60 * 60 * 1000);
 
     const updated = await this.bookingModel
       .findByIdAndUpdate(
@@ -508,9 +643,50 @@ export class BookingsService {
   async completeBooking(bookingId: string, host: User): Promise<Booking> {
     const booking = await this.findBookingOrThrow(bookingId);
     this.assertIsHost(booking, host);
+    return this.markCompleted(booking);
+  }
 
+  /**
+   * Closes paid stays automatically once checkout day has passed (noon UTC that day,
+   * after the usual 11:00 check-out in Cameroon), so guests and hosts get the review
+   * prompt without the host having to tap "complete". Called hourly by BookingsScheduler.
+   */
+  async completeFinishedStays(batchSize = 100): Promise<number> {
+    const cutoff = new Date(Date.now() - 12 * 60 * 60 * 1000);
+    const due = await this.bookingModel
+      .find({
+        status: BookingStatus.CONFIRMED,
+        paymentStatus: PaymentStatus.PAID,
+        checkOut: { $lte: cutoff },
+      })
+      .limit(batchSize)
+      .exec();
+    let done = 0;
+    for (const booking of due) {
+      try {
+        await this.markCompleted(booking);
+        done++;
+      } catch (err: any) {
+        this.logger.warn(`completeFinishedStays: ${booking._id}: ${err?.message}`);
+      }
+    }
+    return done;
+  }
+
+  private async markCompleted(booking: BookingDocument): Promise<Booking> {
+    const bookingId = booking._id.toString();
     if (booking.status !== BookingStatus.CONFIRMED) {
       throw new BadRequestException('Only CONFIRMED bookings can be completed');
+    }
+    // Completing triggers review requests and counts toward the host's stays, so the
+    // stay must have been paid and must be over (checkout day reached).
+    if (booking.paymentStatus !== PaymentStatus.PAID) {
+      throw new BadRequestException('This stay was never paid, so it can’t be completed');
+    }
+    const checkoutDay = new Date(booking.checkOut);
+    checkoutDay.setUTCHours(0, 0, 0, 0);
+    if (checkoutDay.getTime() > Date.now()) {
+      throw new BadRequestException('You can mark the stay as completed from the check-out day');
     }
 
     const updated = await this.bookingModel
@@ -556,9 +732,11 @@ export class BookingsService {
   }
 
   /**
-   * Get all bookings for a specific property (host or admin only — checked in controller).
+   * Get all bookings for a specific property. Only that property's owner / agent or an admin:
+   * the role guard alone let ANY host read another host's guests (names, emails, phones).
    */
-  async getPropertyBookings(propertyId: string, query: BookingQueryDto): Promise<PaginatedBookings> {
+  async getPropertyBookings(propertyId: string, query: BookingQueryDto, user: User): Promise<PaginatedBookings> {
+    await this.assertCanManageProperty(propertyId, user);
     return this.paginateBookings({ propertyId: new Types.ObjectId(propertyId) }, query);
   }
 
@@ -647,14 +825,26 @@ export class BookingsService {
    * Returns blocked date ranges for a property (or specific room) within a date window.
    * Used by the frontend calendar widget.
    */
+  /**
+   * @param opts.includeGuestDetails Guest name / photo / price per booking. Only for the
+   *   host or an admin (the /details route). The public calendar gets dates only: the
+   *   public endpoint used to expose every guest's name, photo and booking total.
+   */
   async getAvailability(
     propertyId: string,
     from: Date,
     to: Date,
     roomId?: string,
+    opts: { includeGuestDetails?: boolean } = {},
   ): Promise<AvailabilityResult> {
     const property = await this.propertyModel.findById(propertyId).exec();
     if (!property) throw new NotFoundException('Property not found');
+
+    // Host calendar for one hotel room type: every booking with who made it, so the host
+    // sees "2 of 5 rooms booked" and the guests. The public room calendar stays dates-only.
+    if (roomId && opts.includeGuestDetails) {
+      return this.getRoomAvailabilityForHost(propertyId, roomId, from, to);
+    }
 
     // If a roomId is provided, delegate to room-level availability
     if (roomId) {
@@ -662,7 +852,7 @@ export class BookingsService {
       return {
         available: roomResult.available,
         unavailableDates: roomResult.unavailableDates.map((r) => ({ from: r.from, to: r.to })),
-        bookedRanges: roomResult.bookedRanges.map((r) => ({ checkIn: r.checkIn, checkOut: r.checkOut })),
+        bookedRanges: roomResult.bookedRanges.map((r) => ({ checkIn: r.checkIn, checkOut: r.checkOut, roomId })),
       };
     }
 
@@ -672,35 +862,178 @@ export class BookingsService {
         (r: any) => r.from < to && r.to > from,
       );
 
-    // 2. Confirmed / pending bookings in the window (property-wide, no room)
-    const bookings = await this.bookingModel
+    // 2. Bookings in the window that still hold their dates (property-wide, no room)
+    const query = this.bookingModel
       .find({
         propertyId: new Types.ObjectId(propertyId),
-        $or: [{ roomId: { $exists: false } }, { roomId: null }],
+        $and: [
+          { $or: [{ roomId: { $exists: false } }, { roomId: null }] },
+          activeHoldFilter(),
+        ],
         status: { $in: [BookingStatus.CONFIRMED, BookingStatus.PENDING, BookingStatus.COMPLETED] },
         checkIn: { $lt: to },
         checkOut: { $gt: from },
       })
-      .select('checkIn checkOut status guestCount totalPrice guestId')
-      .populate('guestId', 'name profilePicture')
-      .lean()
-      .exec();
+      .select(opts.includeGuestDetails
+        ? 'checkIn checkOut status guests priceBreakdown.totalAmount guestId'
+        : 'checkIn checkOut');
+    if (opts.includeGuestDetails) query.populate('guestId', 'name profilePicture');
+    const bookings = await query.lean().exec();
 
-    const bookedRanges = bookings.map((b: any) => ({
-      checkIn: b.checkIn,
-      checkOut: b.checkOut,
-      status: b.status,
-      guests: b.guestCount,
-      guestCount: b.guestCount,
-      totalPrice: b.totalPrice,
-      guestName: b.guestId?.name ?? 'Guest',
-      guestAvatar: b.guestId?.profilePicture ?? null,
-      guest: b.guestId ? { name: b.guestId.name, profilePicture: b.guestId.profilePicture } : undefined,
-    }));
+    const bookedRanges = bookings.map((b: any) => {
+      if (!opts.includeGuestDetails) return { checkIn: b.checkIn, checkOut: b.checkOut };
+      // The old select asked for guestCount / totalPrice, which don't exist on the schema.
+      const guestCount = (b.guests?.adults ?? 0) + (b.guests?.children ?? 0);
+      return {
+        checkIn: b.checkIn,
+        checkOut: b.checkOut,
+        status: b.status,
+        guests: guestCount,
+        guestCount,
+        totalPrice: b.priceBreakdown?.totalAmount,
+        guestName: b.guestId?.name ?? 'Guest',
+        guestAvatar: b.guestId?.profilePicture ?? null,
+        guest: b.guestId ? { name: b.guestId.name, profilePicture: b.guestId.profilePicture } : undefined,
+      };
+    });
 
     const available = hostBlockedRanges.length === 0 && bookedRanges.length === 0;
 
     return { available, unavailableDates: hostBlockedRanges, bookedRanges };
+  }
+
+  private async getRoomAvailabilityForHost(
+    propertyId: string,
+    roomId: string,
+    from: Date,
+    to: Date,
+  ): Promise<AvailabilityResult> {
+    const room: any = await this.roomsService.getRoomById(roomId); // 400 / 404 on a bad ID
+    if (String(room.propertyId?._id ?? room.propertyId) !== String(propertyId)) {
+      throw new NotFoundException('Room not found for this property');
+    }
+    const quantity = Number(room.quantity);
+    const capacity = Number.isFinite(quantity) && quantity >= 1 ? Math.floor(quantity) : 1;
+
+    const bookings = await this.bookingModel
+      .find({
+        roomId: new Types.ObjectId(roomId),
+        $and: [activeHoldFilter()],
+        status: { $in: [BookingStatus.CONFIRMED, BookingStatus.PENDING, BookingStatus.COMPLETED] },
+        checkIn: { $lt: to },
+        checkOut: { $gt: from },
+      })
+      .select('checkIn checkOut status guests priceBreakdown.totalAmount guestId')
+      .populate('guestId', 'name profilePicture')
+      .sort({ checkIn: 1 })
+      .lean()
+      .exec();
+
+    const bookedRanges = bookings.map((b: any) => {
+      const guestCount = (b.guests?.adults ?? 0) + (b.guests?.children ?? 0);
+      return {
+        checkIn: b.checkIn,
+        checkOut: b.checkOut,
+        roomId,
+        status: b.status,
+        guests: guestCount,
+        guestCount,
+        totalPrice: b.priceBreakdown?.totalAmount,
+        guestName: b.guestId?.name ?? 'Guest',
+        guestAvatar: b.guestId?.profilePicture ?? null,
+        guest: b.guestId ? { name: b.guestId.name, profilePicture: b.guestId.profilePicture } : undefined,
+      };
+    });
+
+    const unavailableDates = ((room.unavailableDates ?? []) as any[])
+      .filter((r) => new Date(r.from) < to && new Date(r.to) > from)
+      .map((r) => ({ from: r.from, to: r.to, reason: r.reason, source: r.source ?? 'manual' }));
+
+    return {
+      available: unavailableDates.length === 0 && bookedRanges.length < capacity,
+      unavailableDates,
+      bookedRanges,
+      capacity,
+    };
+  }
+
+  // ════════════════════════════════════════════════════════════════════════════
+  // EXPIRY (called every few minutes by BookingsScheduler)
+  // ════════════════════════════════════════════════════════════════════════════
+
+  /**
+   * Cancels unpaid bookings whose deadline passed:
+   *  - instant-book not paid within 30 min,
+   *  - request the host didn't answer within 48 h,
+   *  - request the host accepted but the guest didn't pay within 24 h.
+   * Paid bookings are never touched. A payment that lands after this is caught by the
+   * checkout webhook ("paid_after_booking_closed") and flagged for a refund.
+   */
+  async expireOverdueBookings(batchSize = 200): Promise<number> {
+    const now = new Date();
+    const overdue = await this.bookingModel
+      .find({
+        status: { $in: [BookingStatus.PENDING, BookingStatus.CONFIRMED] },
+        paymentStatus: { $ne: PaymentStatus.PAID },
+        expiresAt: { $lte: now },
+      })
+      .select('_id status isInstantBook guestId hostId propertyId checkIn checkOut')
+      .limit(batchSize)
+      .lean()
+      .exec();
+
+    let expired = 0;
+    for (const b of overdue as any[]) {
+      const reason =
+        b.status === BookingStatus.CONFIRMED
+          ? 'payment_not_received_after_acceptance'
+          : b.isInstantBook
+            ? 'payment_timeout'
+            : 'host_did_not_respond';
+
+      // Conditional update: a payment or host action that lands meanwhile wins.
+      const res = await this.bookingModel.updateOne(
+        {
+          _id: b._id,
+          status: { $in: [BookingStatus.PENDING, BookingStatus.CONFIRMED] },
+          paymentStatus: { $ne: PaymentStatus.PAID },
+        },
+        {
+          $set: {
+            status: BookingStatus.CANCELLED,
+            cancellation: { cancelledBy: CancelledBy.SYSTEM, cancelledAt: now, reason, refundAmount: 0 },
+          },
+        },
+      );
+      if (!res.modifiedCount) continue;
+      expired++;
+
+      try {
+        const [property, guest, host] = await Promise.all([
+          this.propertyModel.findById(b.propertyId).select('title').lean(),
+          this.userModel.findById(b.guestId).select('name').lean(),
+          this.userModel.findById(b.hostId).select('name').lean(),
+        ]);
+        const fmt = (d: Date) => new Date(d).toISOString().split('T')[0];
+        await this.notificationsService.notifyBookingCancelled({
+          guestId: b.guestId.toString(),
+          hostId: b.hostId.toString(),
+          bookingId: b._id.toString(),
+          propertyId: b.propertyId.toString(),
+          propertyTitle: (property as any)?.title ?? 'the property',
+          guestName: (guest as any)?.name ?? 'Guest',
+          hostName: (host as any)?.name ?? 'Host',
+          checkIn: fmt(b.checkIn),
+          checkOut: fmt(b.checkOut),
+          cancelledByGuest: false,
+        });
+      } catch (err: any) {
+        this.logger.warn(`expireOverdueBookings: notification failed for ${b._id}: ${err?.message}`);
+      }
+    }
+
+    if (expired) this.logger.log(`Expired ${expired} unpaid booking(s)`);
+    return expired;
   }
 
   // ════════════════════════════════════════════════════════════════════════════
@@ -712,9 +1045,11 @@ export class BookingsService {
   }
 
   async getBookingById(bookingId: string, user: User): Promise<Booking> {
+    if (!Types.ObjectId.isValid(bookingId)) throw new BadRequestException('Invalid booking ID');
     const booking = await this.bookingModel
       .findById(bookingId)
-      .populate('propertyId', 'title address city images price')
+      // cancellationPolicy + check-in times: the booking screen shows them.
+      .populate('propertyId', 'title address city neighborhood images price cancellationPolicy isInstantBookable shortTermAmenities.checkInTime shortTermAmenities.checkOutTime shortTermAmenities.petsAllowed shortTermAmenities.smokingAllowed shortTermAmenities.partiesAllowed houseRules')
       .populate('guestId', 'name email phoneNumber profilePicture')
       .populate('hostId', 'name email phoneNumber profilePicture')
       .exec();
@@ -803,6 +1138,8 @@ export class BookingsService {
       // Overlap condition: existing.checkIn < newCheckOut AND existing.checkOut > newCheckIn
       checkIn: { $lt: checkOut },
       checkOut: { $gt: checkIn },
+      // Expired unpaid holds no longer block (the expiry job cancels them shortly after)
+      ...activeHoldFilter(),
     };
 
     if (excludeBookingId) {
@@ -840,18 +1177,28 @@ export class BookingsService {
    * Compute the full price breakdown at booking time.
    * Prices are locked in so later edits to the property don't affect existing bookings.
    */
-  private computePrice(property: any, nights: number) {
-    const pricePerNight = property.price ?? 0;
-    const subtotal = pricePerNight * nights;
-    const cleaningFee = property.cleaningFee ?? 0;
+  private computePrice(property: any, nights: number, room?: any, checkIn?: Date, guests = 1) {
+    // Hotel bookings use the chosen room type's own price and cleaning fee.
+    const rates = this.nightlyRates(property, nights, room, checkIn);
+    // Extra-guest fee: part of the nightly price, so stay discounts apply to it too
+    // (same as stayNightsTotal + extraGuestTotal in the app).
+    const included = Number(property.guestsIncluded) || 0;
+    const feePerGuest = Number(property.extraGuestFee) || 0;
+    const extraGuests = !room && included > 0 && feePerGuest > 0 ? Math.max(0, guests - included) : 0;
+    const extraGuestFee = extraGuests * feePerGuest * nights;
+    const subtotal = rates.reduce((sum, r) => sum + r, 0) + extraGuestFee;
+    // Average when weekend / custom prices make nights differ.
+    const pricePerNight = nights > 0 ? Math.round(subtotal / nights) : 0;
+    const cleaningFee = room?.cleaningFee ?? property.cleaningFee ?? 0;
     const serviceFee = Math.round(subtotal * SERVICE_FEE_RATE);
     const taxAmount = 0; // extend as needed
-    // Use host-configured discount percentages (fall back to platform defaults)
+    // Only discounts the host actually set. The old 10% / 15% fallbacks were never shown
+    // in the app, so guests were charged a different total than the one on screen.
     const discountAmount = this.computeDiscount(
       subtotal,
       nights,
-      property.weeklyDiscountPercent ?? 10,
-      property.monthlyDiscountPercent ?? 15,
+      property.weeklyDiscountPercent ?? 0,
+      property.monthlyDiscountPercent ?? 0,
       property.customDiscountNights,
       property.customDiscountPercent,
     );
@@ -866,7 +1213,32 @@ export class BookingsService {
       taxAmount,
       discountAmount,
       totalAmount,
+      extraGuests,
+      extraGuestFee,
     };
+  }
+
+  /**
+   * Price of each night. The host calendar sets a weekend price (Friday and Saturday
+   * nights) and custom prices per date; they used to be saved but never charged, so
+   * every guest paid the base price. Same rule as stayNightsTotal() in the app.
+   * Hotel room types keep their own flat price.
+   */
+  private nightlyRates(property: any, nights: number, room?: any, checkIn?: Date): number[] {
+    const base = Number(property.price ?? 0);
+    if (room) return Array(nights).fill(Number(room.price ?? base));
+    if (!checkIn) return Array(nights).fill(base);
+    const overrides: Record<string, number> = property.priceOverrides ?? {};
+    const weekend = Number(property.weekendPrice || 0);
+    const d = new Date(Date.UTC(checkIn.getUTCFullYear(), checkIn.getUTCMonth(), checkIn.getUTCDate()));
+    const rates: number[] = [];
+    for (let i = 0; i < nights; i++) {
+      const override = Number(overrides[d.toISOString().slice(0, 10)] || 0);
+      const day = d.getUTCDay();
+      rates.push(override > 0 ? override : weekend > 0 && (day === 5 || day === 6) ? weekend : base);
+      d.setUTCDate(d.getUTCDate() + 1);
+    }
+    return rates;
   }
 
   /**
@@ -898,8 +1270,9 @@ export class BookingsService {
    * Compute refund amount based on the property's cancellation policy
    * and how far in advance the guest is cancelling.
    */
-  private async computeRefund(booking: BookingDocument): Promise<number> {
+  private async computeRefund(booking: BookingDocument, cancelledBy: CancelledBy = CancelledBy.GUEST): Promise<number> {
     if (booking.paymentStatus !== PaymentStatus.PAID) return 0;
+    if (cancelledBy !== CancelledBy.GUEST) return booking.priceBreakdown.totalAmount;
 
     const property = await this.propertyModel
       .findById(booking.propertyId)
@@ -928,6 +1301,36 @@ export class BookingsService {
       default:
         return 0;
     }
+  }
+
+  /**
+   * What cancelling would do right now, from the same rules cancelBooking() applies,
+   * so the app can say "You'll get 45 000 FCFA back" before the guest confirms.
+   */
+  async getCancellationPreview(bookingId: string, user: User): Promise<{
+    canCancel: boolean;
+    cancelledBy: CancelledBy;
+    paidAmount: number;
+    refundAmount: number;
+    policy: string;
+  }> {
+    const booking = await this.findBookingOrThrow(bookingId);
+    const isGuest = booking.guestId.toString() === user._id.toString();
+    const isHost = booking.hostId.toString() === user._id.toString();
+    const isAdmin = user.role === UserRole.ADMIN;
+    if (!isGuest && !isHost && !isAdmin) {
+      throw new ForbiddenException('You are not authorized to view this booking');
+    }
+    const cancelledBy = isAdmin ? CancelledBy.ADMIN : isGuest ? CancelledBy.GUEST : CancelledBy.HOST;
+    const property = await this.propertyModel.findById(booking.propertyId).select('cancellationPolicy').lean().exec();
+    const paid = booking.paymentStatus === PaymentStatus.PAID;
+    return {
+      canCancel: [BookingStatus.PENDING, BookingStatus.CONFIRMED].includes(booking.status),
+      cancelledBy,
+      paidAmount: paid ? booking.priceBreakdown.totalAmount : 0,
+      refundAmount: await this.computeRefund(booking, cancelledBy),
+      policy: (property as any)?.cancellationPolicy ?? 'flexible',
+    };
   }
 
   /** Reusable paginated query helper */
@@ -967,6 +1370,20 @@ export class BookingsService {
     const booking = await this.bookingModel.findById(id).exec();
     if (!booking) throw new NotFoundException('Booking not found');
     return booking;
+  }
+
+  /** Owner or agent of the property, or an admin. (Co-hosts: add their check here.) */
+  async assertCanManageProperty(propertyId: string, user: User): Promise<void> {
+    if (user.role === UserRole.ADMIN) return;
+    if (!Types.ObjectId.isValid(propertyId)) throw new BadRequestException('Invalid property ID');
+    const property = await this.propertyModel.findById(propertyId).select('ownerId agentId').lean().exec();
+    if (!property) throw new NotFoundException('Property not found');
+    const uid = user._id.toString();
+    const ownerId = (property as any).ownerId?.toString();
+    const agentId = (property as any).agentId?.toString();
+    if (ownerId !== uid && agentId !== uid) {
+      throw new ForbiddenException('You do not manage this property');
+    }
   }
 
   private assertIsHost(booking: Booking, user: User): void {

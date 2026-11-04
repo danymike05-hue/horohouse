@@ -84,9 +84,48 @@ export interface GoogleAuthDto {
   deviceInfo?: any;
 }
 
+/** Where the Google callback may send the browser */
+export interface OAuthRedirectTarget {
+  /** rejected = a return link we don't allow: show an error, issue nothing */
+  kind: 'app' | 'web' | 'rejected';
+  /** Why it was rejected (shown on the error page / logs) */
+  reason?: string;
+  url: string;
+  /** PKCE challenge from the app's redirect URI (`cc` param) */
+  challenge?: string;
+}
+
+// ── Small helpers ─────────────────────────────────────────────────────────
+const sha256 = (v: string) => crypto.createHash('sha256').update(v).digest('hex');
+const sha256b64url = (v: string) => crypto.createHash('sha256').update(v).digest('base64url');
+const escapeRegex = (v: string) => v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+/** Case-insensitive exact match without treating the email as a regex */
+const emailQuery = (email: string) => ({ $regex: `^${escapeRegex(email.trim().toLowerCase())}$`, $options: 'i' });
+const safeEqual = (a: string, b: string) => {
+  const x = Buffer.from(a);
+  const y = Buffer.from(b);
+  return x.length === y.length && crypto.timingSafeEqual(x, y);
+};
+const isPlaceholderPhone = (p?: string) => !p || p.startsWith('google_') || p.startsWith('temp_');
+/**
+ * Sign-up is really finished only with a real phone. The schema defaults
+ * onboardingStatus to COMPLETED, so Google accounts made before onboarding
+ * existed read "completed" while still having the google_… placeholder —
+ * the app then sent them to the role/phone steps and the server refused them.
+ */
+const onboardingDone = (u: { onboardingStatus?: string; phoneNumber?: string }) =>
+  u.onboardingStatus === OnboardingStatus.COMPLETED && !(u.phoneNumber || '').startsWith('google_');
+
+const MAX_CODE_ATTEMPTS = 5;
+const OAUTH_CODE_TTL_MS = 2 * 60 * 1000;
+/** A refresh token replaced less than this long ago is still accepted (two requests racing) */
+const ROTATION_GRACE_MS = 30 * 1000;
+
 @Injectable()
 export class AuthService {
   private readonly logger = new Logger(AuthService.name);
+  /** Compared against when the email has no password, so both cases take the same time */
+  private static readonly DUMMY_HASH = bcrypt.hashSync('horohouse-timing-placeholder', 12);
   
   private static readonly SELF_ASSIGNABLE_ROLES: UserRole[] = [
     UserRole.REGISTERED_USER,
@@ -143,18 +182,26 @@ export class AuthService {
         );
       }
 
+      // No account with this number: answer the same way but send nothing.
+      // (Before, this upserted an empty user per number, which then blocked
+      // registering that number and cost an SMS for every random request.)
+      if (!existing) {
+        this.logger.log(`Phone code requested for unknown number ${formattedPhone.slice(0, 5)}…`);
+        return { message: 'Verification code sent successfully' };
+      }
+
       const verificationCode = this.smsService.generateVerificationCode();
       const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
 
-      // Store verification code in database
+      // Store only a hash of the code, and reset the wrong-attempt counter
       await this.userModel.updateOne(
-        { phoneNumber: formattedPhone },
+        { _id: (existing as any)._id },
         {
-          phoneVerificationCode: verificationCode,
+          phoneVerificationCode: sha256(String(verificationCode)),
           phoneVerificationExpires: expiresAt,
           phoneVerificationSentAt: new Date(),
+          phoneVerificationAttempts: 0,
         },
-        { upsert: true, setDefaultsOnInsert: true }
       );
 
       // Send SMS
@@ -164,7 +211,7 @@ export class AuthService {
         throw new BadRequestException('Failed to send verification code');
       }
 
-      this.logger.log(`Verification code sent to ${formattedPhone}`);
+      this.logger.log(`Verification code sent to ${formattedPhone.slice(0, 5)}…`);
 
       return { message: 'Verification code sent successfully' };
     } catch (error) {
@@ -178,13 +225,14 @@ export class AuthService {
    */
 async registerWithPhone(dto: RegisterWithPhoneDto, req?: any): Promise<AuthTokens> {
   try {
-    const { name, phoneNumber, email, role } = dto;
+    const { name, phoneNumber, role } = dto;
+    const email = dto.email ? dto.email.trim().toLowerCase() : undefined;
     const formattedPhone = this.smsService.formatPhoneNumber(phoneNumber);
 
     const existingUser = await this.userModel.findOne({
       $or: [
         { phoneNumber: formattedPhone },
-        ...(email ? [{ email }] : [])
+        ...(email ? [{ email: emailQuery(email) }] : [])
       ]
     });
 
@@ -203,7 +251,7 @@ async registerWithPhone(dto: RegisterWithPhoneDto, req?: any): Promise<AuthToken
       onboardingStatus: OnboardingStatus.COMPLETED,
     });
 
-      this.logger.log(`New user registered with phone: ${formattedPhone}`);
+      this.logger.log(`New user registered with phone: ${formattedPhone.slice(0, 5)}…`);
 
       // Send both welcome email and verification email if email is present
       if (user.email) {
@@ -242,15 +290,19 @@ async registerWithEmail(dto: RegisterWithEmailDto, req?: any): Promise<AuthToken
     const { name, email, password, phoneNumber, role } = dto;
     const normalizedEmail = email.trim().toLowerCase();
 
-    const existingUser = await this.userModel.findOne({
-      $or: [
-        { email: { $regex: `^${normalizedEmail}$`, $options: 'i' } },
-        ...(phoneNumber ? [{ phoneNumber }] : [])
-      ]
-    });
+    const formattedPhone = phoneNumber ? this.smsService.formatPhoneNumber(phoneNumber) : undefined;
 
-    if (existingUser) {
-      throw new ConflictException('User already exists with this email or phone number');
+    const [emailTaken, phoneTaken] = await Promise.all([
+      this.userModel.exists({ email: emailQuery(normalizedEmail) }),
+      formattedPhone ? this.userModel.exists({ phoneNumber: formattedPhone }) : Promise.resolve(null),
+    ]);
+
+    // Separate messages so the app can send the person to the right field
+    if (emailTaken) {
+      throw new ConflictException({ message: 'An account already exists with this email', field: 'email', code: 'EMAIL_TAKEN' });
+    }
+    if (phoneTaken) {
+      throw new ConflictException({ message: 'This phone number is already used by another account', field: 'phone', code: 'PHONE_TAKEN' });
     }
 
     const hashedPassword = await bcrypt.hash(password, 12);
@@ -259,7 +311,7 @@ async registerWithEmail(dto: RegisterWithEmailDto, req?: any): Promise<AuthToken
       name,
       email: normalizedEmail,
       password: hashedPassword,
-      phoneNumber: phoneNumber || `temp_${Date.now()}`,
+      phoneNumber: formattedPhone || `temp_${Date.now()}_${crypto.randomBytes(3).toString('hex')}`,
       role: this.resolveSelfAssignableRole(role),
       phoneVerified: false,
       emailVerified: false,
@@ -306,31 +358,21 @@ async registerWithEmail(dto: RegisterWithEmailDto, req?: any): Promise<AuthToken
       const formattedPhone = this.smsService.formatPhoneNumber(phoneNumber);
 
       // Find user and verify code
-      const user = await this.userModel.findOne({ phoneNumber: formattedPhone });
+      const user = await this.userModel
+        .findOne({ phoneNumber: formattedPhone })
+        .select('+phoneVerificationCode +phoneVerificationAttempts');
 
+      // Same answer whether or not the number has an account
       if (!user) {
-        throw new UnauthorizedException('User not found');
-      }
-
-      if (!user.phoneVerificationCode || !user.phoneVerificationExpires) {
-        throw new UnauthorizedException('No verification code found. Please request a new one.');
-      }
-
-      if (user.phoneVerificationExpires < new Date()) {
-        throw new UnauthorizedException('Verification code has expired');
-      }
-
-      if (user.phoneVerificationCode !== verificationCode) {
         throw new UnauthorizedException('Invalid verification code');
       }
+      if (!user.isActive) {
+        throw new UnauthorizedException('This account is deactivated');
+      }
 
-      // Mark phone as verified and clear verification code
-      user.phoneVerified = true;
-      user.phoneVerificationCode = undefined;
-      user.phoneVerificationExpires = undefined;
-      await user.save();
+      await this.checkPhoneCode(user, verificationCode);
 
-      this.logger.log(`User logged in with phone: ${formattedPhone}`);
+      this.logger.log(`User logged in with phone: ${formattedPhone.slice(0, 5)}…`);
 
       const tokens = await this.generateTokens(user, req);
 
@@ -352,26 +394,29 @@ async registerWithEmail(dto: RegisterWithEmailDto, req?: any): Promise<AuthToken
       const { email, password } = dto;
       const normalizedEmail = email.trim().toLowerCase();
 
-      // Case-insensitive lookup
-      const user = await this.userModel.findOne({
-        email: { $regex: `^${normalizedEmail}$`, $options: 'i' }
-      });
+      // Case-insensitive lookup (password is select:false)
+      const user = await this.userModel
+        .findOne({ email: emailQuery(normalizedEmail) })
+        .select('+password');
 
-      if (!user) {
-        this.logger.error(`Email login failed: user not found for email ${normalizedEmail}`);
-        throw new UnauthorizedException('Invalid credentials');
-      }
-
-      if (!user.password) {
-        this.logger.error(`Email login failed: no password set for email ${normalizedEmail}`);
-        throw new UnauthorizedException('Invalid credentials');
+      if (!user || !user.password) {
+        // Same work and message either way, so timing doesn't reveal accounts
+        await bcrypt.compare(password, AuthService.DUMMY_HASH);
+        throw new UnauthorizedException({
+          message: 'Incorrect email or password',
+          // Google-only account: tell the app to offer "Continue with Google"
+          ...(user && !user.password && user.googleId ? { code: 'USE_GOOGLE' } : {}),
+        });
       }
 
       const isPasswordValid = await bcrypt.compare(password, user.password);
 
       if (!isPasswordValid) {
-        this.logger.error(`Email login failed: wrong password for email ${normalizedEmail}`);
-        throw new UnauthorizedException('Invalid credentials');
+        throw new UnauthorizedException('Incorrect email or password');
+      }
+
+      if (!user.isActive) {
+        throw new UnauthorizedException({ message: 'This account is deactivated', code: 'ACCOUNT_DEACTIVATED' });
       }
 
       this.logger.log(`User logged in with email: ${normalizedEmail}`);
@@ -389,100 +434,242 @@ async registerWithEmail(dto: RegisterWithEmailDto, req?: any): Promise<AuthToken
   }
 
   /**
-   * Google OAuth authentication
+   * Google sign-in: find or create the account. Does not issue tokens; the
+   * callback either hands the app a one-time code or (web) sets cookies.
    */
-  async googleAuth(dto: GoogleAuthDto, req?: any): Promise<AuthTokens> {
-    try {
-      const { googleId, email, name, picture } = dto;
+  async googleSignIn(dto: GoogleAuthDto & { emailVerified?: boolean }): Promise<{ user: UserDocument; isNewUser: boolean }> {
+    const { googleId, name, picture } = dto;
+    const email = (dto.email || '').trim().toLowerCase();
 
-      // Find existing user by googleId first, then by email
-      let user = await this.userModel.findOne({
-        $or: [{ googleId }, { email }]
+    if (!googleId || !email) {
+      throw new UnauthorizedException('Google did not return an email address');
+    }
+    if (dto.emailVerified === false) {
+      throw new UnauthorizedException('Your Google email address is not verified');
+    }
+
+    // The Google id wins; otherwise link by (verified) email
+    // Typed explicitly: some Mongoose versions infer a different document type
+    // for the second query, which breaks the reassignment
+    let user: UserDocument | null = (await this.userModel.findOne({ googleId }).select('+password').exec()) as any;
+    if (!user) user = (await this.userModel.findOne({ email: emailQuery(email) }).select('+password').exec()) as any;
+
+    let isNewUser = false;
+
+    if (!user) {
+      // Create new user — onboarding is NOT_STARTED
+      isNewUser = true;
+      user = await this.userModel.create({
+        googleId,
+        name,
+        email,
+        profilePicture: picture,
+        phoneNumber: `google_${Date.now()}_${crypto.randomBytes(3).toString('hex')}`, // Temporary placeholder
+        role: UserRole.REGISTERED_USER,       // Temporary — will be replaced during onboarding
+        emailVerified: true,
+        phoneVerified: false,
+        onboardingCompleted: false,
+        onboardingStatus: OnboardingStatus.NOT_STARTED,
       });
 
-      let isNewUser = false;
+      this.logger.log(`New user created via Google OAuth: ${user._id}`);
 
-      if (!user) {
-        // Create new user — onboarding is NOT_STARTED
-        isNewUser = true;
-        user = await this.userModel.create({
-          googleId,
-          name,
-          email,
-          profilePicture: picture,
-          phoneNumber: `google_${Date.now()}`, // Temporary placeholder
-          role: UserRole.REGISTERED_USER,       // Temporary — will be replaced during onboarding
-          emailVerified: true,
-          phoneVerified: false,
-          onboardingCompleted: false,
-          onboardingStatus: OnboardingStatus.NOT_STARTED,
-        });
-
-        this.logger.log(`New user created via Google OAuth: ${email}`);
-
-        // Send welcome email
-        if (user.email) {
-          void this.emailService.sendWelcomeEmail(user.email, user.name).catch(() => undefined);
-        }
-      } else {
-        // Existing user — link Google if not already linked, but NEVER overwrite role/phone
-        if (!user.googleId) user.googleId = googleId;
-        if (!user.profilePicture && picture) user.profilePicture = picture;
-        user.emailVerified = true;
-
-        // Check if existing user has incomplete onboarding.
-        // IMPORTANT: only flag onboarding-required if the user has NOT already completed it.
-        // Never downgrade a COMPLETED onboarding status.
-        const hasPlaceholderPhone =
-          !user.phoneNumber ||
-          user.phoneNumber.startsWith('google_') ||
-          user.phoneNumber.startsWith('temp_');
-
-        // Explicit completion flag
-        const explicitlyCompleted =
-          user.onboardingStatus === OnboardingStatus.COMPLETED ||
-          user.onboardingCompleted === true;
-
-        // Implicit completion: users registered via email/phone before
-        // onboarding fields existed — they have a real phone + valid role
-        const implicitlyCompleted =
-          !hasPlaceholderPhone &&
-          user.role !== UserRole.REGISTERED_USER &&
-          AuthService.ONBOARDING_SELF_ASSIGNABLE_ROLES.includes(user.role);
-
-        const alreadyCompleted = explicitlyCompleted || implicitlyCompleted;
-
-        if (alreadyCompleted) {
-          // Back-fill missing onboarding fields for legacy users
-          if (user.onboardingStatus !== OnboardingStatus.COMPLETED) {
-            user.onboardingStatus = OnboardingStatus.COMPLETED;
-            user.onboardingCompleted = true;
-          }
-        } else {
-          if (!user.onboardingStatus) {
-            user.onboardingStatus = OnboardingStatus.NOT_STARTED;
-          }
-          user.onboardingCompleted = false;
-          isNewUser = true; // Signal to clients that onboarding is required
-        }
-
-        await user.save();
-
-        this.logger.log(`Existing user logged in via Google OAuth: ${email}, onboardingStatus: ${user.onboardingStatus}`);
+      // Send welcome email
+      if (user.email) {
+        void this.emailService.sendWelcomeEmail(user.email, user.name).catch(() => undefined);
       }
-
-      const tokens = await this.generateTokens(user, req);
-
-      return {
-        ...tokens,
-        user: user.toJSON(),
-        isNewUser,
-        onboardingStatus: user.onboardingStatus,
-      };
-    } catch (error) {
-      this.logger.error('Google OAuth failed:', error);
-      throw error;
+      return { user, isNewUser };
     }
+
+    if (!user.isActive) {
+      throw new UnauthorizedException('This account is deactivated');
+    }
+
+    // Someone may have signed up with this email and a password without ever
+    // proving they own the inbox ("pre-hijacking"). Google just proved the real
+    // owner is here, so drop that unproven password and its sessions before
+    // linking. The owner can set a password later with "Forgot password".
+    if (!user.googleId && !user.emailVerified && user.password) {
+      this.logger.warn(`Google sign-in for unverified email account ${user._id}: removing unverified password and sessions`);
+      user.password = undefined;
+      user.sessions = [];
+    }
+
+    // Existing user — link Google if not already linked, but NEVER overwrite role/phone
+    if (!user.googleId) user.googleId = googleId;
+    if (!user.profilePicture && picture) user.profilePicture = picture;
+    user.emailVerified = true;
+
+    // IMPORTANT: only flag onboarding-required if the user has NOT already completed it.
+    // Never downgrade a COMPLETED onboarding status.
+    const explicitlyCompleted =
+      (user.onboardingStatus === OnboardingStatus.COMPLETED || user.onboardingCompleted === true) &&
+      !(user.phoneNumber || '').startsWith('google_');
+
+    // Implicit completion: users registered via email/phone before
+    // onboarding fields existed — they have a real phone + valid role
+    const implicitlyCompleted =
+      !isPlaceholderPhone(user.phoneNumber) &&
+      user.role !== UserRole.REGISTERED_USER &&
+      AuthService.ONBOARDING_SELF_ASSIGNABLE_ROLES.includes(user.role);
+
+    if (explicitlyCompleted || implicitlyCompleted) {
+      // Back-fill missing onboarding fields for legacy users
+      if (user.onboardingStatus !== OnboardingStatus.COMPLETED) {
+        user.onboardingStatus = OnboardingStatus.COMPLETED;
+        user.onboardingCompleted = true;
+      }
+    } else {
+      if (!user.onboardingStatus) {
+        user.onboardingStatus = OnboardingStatus.NOT_STARTED;
+      }
+      user.onboardingCompleted = false;
+      isNewUser = true; // Signal to clients that onboarding is required
+    }
+
+    await user.save();
+    this.logger.log(`Existing user signed in via Google: ${user._id}, onboardingStatus: ${user.onboardingStatus}`);
+    return { user, isNewUser };
+  }
+
+  /**
+   * Google OAuth for the web app: sign in and issue tokens straight away
+   * (the web callback sets httpOnly cookies).
+   */
+  async googleAuth(dto: GoogleAuthDto & { emailVerified?: boolean }, req?: any): Promise<AuthTokens> {
+    const { user, isNewUser } = await this.googleSignIn(dto);
+    const tokens = await this.generateTokens(user, req);
+    return {
+      ...tokens,
+      user: user.toJSON() as any,
+      isNewUser,
+      onboardingStatus: user.onboardingStatus,
+    };
+  }
+
+  /**
+   * Decide where the Google callback may redirect. Only the app's own schemes
+   * and the configured web origins are allowed — anything else would let a
+   * crafted link send the sign-in result to someone else's site.
+   */
+  resolveOAuthRedirect(state?: string): OAuthRedirectTarget {
+    const webBase = (this.configService.get<string>('FRONTEND_URL') || 'http://localhost:3000').replace(/\/+$/, '');
+    const fallback: OAuthRedirectTarget = { kind: 'web', url: `${webBase}/auth/callback` };
+    if (!state) return fallback;
+
+    let parsed: URL;
+    try {
+      parsed = new URL(state);
+    } catch {
+      return { kind: 'rejected', url: '', reason: 'The return link is not a valid URL.' };
+    }
+
+    const allowExpoGo =
+      this.configService.get<string>('OAUTH_ALLOW_EXPO_GO') === 'true' ||
+      this.configService.get<string>('NODE_ENV') !== 'production';
+    // App schemes from app.json "scheme" (default horohouse); override with
+    // OAUTH_APP_SCHEMES=horohouse,myotherscheme
+    const configured = (this.configService.get<string>('OAUTH_APP_SCHEMES') || 'horohouse')
+      .split(',').map((x) => x.trim().toLowerCase().replace(/:\/*$/, '')).filter(Boolean);
+    const appSchemes = [
+      ...configured.flatMap((x) => [`${x}:`, `exp+${x}:`]),
+      ...(allowExpoGo ? ['exp:', 'exps:'] : []),
+    ];
+
+    if (appSchemes.includes(parsed.protocol)) {
+      const challenge = parsed.searchParams.get('cc') || undefined;
+      // Drop anything the app shouldn't receive from the start URL
+      for (const k of ['code', 'token', 'refresh', 'error', 'isNewUser', 'onboardingStatus']) parsed.searchParams.delete(k);
+      return { kind: 'app', url: parsed.toString(), challenge };
+    }
+
+    if (parsed.protocol === 'https:' || parsed.protocol === 'http:') {
+      const allowed = [webBase, ...(this.configService.get<string>('OAUTH_WEB_REDIRECTS') || '').split(',')]
+        .map((o) => o.trim())
+        .filter(Boolean)
+        .map((o) => {
+          try { return new URL(o).origin; } catch { return null; }
+        })
+        .filter(Boolean) as string[];
+      if (allowed.includes(parsed.origin)) return { kind: 'web', url: parsed.toString() };
+    }
+
+    this.logger.warn(`Rejected OAuth redirect target: ${parsed.protocol}//${parsed.host}`);
+    const reason = parsed.protocol === 'exp:' || parsed.protocol === 'exps:'
+      ? 'Expo Go links are turned off on this server. Set OAUTH_ALLOW_EXPO_GO=true in the backend .env (or use a development build).'
+      : `The return link scheme "${parsed.protocol}" is not allowed. Add it to OAUTH_APP_SCHEMES (app) or OAUTH_WEB_REDIRECTS (web) in the backend .env.`;
+    return { kind: 'rejected', url: '', reason };
+  }
+
+  /**
+   * Store a one-time code (2 min) for the app. It is bound to the app's PKCE
+   * challenge, so only the app that started the sign-in can use it.
+   */
+  async issueOAuthCode(user: UserDocument, challenge: string, isNewUser: boolean): Promise<string> {
+    if (!/^[A-Za-z0-9_-]{43,128}$/.test(challenge)) {
+      throw new BadRequestException('Missing or invalid sign-in challenge');
+    }
+    const code = crypto.randomBytes(32).toString('base64url');
+    await this.userModel.updateOne(
+      { _id: user._id },
+      {
+        oauthCodeHash: sha256(code),
+        oauthCodeChallenge: challenge,
+        oauthCodeExpires: new Date(Date.now() + OAUTH_CODE_TTL_MS),
+        oauthCodeNewUser: isNewUser,
+      },
+    );
+    return code;
+  }
+
+  /**
+   * App side of Google sign-in: swap the one-time code + PKCE verifier for tokens.
+   */
+  async exchangeOAuthCode(code: string, codeVerifier: string, req?: any): Promise<AuthTokens> {
+    // Atomically consume the code so it works exactly once
+    const consumed = await this.userModel
+      .findOneAndUpdate(
+        { oauthCodeHash: sha256(code), oauthCodeExpires: { $gt: new Date() } },
+        { $unset: { oauthCodeHash: 1, oauthCodeChallenge: 1, oauthCodeExpires: 1, oauthCodeNewUser: 1 } },
+      )
+      .select('+oauthCodeChallenge +oauthCodeNewUser');
+
+    if (!consumed || !consumed.oauthCodeChallenge) {
+      throw new UnauthorizedException('This sign-in link has expired. Please try again.');
+    }
+    if (!safeEqual(sha256b64url(codeVerifier), consumed.oauthCodeChallenge)) {
+      this.logger.warn(`OAuth code for ${consumed._id} used with a wrong verifier`);
+      throw new UnauthorizedException('This sign-in link was not started on this device.');
+    }
+
+    const user = await this.userModel.findById(consumed._id);
+    if (!user || !user.isActive) {
+      throw new UnauthorizedException('User not found or inactive');
+    }
+
+    const tokens = await this.generateTokens(user, req);
+    return {
+      ...tokens,
+      user: user.toJSON(),
+      isNewUser: !!consumed.oauthCodeNewUser,
+      onboardingStatus: user.onboardingStatus,
+    };
+  }
+
+  /**
+   * Does an account exist for this email? Lets the app send people to "Log in"
+   * instead of failing at the end of sign-up (registration reveals this anyway).
+   */
+  async checkEmail(email: string): Promise<{ exists: boolean; hasPassword: boolean; hasGoogle: boolean }> {
+    const user = await this.userModel
+      .findOne({ email: emailQuery(email) })
+      .select('+password')
+      .lean();
+    return {
+      exists: !!user,
+      hasPassword: !!(user as any)?.password,
+      hasGoogle: !!(user as any)?.googleId,
+    };
   }
 
   /**
@@ -494,35 +681,50 @@ async registerWithEmail(dto: RegisterWithEmailDto, req?: any): Promise<AuthToken
 
       const formattedPhone = this.smsService.formatPhoneNumber(phoneNumber);
 
-      const user = await this.userModel.findOne({ phoneNumber: formattedPhone });
+      const user = await this.userModel
+        .findOne({ phoneNumber: formattedPhone })
+        .select('+phoneVerificationCode +phoneVerificationAttempts');
 
       if (!user) {
-        throw new UnauthorizedException('User not found');
-      }
-
-      if (!user.phoneVerificationCode || !user.phoneVerificationExpires) {
-        throw new UnauthorizedException('No verification code found');
-      }
-
-      if (user.phoneVerificationExpires < new Date()) {
-        throw new UnauthorizedException('Verification code has expired');
-      }
-
-      if (user.phoneVerificationCode !== verificationCode) {
         throw new UnauthorizedException('Invalid verification code');
       }
 
-      // Mark phone as verified
-      user.phoneVerified = true;
-      user.phoneVerificationCode = undefined;
-      user.phoneVerificationExpires = undefined;
-      await user.save();
+      await this.checkPhoneCode(user, verificationCode);
 
       return { message: 'Phone number verified successfully' };
     } catch (error) {
       this.logger.error('Phone verification failed:', error);
       throw error;
     }
+  }
+
+  /**
+   * Check an SMS code (stored hashed). Five wrong tries burn the code, so a
+   * 6-digit code can't be guessed. On success the phone is marked verified.
+   */
+  private async checkPhoneCode(user: UserDocument, code: string): Promise<void> {
+    if (!user.phoneVerificationCode || !user.phoneVerificationExpires) {
+      throw new UnauthorizedException('No verification code found. Please request a new one.');
+    }
+    if (user.phoneVerificationExpires < new Date()) {
+      throw new UnauthorizedException('Verification code has expired');
+    }
+    if ((user.phoneVerificationAttempts ?? 0) >= MAX_CODE_ATTEMPTS) {
+      throw new UnauthorizedException('Too many wrong codes. Please request a new one.');
+    }
+    const stored = user.phoneVerificationCode;
+    const given = String(code ?? '').trim();
+    // Codes sent before this update were stored in clear (they expire within 10 min)
+    const ok = stored.length === 64 ? safeEqual(stored, sha256(given)) : safeEqual(stored, given);
+    if (!ok) {
+      await this.userModel.updateOne({ _id: user._id }, { $inc: { phoneVerificationAttempts: 1 } });
+      throw new UnauthorizedException('Invalid verification code');
+    }
+    user.phoneVerified = true;
+    user.phoneVerificationCode = undefined;
+    user.phoneVerificationExpires = undefined;
+    user.phoneVerificationAttempts = 0;
+    await user.save();
   }
 
   /**
@@ -539,24 +741,32 @@ async registerWithEmail(dto: RegisterWithEmailDto, req?: any): Promise<AuthToken
         throw new UnauthorizedException('User not found or inactive');
       }
 
-      // Find the session with this refresh token
-      // Prefer locating the session by sessionId embedded in the token if available.
-      let session = undefined as any;
-      if (payload && payload.sessionId) {
-        session = user.sessions.find(s => s.id === payload.sessionId && s.isActive);
-        if (!session) {
-          this.logger.warn(`Refresh attempt for user ${user._id} provided sessionId ${payload.sessionId} but no active session was found`);
-        }
-      }
-      const hashedIncoming = crypto.createHash('sha256').update(refreshToken).digest('hex');
+      const hashedIncoming = sha256(refreshToken);
+      const now = Date.now();
+
+      // The token says which session it belongs to; older tokens may not
+      let session: any = payload?.sessionId
+        ? user.sessions.find(s => s.id === payload.sessionId && s.isActive)
+        : user.sessions.find(s => s.isActive && (s.refreshToken === hashedIncoming || s.refreshToken === refreshToken));
 
       if (!session) {
-        session = user.sessions.find(s => s.refreshToken === hashedIncoming && s.isActive);
-      }
-
-      if (!session) {
-        this.logger.error(`Invalid refresh token for user ${user._id}: session not found (payload.sessionId=${payload?.sessionId})`);
         throw new UnauthorizedException('Invalid refresh token - session not found');
+      }
+
+      // Each refresh token works once. The current one is stored hashed (or in
+      // clear for sessions rotated before this fix); the previous one is still
+      // accepted for a few seconds in case two requests refreshed at once.
+      const isCurrent = session.refreshToken === hashedIncoming || session.refreshToken === refreshToken;
+      const isRecentPrev =
+        session.prevRefreshToken === hashedIncoming &&
+        session.rotatedAt && now - new Date(session.rotatedAt).getTime() < ROTATION_GRACE_MS;
+
+      if (!isCurrent && !isRecentPrev) {
+        // An old token came back: it was copied. End this session everywhere.
+        this.logger.warn(`Refresh token reuse for user ${user._id}, session ${session.id}: session revoked`);
+        user.sessions = user.sessions.filter(s => s.id !== session.id);
+        await user.save();
+        throw new UnauthorizedException('Session ended. Please log in again.');
       }
 
       // Check if session has expired
@@ -573,7 +783,6 @@ async registerWithEmail(dto: RegisterWithEmailDto, req?: any): Promise<AuthToken
         session.ipAddress = this.getClientIp(req);
         session.userAgent = req.headers['user-agent'] || 'Unknown';
       }
-      await user.save();
 
       const tokens = await this.generateTokens(user, req, session.id);
 
@@ -634,7 +843,7 @@ async registerWithEmail(dto: RegisterWithEmailDto, req?: any): Promise<AuthToken
   /**
    * Change user password
    */
-  async changePassword(userId: string, currentPassword: string, newPassword: string): Promise<{ message: string }> {
+  async changePassword(userId: string, currentPassword: string, newPassword: string, currentSessionId?: string): Promise<{ message: string }> {
     // Find user including password explicitly
     const user = await this.userModel.findById(userId).select('+password');
     if (!user) {
@@ -654,8 +863,9 @@ async registerWithEmail(dto: RegisterWithEmailDto, req?: any): Promise<AuthToken
     // Hash new password
     const hashedNewPassword = await bcrypt.hash(newPassword, 12);
 
-    // Update password and invalidate all sessions except current one (optional)
+    // Update password and sign out every other device
     user.password = hashedNewPassword;
+    user.sessions = currentSessionId ? user.sessions.filter(s => s.id === currentSessionId) : [];
     await user.save();
 
     this.logger.log(`Password changed for user: ${user._id}`);
@@ -733,6 +943,7 @@ async registerWithEmail(dto: RegisterWithEmailDto, req?: any): Promise<AuthToken
       return plainSessions.map((session: any) => ({
         ...session,
         refreshToken: undefined,
+        prevRefreshToken: undefined,
       })) as UserSession[];
     } catch (error) {
       this.logger.error('Get sessions failed:', error);
@@ -807,11 +1018,15 @@ async registerWithEmail(dto: RegisterWithEmailDto, req?: any): Promise<AuthToken
    */
   async resendEmailVerification(user: User): Promise<{ message: string }> {
     try {
-      if (!user.email) {
+      const userId = user._id ? user._id.toString() : (user as any).id || (user as any).sub;
+      const doc = await this.userModel.findById(userId);
+      if (!doc) throw new NotFoundException('User not found');
+
+      if (!doc.email) {
         throw new BadRequestException('User does not have an email address');
       }
 
-      if (user.emailVerified) {
+      if (doc.emailVerified) {
         throw new BadRequestException('Email is already verified');
       }
 
@@ -819,14 +1034,13 @@ async registerWithEmail(dto: RegisterWithEmailDto, req?: any): Promise<AuthToken
       const verificationToken = crypto.randomBytes(32).toString('hex');
       const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
 
-      const userId = user._id ? user._id.toString() : (user as any).id || (user as any).sub;
       await this.userModel.findByIdAndUpdate(userId, {
         emailVerificationToken: verificationToken,
         emailVerificationExpires: expiresAt
       });
 
-      // In a real implementation, you'd send an email here
-      this.logger.log(`Email verification resent to: ${user.email}`);
+      await this.emailService.sendEmailVerification(doc.email, doc.name, verificationToken);
+      this.logger.log(`Email verification resent to user ${userId}`);
 
       return { message: 'Verification email sent successfully' };
     } catch (error) {
@@ -843,6 +1057,9 @@ async registerWithEmail(dto: RegisterWithEmailDto, req?: any): Promise<AuthToken
       if (user.phoneVerified) {
         throw new BadRequestException('Phone number is already verified');
       }
+      if (isPlaceholderPhone(user.phoneNumber)) {
+        throw new BadRequestException('Add a phone number to your profile first');
+      }
 
       // Generate new verification code
       const verificationCode = this.smsService.generateVerificationCode();
@@ -850,8 +1067,10 @@ async registerWithEmail(dto: RegisterWithEmailDto, req?: any): Promise<AuthToken
 
       const userId = user._id ? user._id.toString() : (user as any).id || (user as any).sub;
       await this.userModel.findByIdAndUpdate(userId, {
-        phoneVerificationCode: verificationCode,
-        phoneVerificationExpires: expiresAt
+        phoneVerificationCode: sha256(String(verificationCode)),
+        phoneVerificationExpires: expiresAt,
+        phoneVerificationSentAt: new Date(),
+        phoneVerificationAttempts: 0,
       });
 
       // Send SMS
@@ -861,7 +1080,7 @@ async registerWithEmail(dto: RegisterWithEmailDto, req?: any): Promise<AuthToken
         throw new BadRequestException('Failed to send verification code');
       }
 
-      this.logger.log(`Phone verification resent to: ${user.phoneNumber}`);
+      this.logger.log(`Phone verification resent to user ${userId}`);
 
       return { message: 'Verification code sent successfully' };
     } catch (error) {
@@ -906,21 +1125,16 @@ async registerWithEmail(dto: RegisterWithEmailDto, req?: any): Promise<AuthToken
       const normalizedEmail = email.trim().toLowerCase();
 
       // Find user by email (case-insensitive)
-      const user = await this.userModel.findOne({
-        email: { $regex: `^${normalizedEmail}$`, $options: 'i' }
-      });
+      const user = await this.userModel.findOne({ email: emailQuery(normalizedEmail) });
 
       // Always return success message (don't reveal if email exists)
-      if (!user) {
-        this.logger.log(`Password reset requested for non-existent email: ${normalizedEmail}`);
+      if (!user || !user.isActive) {
+        this.logger.log('Password reset requested for an unknown or inactive email');
         return { message: 'If an account exists with this email, you will receive a password reset link shortly.' };
       }
 
-      // Check if user has a password (not OAuth-only user)
-      if (!user.password) {
-        this.logger.log(`Password reset requested for OAuth-only user: ${normalizedEmail}`);
-        return { message: 'If an account exists with this email, you will receive a password reset link shortly.' };
-      }
+      // Google-only accounts get the email too: it's how they set a first password
+      // (needed before they can disconnect Google). They own the inbox anyway.
 
       // Generate reset token
       const resetToken = crypto.randomBytes(32).toString('hex');
@@ -990,7 +1204,7 @@ async registerWithEmail(dto: RegisterWithEmailDto, req?: any): Promise<AuthToken
       const user = await this.userModel.findOne({
         resetPasswordToken: hashedToken,
         resetPasswordExpires: { $gt: new Date() }
-      });
+      }).select('+password +resetPasswordToken');
 
       if (!user) {
         throw new UnauthorizedException('Invalid or expired password reset token');
@@ -1054,17 +1268,22 @@ async registerWithEmail(dto: RegisterWithEmailDto, req?: any): Promise<AuthToken
 
     const accessTokenOptions: JwtSignOptions = {
       secret: this.configService.get<string>('JWT_SECRET'),
-      expiresIn: this.parseTokenExpiration(this.configService.get<string>('JWT_EXPIRATION', '1h')),
+      // jsonwebtoken reads a number as SECONDS (this used to pass milliseconds,
+      // which made tokens last 1000× longer than configured)
+      expiresIn: Math.floor(this.parseTokenExpiration(this.configService.get<string>('JWT_EXPIRATION', '1h')) / 1000),
     };
 
     const refreshTokenOptions: JwtSignOptions = {
       secret: this.configService.get<string>('JWT_REFRESH_SECRET'),
-      expiresIn: this.parseTokenExpiration(this.configService.get<string>('JWT_REFRESH_EXPIRATION', '7d')),
+      // jsonwebtoken reads a number as SECONDS (this used to pass milliseconds,
+      // which made tokens last 1000× longer than configured)
+      expiresIn: Math.floor(this.parseTokenExpiration(this.configService.get<string>('JWT_REFRESH_EXPIRATION', '7d')) / 1000),
     };
 
     const [accessToken, refreshToken] = await Promise.all([
       this.jwtService.signAsync(payload, accessTokenOptions),
-      this.jwtService.signAsync(payload, refreshTokenOptions),
+      // Unique id so every rotation yields a different token, even within one second
+      this.jwtService.signAsync(payload, { ...refreshTokenOptions, jwtid: crypto.randomUUID() }),
     ]);
 
     // Create or update session
@@ -1077,7 +1296,7 @@ async registerWithEmail(dto: RegisterWithEmailDto, req?: any): Promise<AuthToken
       const userAgent = req?.headers?.['user-agent'] || 'Unknown';
       const ipAddress = this.getClientIp(req);
 
-      const hashedRefreshToken = crypto.createHash('sha256').update(refreshToken).digest('hex');
+      const hashedRefreshToken = sha256(refreshToken);
 
       const newSession: UserSession = {
         id: sessionId,
@@ -1108,11 +1327,20 @@ async registerWithEmail(dto: RegisterWithEmailDto, req?: any): Promise<AuthToken
 
       await user.save();
     } else {
-      // Update existing session with new refresh token
+      // Rotate: store the new token's hash (it used to be stored in clear here),
+      // remember the previous one briefly, and keep the session alive while used
       const sessionIndex = user.sessions.findIndex(s => s.id === existingSessionId);
       if (sessionIndex !== -1) {
-        user.sessions[sessionIndex].refreshToken = refreshToken;
-        user.sessions[sessionIndex].lastActive = new Date();
+        const sess = user.sessions[sessionIndex];
+        const prev = sess.refreshToken;
+        sess.prevRefreshToken = prev && prev.length === 64 ? prev : sha256(prev || '');
+        sess.rotatedAt = new Date();
+        sess.refreshToken = sha256(refreshToken);
+        sess.lastActive = new Date();
+        sess.expiresAt = new Date(
+          Date.now() + this.parseTokenExpiration(this.configService.get<string>('JWT_REFRESH_EXPIRATION', '7d')),
+        );
+        user.markModified('sessions');
         await user.save();
       }
     }
@@ -1310,7 +1538,8 @@ async registerWithEmail(dto: RegisterWithEmailDto, req?: any): Promise<AuthToken
     const hasRealPhone = user.phoneNumber && !user.phoneNumber.startsWith('google_') && !user.phoneNumber.startsWith('temp_');
 
     return {
-      onboardingStatus: user.onboardingStatus,
+      onboardingStatus: onboardingDone(user) ? OnboardingStatus.COMPLETED
+        : user.onboardingStatus === OnboardingStatus.COMPLETED ? OnboardingStatus.NOT_STARTED : user.onboardingStatus,
       role: user.role,
       phoneNumber: hasRealPhone ? user.phoneNumber : null,
       name: user.name,
@@ -1335,7 +1564,7 @@ async registerWithEmail(dto: RegisterWithEmailDto, req?: any): Promise<AuthToken
     }
 
     // Only allow role selection if onboarding is not yet completed
-    if (user.onboardingStatus === OnboardingStatus.COMPLETED) {
+    if (onboardingDone(user)) {
       throw new BadRequestException('Onboarding is already completed. Role cannot be changed here.');
     }
 
@@ -1368,7 +1597,7 @@ async registerWithEmail(dto: RegisterWithEmailDto, req?: any): Promise<AuthToken
     }
 
     // Only allow phone setting if onboarding is not completed
-    if (user.onboardingStatus === OnboardingStatus.COMPLETED) {
+    if (onboardingDone(user)) {
       throw new BadRequestException('Onboarding is already completed.');
     }
 
@@ -1404,13 +1633,13 @@ async registerWithEmail(dto: RegisterWithEmailDto, req?: any): Promise<AuthToken
    * Step 3: Complete onboarding.
    * Validates that role and phone are properly set before marking complete.
    */
-  async completeGoogleOnboarding(userId: string): Promise<AuthTokens> {
+  async completeGoogleOnboarding(userId: string, req?: any, currentSessionId?: string): Promise<AuthTokens> {
     const user = await this.userModel.findById(userId);
     if (!user) {
       throw new NotFoundException('User not found');
     }
 
-    if (user.onboardingStatus === OnboardingStatus.COMPLETED) {
+    if (onboardingDone(user)) {
       throw new BadRequestException('Onboarding is already completed.');
     }
 
@@ -1433,8 +1662,10 @@ async registerWithEmail(dto: RegisterWithEmailDto, req?: any): Promise<AuthToken
 
     this.logger.log(`Google onboarding completed for user ${userId}`);
 
-    // Generate fresh tokens so the JWT carries the updated role
-    const tokens = await this.generateTokens(user);
+    // Generate fresh tokens so the JWT carries the updated role — on the same
+    // session (it used to open a second, unnamed session for every sign-up)
+    const hasSession = !!currentSessionId && user.sessions.some(s => s.id === currentSessionId && s.isActive);
+    const tokens = await this.generateTokens(user, req, hasSession ? currentSessionId : undefined);
 
     return {
       ...tokens,

@@ -147,6 +147,8 @@ class CreateRoomDto {
     roomType;
     maxGuests;
     bedCount;
+    quantity;
+    description;
     bedType;
     price;
     cleaningFee;
@@ -192,6 +194,21 @@ __decorate([
     (0, class_validator_1.Max)(10),
     __metadata("design:type", Number)
 ], CreateRoomDto.prototype, "bedCount", void 0);
+__decorate([
+    (0, swagger_1.ApiPropertyOptional)({ example: 10, description: 'How many identical rooms of this type the hotel has' }),
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsNumber)(),
+    (0, class_validator_1.Min)(1),
+    (0, class_validator_1.Max)(500),
+    __metadata("design:type", Number)
+], CreateRoomDto.prototype, "quantity", void 0);
+__decorate([
+    (0, swagger_1.ApiPropertyOptional)({ example: 'City view, recently renovated, minibar' }),
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.Length)(0, 500),
+    __metadata("design:type", String)
+], CreateRoomDto.prototype, "description", void 0);
 __decorate([
     (0, swagger_1.ApiPropertyOptional)({ enum: room_schema_1.BedType, example: room_schema_1.BedType.QUEEN }),
     (0, class_validator_1.IsOptional)(),
@@ -263,7 +280,8 @@ __decorate([
         example: 'https://www.airbnb.com/calendar/ical/XXXXXX.ics',
         description: 'Public iCal (.ics) feed URL from an external booking platform',
     }),
-    (0, class_validator_1.IsUrl)({ protocols: ['http', 'https'] }),
+    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.Length)(10, 2048),
     __metadata("design:type", String)
 ], SetIcalUrlDto.prototype, "icalUrl", void 0);
 class RoomAvailabilityQueryDto {

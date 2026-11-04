@@ -2,6 +2,7 @@ export declare class BookingGuestsDto {
     adults: number;
     children?: number;
     infants?: number;
+    pets?: number;
 }
 export declare class CreateBookingDto {
     propertyId: string;
