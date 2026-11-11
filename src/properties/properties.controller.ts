@@ -727,7 +727,7 @@ export class PropertiesController {
   // saving anything. The app uses /users/me/favorites (UsersController), which works.
 
   @Get('my/favorites')
-  @Roles(UserRole.REGISTERED_USER, UserRole.HOST, UserRole.AGENT, UserRole.LANDLORD, UserRole.ADMIN)
+  @Roles(UserRole.REGISTERED_USER, UserRole.STUDENT, UserRole.HOST, UserRole.AGENT, UserRole.LANDLORD, UserRole.ADMIN)
   @ApiOperation({ summary: 'Get current user\'s favorite properties' })
   @ApiBearerAuth()
   @ApiQuery({ name: 'page', required: false, type: Number })

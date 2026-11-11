@@ -25,7 +25,7 @@ export class ComparisonController {
 
   @Post()
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.REGISTERED_USER, UserRole.AGENT, UserRole.ADMIN)
+  @Roles(UserRole.REGISTERED_USER, UserRole.STUDENT, UserRole.AGENT, UserRole.ADMIN)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Create a new property comparison' })
   @ApiResponse({ status: 201, description: 'Comparison created successfully' })
@@ -39,7 +39,7 @@ export class ComparisonController {
 
   @Get()
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.REGISTERED_USER, UserRole.AGENT, UserRole.ADMIN)
+  @Roles(UserRole.REGISTERED_USER, UserRole.STUDENT, UserRole.AGENT, UserRole.ADMIN)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get all comparisons for the authenticated user' })
   async findAll(@Req() req: FastifyRequest & { user: User }) {
@@ -77,7 +77,7 @@ export class ComparisonController {
 
   @Post(':id/share')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.REGISTERED_USER, UserRole.AGENT, UserRole.ADMIN)
+  @Roles(UserRole.REGISTERED_USER, UserRole.STUDENT, UserRole.AGENT, UserRole.ADMIN)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Generate share URL for a comparison' })
   @ApiParam({ name: 'id', type: String })
@@ -90,7 +90,7 @@ export class ComparisonController {
 
   @Patch(':id')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.REGISTERED_USER, UserRole.AGENT, UserRole.ADMIN)
+  @Roles(UserRole.REGISTERED_USER, UserRole.STUDENT, UserRole.AGENT, UserRole.ADMIN)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Update a comparison' })
   @ApiParam({ name: 'id', type: String })
@@ -104,7 +104,7 @@ export class ComparisonController {
 
   @Delete(':id')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.REGISTERED_USER, UserRole.AGENT, UserRole.ADMIN)
+  @Roles(UserRole.REGISTERED_USER, UserRole.STUDENT, UserRole.AGENT, UserRole.ADMIN)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Delete a comparison' })
   @ApiParam({ name: 'id', type: String })
