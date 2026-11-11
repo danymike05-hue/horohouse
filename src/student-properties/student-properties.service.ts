@@ -79,8 +79,9 @@ export class StudentPropertiesService {
       filter.neighborhood = { $regex: escapeRegex(dto.neighborhood), $options: 'i' };
     }
     if (dto.nearestCampus) {
+      // The whole name (any case): "Université de Yaoundé I" must not also match "… Yaoundé II"
       filter['studentDetails.nearestCampus'] = {
-        $regex: escapeRegex(dto.nearestCampus),
+        $regex: `^\\s*${escapeRegex(dto.nearestCampus.trim())}\\s*$`,
         $options: 'i',
       };
     }
