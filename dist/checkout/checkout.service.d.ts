@@ -1,0 +1,74 @@
+import { OnModuleInit } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { Model } from 'mongoose';
+import { BookingPaymentGateway } from './booking-payment.gateway';
+import { CamerPayClient } from './camerpay.client';
+import { CheckoutQuoteQueryDto, CreateCheckoutPaymentDto } from './dto/create-checkout-payment.dto';
+import { PurchaseGateway, QuoteView } from './purchase.gateway';
+import { CheckoutPaymentDocument, CheckoutPurpose, CheckoutStatus } from './schemas/checkout-payment.schema';
+import { NotificationsService } from '../notifications/notifications.service';
+export interface CheckoutPaymentView {
+    id: string;
+    purpose: CheckoutPurpose;
+    bookingId?: string;
+    purchase?: {
+        label?: string;
+        planName?: string;
+        billingCycle?: string;
+        propertyId?: string;
+        propertyTitle?: string;
+        boostType?: string;
+        duration?: number;
+        endsAt?: string;
+    };
+    method: 'mobile_money' | 'card' | 'wallet' | 'plan_credit';
+    operator?: string;
+    phoneMasked?: string;
+    amount: number;
+    currency: 'XAF';
+    status: CheckoutStatus;
+    failureReason?: string;
+    payUrl?: string;
+    expiresAt: string;
+    createdAt?: string;
+    paidAt?: string;
+}
+export declare class CheckoutService implements OnModuleInit {
+    private readonly payments;
+    private readonly camerpay;
+    private readonly bookings;
+    private readonly purchases;
+    private readonly notifications?;
+    private readonly logger;
+    private readonly publicApiUrl;
+    private readonly momoTtlMs;
+    private readonly cardTtlMs;
+    private readonly returnSchemes;
+    private readonly frontendUrl?;
+    private readonly defaultAppReturn;
+    constructor(payments: Model<CheckoutPaymentDocument>, camerpay: CamerPayClient, bookings: BookingPaymentGateway, purchases: PurchaseGateway, config: ConfigService, notifications?: NotificationsService | undefined);
+    onModuleInit(): Promise<void>;
+    quote(userId: string, dto: CheckoutQuoteQueryDto): Promise<QuoteView>;
+    private resolveMomo;
+    private checkLimits;
+    createPayment(userId: string, dto: CreateCheckoutPaymentDto): Promise<CheckoutPaymentView>;
+    private createPurchasePayment;
+    private payInstantly;
+    private samePurchase;
+    getPayment(userId: string, paymentId: string): Promise<CheckoutPaymentView>;
+    cancelPayment(userId: string, paymentId: string): Promise<CheckoutPaymentView>;
+    handleWebhook(rawBody: Buffer | undefined, signature: string | string[] | undefined): Promise<{
+        received: true;
+    }>;
+    private applyProviderStatus;
+    private fulfil;
+    private fulfilPurchase;
+    private computeExpiry;
+    private flag;
+    expireOverdue(batchSize?: number): Promise<number>;
+    buildReturnRedirect(paymentId: string | undefined): Promise<string>;
+    private findOwned;
+    private validateReturnUrl;
+    private toView;
+    private toHttpError;
+}

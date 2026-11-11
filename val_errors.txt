@@ -1,0 +1,12 @@
+[
+  {
+    "target": {
+      "propertyId": "69b761a382dcf182762a48ef"
+    },
+    "property": "participantId",
+    "children": [],
+    "constraints": {
+      "isMongoId": "participantId must be a mongodb id"
+    }
+  }
+]
