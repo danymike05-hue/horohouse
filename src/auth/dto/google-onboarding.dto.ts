@@ -3,14 +3,15 @@ import { UserRole } from '../../users/schemas/user.schema';
 
 /**
  * Self-assignable roles during Google onboarding.
- * Admin/Guest/Student are excluded — admin is never self-assignable,
- * guest is implicit, and student has its own verification flow.
+ * Admin and Guest are excluded: admin is never self-assignable and guest is implicit.
+ * Students pick their campus and send their student card afterwards (student profile).
  */
 const ONBOARDING_ROLES: UserRole[] = [
   UserRole.REGISTERED_USER,
   UserRole.HOST,
   UserRole.LANDLORD,
   UserRole.AGENT,
+  UserRole.STUDENT,
 ];
 
 export class SelectRoleDto {

@@ -1606,6 +1606,7 @@ async registerWithEmail(dto: RegisterWithEmailDto, req?: any): Promise<AuthToken
     UserRole.HOST,
     UserRole.LANDLORD,
     UserRole.AGENT,
+    UserRole.STUDENT,
   ];
 
   /**
