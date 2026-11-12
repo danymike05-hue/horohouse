@@ -562,7 +562,7 @@ export class UsersService {
       .select('recentlyViewed')
       .populate({
         path: 'recentlyViewed.propertyId',
-        select: 'title images price currency address city neighborhood country type propertyType listingType amenities shortTermAmenities averageRating reviewCount isFeatured isVerified availability approvalStatus isActive pricingUnit ownerId agentId createdAt',
+        select: 'title images price currency address city neighborhood country type propertyType listingType amenities shortTermAmenities averageRating reviewCount isFeatured isVerified availability approvalStatus isActive pricingUnit ownerId agentId createdAt isStudentFriendly studentDetails latitude longitude',
         populate: [
           { path: 'ownerId', select: 'name profilePicture' },
           { path: 'agentId', select: 'name profilePicture agency' },
