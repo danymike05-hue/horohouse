@@ -25,6 +25,12 @@ import { NotificationType } from '../notifications/schemas/notification.schema';
 /** Typed text is matched literally (a campus name with brackets used to break the search) */
 const escapeRegex = (v: string) => String(v).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
+const ACCENTS: Record<string, string> = { a: 'aàáâãä', e: 'eèéêë', i: 'iìíîï', o: 'oòóôõö', u: 'uùúûü', c: 'cç', n: 'nñ' };
+/** Literal too, but "Yaounde" and "Yaoundé" (or "Thies" and "Thiès") find the same city */
+const accentBlind = (v: string) =>
+  escapeRegex(String(v).normalize('NFD').replace(/[̀-ͯ]/g, '').trim())
+    .replace(/[aeioucn]/gi, (ch) => `[${ACCENTS[ch.toLowerCase()]}]`);
+
 @Injectable()
 export class StudentPropertiesService {
   private readonly logger = new Logger(StudentPropertiesService.name);
@@ -73,7 +79,7 @@ export class StudentPropertiesService {
 
     // ── Location ─────────────────────────────────────────────────────────────
     if (dto.city) {
-      filter.city = { $regex: escapeRegex(dto.city), $options: 'i' };
+      filter.city = { $regex: accentBlind(dto.city), $options: 'i' };
     }
     if (dto.neighborhood) {
       filter.neighborhood = { $regex: escapeRegex(dto.neighborhood), $options: 'i' };
