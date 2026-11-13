@@ -55,6 +55,16 @@ export class ChatController {
     }
 
     /**
+     * Open (or get back) my conversation with HoroHouse support.
+     * The app has no way to know which account is support, so the server picks it.
+     */
+    @Post('conversations/support')
+    @ApiOperation({ summary: 'Create or get my conversation with HoroHouse support' })
+    async createSupportConversation(@Request() req) {
+        return this.chatService.createSupportConversation(req.user.userId);
+    }
+
+    /**
      * Get user's conversations
      */
     @Get('conversations')

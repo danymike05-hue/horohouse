@@ -59,6 +59,32 @@ export class ChatService implements OnModuleInit {
     /**
      * Create or get existing conversation
      */
+    /**
+     * The account that answers support chats: SUPPORT_USER_ID when it's set (and that
+     * account exists), otherwise the longest-standing active admin.
+     */
+    private async supportAccountId(): Promise<string | null> {
+        const configured = process.env.SUPPORT_USER_ID;
+        if (configured && Types.ObjectId.isValid(configured)) {
+            const found = await this.userModel.findById(configured).select('_id').lean();
+            if (found) return String(found._id);
+        }
+        const admin = await this.userModel
+            .findOne({ role: 'admin', isActive: { $ne: false } })
+            .sort({ createdAt: 1 })
+            .select('_id')
+            .lean();
+        return admin ? String(admin._id) : null;
+    }
+
+    /** My conversation with HoroHouse support (made on first use) */
+    async createSupportConversation(userId: string): Promise<Conversation> {
+        const supportId = await this.supportAccountId();
+        if (!supportId) throw new NotFoundException('Support chat is not available right now');
+        if (supportId === String(userId)) throw new BadRequestException('You are the support account');
+        return this.createConversation(userId, { participantId: supportId } as CreateConversationDto);
+    }
+
     async createConversation(
         userId: string,
         dto: CreateConversationDto,
