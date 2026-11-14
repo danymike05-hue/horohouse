@@ -877,10 +877,13 @@ export class PropertiesService implements OnModuleInit {
           ...(listingType && Object.values(ListingType).includes(listingType) ? { listingType } : {}),
         },
       },
-      { $group: { _id: '$city', count: { $sum: 1 } } },
+      // One count per city, whatever the capitals or spaces ("Douala", "douala ", "DOUALA");
+      // the app also merges accents ("Yaoundé" / "Yaounde")
+      { $match: { city: { $type: 'string', $ne: '' } } },
+      { $group: { _id: { $toLower: { $trim: { input: '$city' } } }, city: { $first: { $trim: { input: '$city' } } }, count: { $sum: 1 } } },
       { $sort: { count: -1 } },
       { $limit: limit },
-      { $project: { _id: 0, city: '$_id', count: 1 } },
+      { $project: { _id: 0, city: 1, count: 1 } },
     ]);
 
     this.cacheSet(key, result, this.POPULAR_CITIES_TTL_MS);
