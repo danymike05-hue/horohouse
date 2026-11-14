@@ -10,6 +10,8 @@ export enum PropertyType {
   HOUSE = 'house',
   VILLA = 'villa',
   STUDIO = 'studio',
+  /** A room / bedroom (chambre) in a shared home */
+  ROOM = 'room',
   DUPLEX = 'duplex',
   BUNGALOW = 'bungalow',
   PENTHOUSE = 'penthouse',
