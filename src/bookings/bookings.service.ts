@@ -86,6 +86,8 @@ export interface AvailabilityResult {
   /** Room calendars only: how many identical rooms this type has. */
   capacity?: number;
   bookedRanges: Array<{
+    /** Host calendar only: the booking, to open it */
+    bookingId?: string;
     checkIn: Date;
     checkOut: Date;
     roomId?: string;
@@ -862,6 +864,7 @@ export class BookingsService {
       // The old select asked for guestCount / totalPrice, which don't exist on the schema.
       const guestCount = (b.guests?.adults ?? 0) + (b.guests?.children ?? 0);
       return {
+        bookingId: String(b._id),
         checkIn: b.checkIn,
         checkOut: b.checkOut,
         status: b.status,
