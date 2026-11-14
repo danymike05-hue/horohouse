@@ -374,6 +374,14 @@ export class WalletService {
     return wallet;
   }
 
+  async disableAutoWithdrawal(userId: string): Promise<WalletDocument> {
+    const wallet = await this.getOrCreateWallet(userId);
+    wallet.autoWithdrawal = false;
+    await wallet.save();
+    this.logger.log(`Auto-withdrawal disabled for user: ${userId}`);
+    return wallet;
+  }
+
   // ─── Queries / stats ────────────────────────────────────────────────────────
 
   // A host with no earnings yet has no wallet: these used to answer 404 "Wallet not found",

@@ -9,7 +9,7 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiOperation, ApiResponse, ApiQuery } from '@nestjs/swagger';
-import { IsIn, IsMongoId, IsNumber, IsOptional, IsString, Length, Matches, Max, Min } from 'class-validator';
+import { IsBoolean, IsIn, IsMongoId, IsNumber, IsOptional, IsString, Length, Matches, Max, Min } from 'class-validator';
 import { WalletService } from '../services/wallet.service';
 import { HostPayoutsService } from '../services/host-payouts.service';
 import { JwtAuthGuard } from '../../auth/guards/jwt.auth.guard';
@@ -44,6 +44,8 @@ class MobileMoneyDto {
 
 class AutoWithdrawDto {
   @IsNumber() @Min(0) threshold: number;
+  /** false turns automatic withdrawals off (the threshold is kept for next time) */
+  @IsOptional() @IsBoolean() enabled?: boolean;
 }
 
 @ApiTags('Wallet')
@@ -139,9 +141,10 @@ export class WalletController {
 
   @Post('auto-withdraw')
   @UseGuards(JwtAuthGuard)
-  @ApiOperation({ summary: 'Enable auto-withdrawal with threshold' })
-  @ApiResponse({ status: 200, description: 'Auto-withdrawal enabled' })
+  @ApiOperation({ summary: 'Turn auto-withdrawal on (with a threshold) or off ({ enabled: false })' })
+  @ApiResponse({ status: 200, description: 'Auto-withdrawal updated' })
   async enableAutoWithdrawal(@Body() dto: AutoWithdrawDto, @Req() req: any) {
+    if (dto?.enabled === false) return this.walletService.disableAutoWithdrawal(req.user.id);
     if (!dto || typeof dto.threshold !== 'number') {
       throw new BadRequestException('threshold is required');
     }
