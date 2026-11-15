@@ -36,7 +36,7 @@ class PairDto {
 
 export class ExerciseDto {
   @IsIn(EXERCISE_TYPES as unknown as string[]) type: string;
-  @IsOptional() @IsIn(['translate', 'meaning', 'pairs', 'complete']) instruction?: string;
+  @IsOptional() @IsIn(['translate', 'meaning', 'pairs', 'complete', 'listen', 'speak']) instruction?: string;
   @IsOptional() @IsString() @MaxLength(300) prompt?: string;
   @IsOptional() @IsString() @MaxLength(300) promptRomanization?: string;
   @IsOptional() @IsIn(LANG_LIST) promptLang?: string;
@@ -70,6 +70,7 @@ export class UpdateCourseDto {
 export class UnitDto {
   @IsString() @Length(2, 80) title: string;
   @IsOptional() @IsString() @MaxLength(200) description?: string;
+  @IsOptional() @IsString() @MaxLength(2000) tips?: string;
   @IsOptional() @IsIn(['A1', 'A2', 'B1', 'B2', 'C1', 'C2']) level?: string;
 }
 
@@ -88,4 +89,25 @@ export class DraftDto {
   @IsIn(LANG_LIST) baseLang: string;
   @IsString() @Length(3, 120) theme: string;
   @IsOptional() @IsIn(['A1', 'A2', 'B1', 'B2']) level?: string;
+}
+
+export class ExplainDto {
+  @IsIn(LANG_LIST) targetLang: string;
+  @IsIn(LANG_LIST) baseLang: string;
+  @IsString() @Length(1, 300) prompt: string;
+  @IsString() @Length(1, 300) expected: string;
+  @IsOptional() @IsString() @MaxLength(300) given?: string;
+}
+
+export class StoryCompleteDto {
+  @IsInt() @Min(0) @Max(20) correct: number;
+  @IsInt() @Min(1) @Max(20) total: number;
+}
+
+export class BuyDto {
+  @IsIn(['freeze', 'refill']) item: 'freeze' | 'refill';
+}
+
+export class SpendLivesDto {
+  @IsInt() @Min(1) @Max(5) count: number;
 }

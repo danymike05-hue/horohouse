@@ -5,11 +5,13 @@
 export interface Pair { fr: string; en: string }
 export interface ZhPhrase { zh: string; py: string; en: string; fr: string }
 export interface SeedLesson<T> { title: { en: string; fr: string }; phrases: T[] }
-export interface SeedUnit<T> { title: { en: string; fr: string }; level: string; lessons: SeedLesson<T>[] }
+/** tips.en is shown in courses explained in English, tips.fr in courses explained in French */
+export interface SeedUnit<T> { title: { en: string; fr: string }; level: string; lessons: SeedLesson<T>[]; tips?: { en: string; fr: string } }
 
 export const FR_EN_UNITS: SeedUnit<Pair>[] = [
   {
     title: { en: 'Greetings and introductions', fr: 'Salutations et présentations' },
+    tips: { en: 'Bonjour works all day; switch to Bonsoir in the evening. Use s\'il vous plaît with strangers and elders, s\'il te plaît with friends. Je m\'appelle literally means "I call myself".', fr: 'Hello s\'emploie toute la journée, Good evening le soir. Please se place souvent à la fin : Can you help me, please? On dit I am a student, avec « a » devant le métier.' },
     level: 'A1',
     lessons: [
       {
@@ -36,6 +38,7 @@ export const FR_EN_UNITS: SeedUnit<Pair>[] = [
   },
   {
     title: { en: 'Campus life', fr: 'La vie sur le campus' },
+    tips: { en: 'French nouns are masculine (le) or feminine (la). Before a vowel both become l\': l\'examen, l\'amphithéâtre. To ask where something is, say Où est… ?', fr: 'The sert pour le masculin et le féminin : the class, the teacher. Pour demander où se trouve quelque chose : Where is… ?' },
     level: 'A1',
     lessons: [
       {
@@ -62,6 +65,7 @@ export const FR_EN_UNITS: SeedUnit<Pair>[] = [
   },
   {
     title: { en: 'Finding a room', fr: 'Trouver une chambre' },
+    tips: { en: 'Le loyer is the monthly rent; la caution is the deposit you usually get back. Est-ce que turns a sentence into a yes/no question: Est-ce que l\'eau est comprise ?', fr: 'Rent = le loyer, deposit = la caution, landlord = le propriétaire. Pour une question oui/non, on inverse : Is water included? Can I visit tomorrow?' },
     level: 'A1',
     lessons: [
       {
@@ -88,6 +92,7 @@ export const FR_EN_UNITS: SeedUnit<Pair>[] = [
   },
   {
     title: { en: 'Daily life', fr: 'La vie de tous les jours' },
+    tips: { en: 'Combien ça coûte ? is the everyday way to ask a price. Je voudrais (I would like) is more polite than Je veux. À gauche = left, à droite = right, tout droit = straight on.', fr: 'How much does it cost? ou How much is it? pour un prix. I would like est plus poli que I want. On the left, on the right, straight ahead pour les directions.' },
     level: 'A1',
     lessons: [
       {
@@ -114,6 +119,7 @@ export const FR_EN_UNITS: SeedUnit<Pair>[] = [
   },
   {
     title: { en: 'Scholarships and studying abroad', fr: "Les bourses et les études à l'étranger" },
+    tips: { en: 'Postuler means to apply. In formal letters always use vous. A woman says J\'ai été admise (with an extra e).', fr: 'To apply for a scholarship = postuler à une bourse. Cover letter = lettre de motivation, transcript = relevé de notes, deadline = date limite.' },
     level: 'A2',
     lessons: [
       {
@@ -143,6 +149,7 @@ export const FR_EN_UNITS: SeedUnit<Pair>[] = [
 export const ZH_UNITS: SeedUnit<ZhPhrase>[] = [
   {
     title: { en: 'Greetings', fr: 'Salutations' },
+    tips: { en: 'Chinese has four tones, marked ā á ǎ à. The tone changes the meaning, so follow the pinyin marks. 你好 is used all day; 谢谢 is said xièxie, the second syllable light.', fr: 'Le chinois a quatre tons, notés ā á ǎ à. Le ton change le sens : suivez les accents du pinyin. 你好 se dit toute la journée ; 谢谢 se prononce xièxie, la deuxième syllabe légère.' },
     level: 'A1',
     lessons: [
       {
@@ -169,6 +176,7 @@ export const ZH_UNITS: SeedUnit<ZhPhrase>[] = [
   },
   {
     title: { en: 'Numbers and campus', fr: 'Les nombres et le campus' },
+    tips: { en: 'Numbers are built simply: 十一 = 11 (ten one), 二十 = 20 (two ten). 多少钱 asks a price. 去 means to go: 我去图书馆.', fr: 'Les nombres se construisent simplement : 十一 = 11 (dix un), 二十 = 20 (deux dix). 多少钱 demande un prix. 去 veut dire aller : 我去图书馆.' },
     level: 'A1',
     lessons: [
       {
@@ -195,6 +203,7 @@ export const ZH_UNITS: SeedUnit<ZhPhrase>[] = [
   },
   {
     title: { en: 'Daily life', fr: 'La vie de tous les jours' },
+    tips: { en: 'Chinese verbs don\'t change with the person: 我想, 你想, 他想. 太…了 means "too…". 不 before a verb makes it negative: 我不懂.', fr: 'Les verbes chinois ne se conjuguent pas : 我想, 你想, 他想. 太…了 veut dire « trop… ». 不 devant un verbe le rend négatif : 我不懂.' },
     level: 'A1',
     lessons: [
       {
@@ -221,6 +230,7 @@ export const ZH_UNITS: SeedUnit<ZhPhrase>[] = [
   },
   {
     title: { en: 'Studying in China', fr: 'Étudier en Chine' },
+    tips: { en: '留学 means studying abroad. 想 + verb = would like to. 会 + verb = can, for a learned skill: 我会说中文.', fr: '留学 veut dire étudier à l\'étranger. 想 + verbe = vouloir faire. 会 + verbe = savoir faire : 我会说中文.' },
     level: 'A2',
     lessons: [
       {
@@ -246,3 +256,60 @@ export const ZH_UNITS: SeedUnit<ZhPhrase>[] = [
     ],
   },
 ];
+
+
+// ── Stories: a short dialogue, then questions (asked in the explanation language) ──
+
+export interface StoryLine { speaker: string; target: string; base: { en: string; fr: string }; romanization?: string }
+export interface StoryQuestion { q: { en: string; fr: string }; options: { en: string; fr: string }[]; answer: number }
+export interface SeedStory { key: string; unitIndex: number; title: { en: string; fr: string }; level: string; lines: StoryLine[]; questions: StoryQuestion[] }
+
+/** French and English share one story: target is French for the French course, English for the English course */
+export const ROOM_STORY = {
+  key: 'room-visit',
+  unitIndex: 2,
+  title: { en: 'Visiting a room', fr: 'Visiter une chambre' },
+  level: 'A1',
+  lines: [
+    { speaker: 'Awa', fr: 'Bonjour, je cherche une chambre près du campus.', en: 'Hello, I am looking for a room near the campus.' },
+    { speaker: 'M. Ndi', fr: "Bonjour ! J'ai une chambre meublée à louer.", en: 'Hello! I have a furnished room to rent.' },
+    { speaker: 'Awa', fr: 'Combien coûte le loyer ?', en: 'How much is the rent?' },
+    { speaker: 'M. Ndi', fr: 'Le loyer est de quarante mille francs par mois.', en: 'The rent is forty thousand francs a month.' },
+    { speaker: 'Awa', fr: "Est-ce que l'eau est comprise ?", en: 'Is water included?' },
+    { speaker: 'M. Ndi', fr: "Oui, l'eau est comprise, mais pas l'électricité.", en: 'Yes, water is included, but not electricity.' },
+    { speaker: 'Awa', fr: 'Je peux visiter demain ?', en: 'Can I visit tomorrow?' },
+    { speaker: 'M. Ndi', fr: 'Bien sûr, à dix heures.', en: 'Of course, at ten o’clock.' },
+  ],
+  questions: [
+    { q: { en: 'What is Awa looking for?', fr: 'Que cherche Awa ?' },
+      options: [{ en: 'A room near the campus', fr: 'Une chambre près du campus' }, { en: 'A job', fr: 'Un travail' }, { en: 'A taxi', fr: 'Un taxi' }], answer: 0 },
+    { q: { en: 'How much is the rent?', fr: 'Combien coûte le loyer ?' },
+      options: [{ en: '14,000 francs a month', fr: '14 000 francs par mois' }, { en: '40,000 francs a month', fr: '40 000 francs par mois' }, { en: '400,000 francs a month', fr: '400 000 francs par mois' }], answer: 1 },
+    { q: { en: 'What is not included?', fr: "Qu'est-ce qui n'est pas compris ?" },
+      options: [{ en: 'Water', fr: "L'eau" }, { en: 'The furniture', fr: 'Les meubles' }, { en: 'Electricity', fr: "L'électricité" }], answer: 2 },
+  ],
+};
+
+export const MARKET_STORY = {
+  key: 'market-water',
+  unitIndex: 2,
+  title: { en: 'At the market', fr: 'Au marché' },
+  level: 'A1',
+  lines: [
+    { speaker: '阿瓦', zh: '你好！', py: 'nǐ hǎo!', en: 'Hello!', fr: 'Bonjour !' },
+    { speaker: '老板', zh: '你好！你要什么？', py: 'nǐ hǎo! nǐ yào shénme?', en: 'Hello! What would you like?', fr: 'Bonjour ! Que voulez-vous ?' },
+    { speaker: '阿瓦', zh: '我要水。多少钱？', py: 'wǒ yào shuǐ. duōshao qián?', en: 'I want water. How much is it?', fr: "Je veux de l'eau. Combien ça coûte ?" },
+    { speaker: '老板', zh: '三块钱。', py: 'sān kuài qián.', en: 'Three yuan.', fr: 'Trois yuans.' },
+    { speaker: '阿瓦', zh: '太贵了！', py: 'tài guì le!', en: 'Too expensive!', fr: "C'est trop cher !" },
+    { speaker: '老板', zh: '好，两块钱。', py: 'hǎo, liǎng kuài qián.', en: 'OK, two yuan.', fr: "D'accord, deux yuans." },
+    { speaker: '阿瓦', zh: '谢谢！再见！', py: 'xièxie! zàijiàn!', en: 'Thank you! Goodbye!', fr: 'Merci ! Au revoir !' },
+  ],
+  questions: [
+    { q: { en: 'What does Awa buy?', fr: "Qu'achète Awa ?" },
+      options: [{ en: 'Water', fr: "De l'eau" }, { en: 'Bread', fr: 'Du pain' }, { en: 'Rice', fr: 'Du riz' }], answer: 0 },
+    { q: { en: 'What was the first price?', fr: 'Quel était le premier prix ?' },
+      options: [{ en: 'Ten yuan', fr: 'Dix yuans' }, { en: 'Three yuan', fr: 'Trois yuans' }, { en: 'Two yuan', fr: 'Deux yuans' }], answer: 1 },
+    { q: { en: 'How much does she pay in the end?', fr: 'Combien paie-t-elle à la fin ?' },
+      options: [{ en: 'Three yuan', fr: 'Trois yuans' }, { en: 'One yuan', fr: 'Un yuan' }, { en: 'Two yuan', fr: 'Deux yuans' }], answer: 2 },
+  ],
+};

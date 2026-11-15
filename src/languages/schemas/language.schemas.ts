@@ -3,7 +3,7 @@ import { Document, Types } from 'mongoose';
 
 export const LANGS = ['fr', 'en', 'zh'] as const;
 export type Lang = (typeof LANGS)[number];
-export const EXERCISE_TYPES = ['choice', 'tiles', 'type', 'match', 'fill'] as const;
+export const EXERCISE_TYPES = ['choice', 'tiles', 'type', 'match', 'fill', 'listen', 'speak'] as const;
 export type ExerciseType = (typeof EXERCISE_TYPES)[number];
 
 /**
@@ -13,6 +13,8 @@ export type ExerciseType = (typeof EXERCISE_TYPES)[number];
  * - type: type the answer
  * - match: pair left and right items
  * - fill: choose the word that completes the sentence (prompt contains "___")
+ * - listen: the prompt is spoken (not shown); type it, or pick it when options are given
+ * - speak: say the prompt aloud; the phone's speech recognition checks it
  */
 @Schema({ _id: true })
 export class Exercise {
@@ -53,10 +55,27 @@ export class Unit {
   /** CEFR level, e.g. A1 */
   @Prop({ default: 'A1' }) level: string;
   @Prop({ type: [LessonSchema], default: [] }) lessons: Lesson[];
+  /** Short grammar / usage notes shown from the unit header (in the explanation language) */
+  @Prop() tips?: string;
   /** Set on starter units, so later starter units can be added without duplicating or overwriting */
   @Prop() seedKey?: string;
 }
 export const UnitSchema = SchemaFactory.createForClass(Unit);
+
+/** A short dialogue read line by line, then a few questions */
+@Schema({ _id: true })
+export class Story {
+  @Prop({ required: true, trim: true }) title: string;
+  @Prop({ default: 'A1' }) level: string;
+  /** Unit it belongs to (shown after that unit); empty = available from the start */
+  @Prop() unitSeedKey?: string;
+  @Prop({ type: [{ speaker: String, text: String, romanization: String, translation: String, _id: false }], default: [] })
+  lines: { speaker: string; text: string; romanization?: string; translation: string }[];
+  @Prop({ type: [ExerciseSchema], default: [] }) questions: Exercise[];
+  @Prop({ default: true }) isPublished: boolean;
+  @Prop() seedKey?: string;
+}
+export const StorySchema = SchemaFactory.createForClass(Story);
 
 /** A course: learn targetLang, explained in baseLang. Units and lessons live inside it. */
 @Schema({ timestamps: true })
@@ -69,6 +88,7 @@ export class LanguageCourse {
   @Prop({ default: 0 }) order: number;
   @Prop({ default: false, index: true }) isPublished: boolean;
   @Prop({ type: [UnitSchema], default: [] }) units: Unit[];
+  @Prop({ type: [StorySchema], default: [] }) stories: Story[];
 }
 export type LanguageCourseDocument = LanguageCourse & Document;
 export const LanguageCourseSchema = SchemaFactory.createForClass(LanguageCourse);
@@ -88,8 +108,44 @@ export class LanguageProfile {
   @Prop() weekKey?: string;
   @Prop({ default: 0 }) weekXp: number;
   @Prop({ default: true }) reminders: boolean;
-  @Prop({ type: [{ courseId: Types.ObjectId, completed: [String], xp: Number, _id: false }], default: [] })
-  courses: { courseId: Types.ObjectId; completed: string[]; xp: number }[];
+  @Prop({
+    type: [{
+      courseId: Types.ObjectId, completed: [String], xp: Number,
+      gold: { type: [String], default: [] }, checkpoints: { type: [String], default: [] },
+      stories: { type: [String], default: [] }, bestMock: { type: Number, default: 0 }, _id: false,
+    }],
+    default: [],
+  })
+  courses: {
+    courseId: Types.ObjectId; completed: string[]; xp: number;
+    /** Lessons redone with no mistakes */
+    gold?: string[];
+    /** Units whose checkpoint test was passed */
+    checkpoints?: string[];
+    stories?: string[];
+    /** Best mock-exam score, % */
+    bestMock?: number;
+  }[];
+  /** Streak freezes held (max 2): a missed day uses one instead of breaking the streak */
+  @Prop({ default: 0 }) freezes: number;
+  /** Stars: earned in lessons, spent in the shop */
+  @Prop({ default: 0 }) stars: number;
+  /** Lives (max 5): a mistake in a lesson costs one; one comes back every few hours */
+  @Prop({ default: 5 }) lives: number;
+  @Prop() livesAt?: Date;
+  @Prop({ type: [{ id: String, at: Date, _id: false }], default: [] }) badges: { id: string; at: Date }[];
+  @Prop({ default: 0 }) lessonsDone: number;
+  @Prop({ default: 0 }) perfectLessons: number;
+  /** League division: 0 bronze … 4 diamond */
+  @Prop({ default: 0 }) division: number;
+  /** Last 14 days with practice (YYYY-MM-DD) */
+  @Prop({ type: [String], default: [] }) activeDays: string[];
+  /** Practice count per hour of the day (Cameroon time), for reminder timing */
+  @Prop({ type: [Number], default: () => Array(24).fill(0) }) activeHours: number[];
+  /** Week (Monday key) the weekly report was last sent for */
+  @Prop() reportedWeek?: string;
+  /** Week (Monday key) divisions were last settled for */
+  @Prop() settledWeek?: string;
   /** Day a streak reminder was last sent (one a day at most) */
   @Prop() remindedDay?: string;
 }
@@ -115,3 +171,13 @@ export type LanguageMemoryDocument = LanguageMemory & Document;
 export const LanguageMemorySchema = SchemaFactory.createForClass(LanguageMemory);
 LanguageMemorySchema.index({ userId: 1, exerciseId: 1 }, { unique: true });
 LanguageMemorySchema.index({ userId: 1, courseId: 1, due: 1 });
+
+/** Following another learner (friends list and shared weekly quest) */
+@Schema({ timestamps: true })
+export class LanguageFollow {
+  @Prop({ type: Types.ObjectId, ref: 'User', required: true }) userId: Types.ObjectId;
+  @Prop({ type: Types.ObjectId, ref: 'User', required: true }) followId: Types.ObjectId;
+}
+export type LanguageFollowDocument = LanguageFollow & Document;
+export const LanguageFollowSchema = SchemaFactory.createForClass(LanguageFollow);
+LanguageFollowSchema.index({ userId: 1, followId: 1 }, { unique: true });

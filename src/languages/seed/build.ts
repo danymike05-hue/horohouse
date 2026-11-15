@@ -1,7 +1,7 @@
 // Turns the starter phrases into courses: each lesson gets a mix of meaning, tiles, matching,
 // typing and fill-the-blank exercises. Deterministic (same input → same course).
 import { Exercise, Lang, LanguageCourse } from '../schemas/language.schemas';
-import { FR_EN_UNITS, Pair, SeedUnit, ZH_UNITS, ZhPhrase } from './phrases';
+import { FR_EN_UNITS, MARKET_STORY, Pair, ROOM_STORY, SeedUnit, ZH_UNITS, ZhPhrase } from './phrases';
 
 interface Item { target: string; base: string; romanization?: string }
 
@@ -34,7 +34,11 @@ function shuffle<T>(arr: T[], seed: number): T[] {
 
 function lessonExercises(items: Item[], pool: Item[], target: Lang, base: Lang, seed: number): Exercise[] {
   const ex: Exercise[] = [];
-  const others = (it: Item) => pool.filter((p) => p !== it);
+  // Other phrases (by text: the pool holds copies), no repeats
+  const others = (it: Item) => {
+    const seen = new Set<string>([it.target]);
+    return pool.filter((p) => (seen.has(p.target) ? false : (seen.add(p.target), true)));
+  };
   items.forEach((it, i) => {
     // 1. Meaning: target → pick the base translation
     const wrong = shuffle(others(it), seed + i).slice(0, 3).map((o) => o.base);
@@ -64,7 +68,31 @@ function lessonExercises(items: Item[], pool: Item[], target: Lang, base: Lang, 
       promptLang: target, answers: [it.base], options: [], pairs: [], answerLang: base,
     } as Exercise);
   });
-  // 5. Fill the blank in a longer target phrase
+  // 5. Listening: hear a phrase in the learned language. Chinese: pick it (with pinyin); others: type it
+  shuffle(items, seed + 23).slice(0, 2).forEach((it, k) => {
+    if (target === 'zh') {
+      const opts = shuffle([it.target, ...shuffle(others(it), seed + 29 + k).slice(0, 3).map((o) => o.target)], seed + 37 + k).map((o) => show(o, 'zh'));
+      ex.push({
+        type: 'listen', instruction: 'listen', prompt: show(it.target, target), promptLang: target,
+        answers: [show(it.target, target)], options: opts, optionsRomanization: opts.map((o) => pool.find((x) => show(x.target, 'zh') === o)?.romanization ?? ''),
+        pairs: [], answerLang: target, explanation: it.base,
+      } as unknown as Exercise);
+    } else if (words(it.target).length <= 6) {
+      ex.push({
+        type: 'listen', instruction: 'listen', prompt: it.target, promptLang: target,
+        answers: [it.target], options: [], pairs: [], answerLang: target, explanation: it.base,
+      } as unknown as Exercise);
+    }
+  });
+  // 6. Speaking: say one phrase aloud
+  const say = shuffle(items, seed + 47)[0];
+  if (say) {
+    ex.push({
+      type: 'speak', instruction: 'speak', prompt: show(say.target, target), promptRomanization: say.romanization,
+      promptLang: target, answers: [show(say.target, target)], options: [], pairs: [], answerLang: target, explanation: say.base,
+    } as unknown as Exercise);
+  }
+  // 7. Fill the blank in a longer target phrase
   const longer = items.filter((it) => words(it.target).length >= 3);
   shuffle(longer, seed + 17).slice(0, 2).forEach((it, k) => {
     const w = words(it.target);
@@ -81,20 +109,44 @@ function lessonExercises(items: Item[], pool: Item[], target: Lang, base: Lang, 
   return ex;
 }
 
+/** A starter story in this course's languages */
+function buildStory(slug: string, story: any, target: Lang, base: Lang) {
+  const b = base === 'fr' ? 'fr' : 'en';
+  return {
+    seedKey: `${slug}:story:${story.key}`,
+    unitSeedKey: `${slug}:u${story.unitIndex}`,
+    title: story.title[b],
+    level: story.level,
+    isPublished: true,
+    lines: story.lines.map((l: any) => ({
+      speaker: l.speaker,
+      text: target === 'zh' ? l.zh : l[target],
+      romanization: target === 'zh' ? l.py : undefined,
+      translation: target === 'zh' ? l[b] : l[base],
+    })),
+    questions: story.questions.map((q: any) => ({
+      type: 'choice', instruction: 'meaning', prompt: q.q[b], promptLang: base,
+      answers: [q.options[q.answer][b]], options: q.options.map((o: any) => o[b]), pairs: [], answerLang: base,
+    })),
+  };
+}
+
 function buildCourse<T>(
   slug: string, target: Lang, base: Lang, order: number,
   title: { en: string; fr: string }, description: { en: string; fr: string },
-  units: SeedUnit<T>[], toItem: (p: T) => Item,
+  units: SeedUnit<T>[], toItem: (p: T) => Item, story?: any,
 ): LanguageCourse {
   const all = units.flatMap((u) => u.lessons.flatMap((l) => l.phrases.map(toItem)));
   let seed = 11;
   return {
     slug, targetLang: target, baseLang: base, order, title, description, isPublished: true,
+    stories: story ? [buildStory(slug, story, target, base)] : [],
     units: units.map((u, ui) => ({
       title: u.title[base === 'fr' ? 'fr' : 'en'],
       level: u.level,
       // Stable id for this starter unit, so later versions can add units without duplicating
       seedKey: `${slug}:u${ui}`,
+      tips: u.tips ? u.tips[base === 'fr' ? 'fr' : 'en'] : undefined,
       lessons: u.lessons.map((l) => {
         seed += 7;
         const items = l.phrases.map(toItem);
@@ -112,18 +164,18 @@ export function starterCourses(): LanguageCourse[] {
     buildCourse<Pair>('french-for-english-speakers', 'fr', 'en', 1,
       { en: 'French', fr: 'Français' },
       { en: 'French for campus, housing and daily life in Cameroon.', fr: 'Le français du campus, du logement et du quotidien.' },
-      FR_EN_UNITS, (p) => ({ target: p.fr, base: p.en })),
+      FR_EN_UNITS, (p) => ({ target: p.fr, base: p.en }), ROOM_STORY),
     buildCourse<Pair>('english-for-french-speakers', 'en', 'fr', 2,
       { en: 'English', fr: 'Anglais' },
       { en: 'English for campus, housing and daily life.', fr: "L'anglais du campus, du logement et du quotidien." },
-      FR_EN_UNITS, (p) => ({ target: p.en, base: p.fr })),
+      FR_EN_UNITS, (p) => ({ target: p.en, base: p.fr }), ROOM_STORY),
     buildCourse<ZhPhrase>('chinese-for-english-speakers', 'zh', 'en', 3,
       { en: 'Chinese', fr: 'Chinois' },
       { en: 'Mandarin Chinese basics with pinyin.', fr: 'Les bases du chinois mandarin avec le pinyin.' },
-      ZH_UNITS, (p) => ({ target: p.zh, base: p.en, romanization: p.py })),
+      ZH_UNITS, (p) => ({ target: p.zh, base: p.en, romanization: p.py }), MARKET_STORY),
     buildCourse<ZhPhrase>('chinese-for-french-speakers', 'zh', 'fr', 4,
       { en: 'Chinese', fr: 'Chinois' },
       { en: 'Mandarin Chinese basics with pinyin.', fr: 'Les bases du chinois mandarin avec le pinyin.' },
-      ZH_UNITS, (p) => ({ target: p.zh, base: p.fr, romanization: p.py })),
+      ZH_UNITS, (p) => ({ target: p.zh, base: p.fr, romanization: p.py }), MARKET_STORY),
   ];
 }

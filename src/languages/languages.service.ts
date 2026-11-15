@@ -6,11 +6,15 @@ import { Cron } from '@nestjs/schedule';
 import { Model, Types } from 'mongoose';
 import { ConfigService } from '@nestjs/config';
 import {
-  LanguageCourse, LanguageCourseDocument, LanguageMemory, LanguageMemoryDocument, LanguageProfile, LanguageProfileDocument,
+  LanguageCourse, LanguageCourseDocument, LanguageFollow, LanguageFollowDocument, LanguageMemory, LanguageMemoryDocument,
+  LanguageProfile, LanguageProfileDocument,
 } from './schemas/language.schemas';
+import { Subscription, SubscriptionDocument, SubscriptionStatus } from '../payments/schemas/subscription.schema';
+import { BADGES, badgeIdsFor } from './badges';
 import { User, UserDocument } from '../users/schemas/user.schema';
 import {
-  CompleteLessonDto, CourseDto, DraftDto, ExerciseResultDto, LessonDto, ResultsDto, UnitDto, UpdateCourseDto, UpdateLanguageProfileDto, UpdateLessonDto,
+  CompleteLessonDto, CourseDto, DraftDto, ExerciseResultDto, ExplainDto, LessonDto, ResultsDto, StoryCompleteDto, UnitDto,
+  UpdateCourseDto, UpdateLanguageProfileDto, UpdateLessonDto,
 } from './dto/languages.dto';
 import { starterCourses } from './seed/build';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -29,6 +33,30 @@ const BOX_DAYS = [0, 1, 3, 7, 14, 30];
 /** Placement: questions per unit, and how many must be right to skip the unit */
 const PLACEMENT_PER_UNIT = 3;
 const PLACEMENT_PASS = 2;
+/** Stars earned (spent in the shop) */
+const STARS = { lesson: 5, perfect: 5, practice: 2, checkpoint: 15, story: 5, mock: 10 } as const;
+/** Lives: 5 at most, one back every 3 hours; an active plan means unlimited */
+const LIVES_MAX = 5;
+const LIFE_MS = 3 * 3600_000;
+/** Streak freezes: hold at most 2; one earned every 7 days of streak */
+const FREEZE_MAX = 2;
+const SHOP = { freeze: 50, refill: 30 } as const;
+/** Checkpoint: questions, and share needed to pass */
+const CHECKPOINT_SIZE = 10;
+const CHECKPOINT_PASS = 0.7;
+const MOCK_SIZE = 20;
+const DIVISIONS = 5;
+
+/** Whole days between two YYYY-MM-DD keys */
+const daysBetween = (a: string, b: string) => Math.round((Date.parse(`${b}T00:00:00Z`) - Date.parse(`${a}T00:00:00Z`)) / 86_400_000);
+/** Hour of the day in Cameroon */
+const hourNow = () => new Date(Date.now() + 3600_000).getUTCHours();
+/** Last week's Monday key */
+const lastWeekKey = () => {
+  const d = new Date(`${weekKey()}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() - 7);
+  return d.toISOString().slice(0, 10);
+};
 
 /** Days in Cameroon time (UTC+1, no daylight saving) */
 const dayKey = (offsetDays = 0) => new Date(Date.now() + 3600_000 + offsetDays * 86_400_000).toISOString().slice(0, 10);
@@ -48,6 +76,8 @@ export class LanguagesService implements OnModuleInit {
     @InjectModel(LanguageProfile.name) private profileModel: Model<LanguageProfileDocument>,
     @InjectModel(LanguageMemory.name) private memoryModel: Model<LanguageMemoryDocument>,
     @InjectModel(User.name) private userModel: Model<UserDocument>,
+    @InjectModel(LanguageFollow.name) private followModel: Model<LanguageFollowDocument>,
+    @InjectModel(Subscription.name) private subscriptionModel: Model<SubscriptionDocument>,
     private notifications: NotificationsService,
     private config: ConfigService,
   ) {}
@@ -76,8 +106,10 @@ export class LanguagesService implements OnModuleInit {
       }
       let changed = false;
       (seed.units as any[]).forEach((su: any, i: number) => {
-        // Tag an older copy of this starter unit (same position and title) with its key
-        const untagged = existing.units.find((u: any) => !u.seedKey && u.title === su.title);
+        // Tag an older copy of this starter unit with its key: same title, or (if an admin
+        // renamed it) the untagged unit in the same position
+        const untagged = existing.units.find((u: any) => !u.seedKey && u.title === su.title)
+          ?? (existing.units[i] && !existing.units[i].seedKey && !existing.units.some((u: any) => u.seedKey === su.seedKey) ? existing.units[i] : undefined);
         if (untagged) { untagged.seedKey = su.seedKey; changed = true; }
         if (!existing.units.some((u: any) => u.seedKey === su.seedKey)) {
           existing.units.push(su);
@@ -85,8 +117,28 @@ export class LanguagesService implements OnModuleInit {
           this.logger.log(`Starter unit added to ${seed.slug}: ${su.title} (#${i + 1})`);
         }
       });
+      // Tips for starter units, only where none were written; listening and speaking added to
+      // starter lessons that predate them (nothing else in the lesson is touched)
+      for (const su of seed.units as any[]) {
+        const u = existing.units.find((x: any) => x.seedKey === su.seedKey);
+        if (!u) continue;
+        if (!u.tips && su.tips) { u.tips = su.tips; changed = true; }
+        (su.lessons ?? []).forEach((sl: any, li: number) => {
+          const l = u.lessons?.[li];
+          if (!l || l.title !== sl.title) return;
+          if ((l.exercises ?? []).some((e: any) => e.type === 'listen' || e.type === 'speak')) return;
+          const extra = (sl.exercises ?? []).filter((e: any) => e.type === 'listen' || e.type === 'speak');
+          if (extra.length) { l.exercises = [...(l.exercises ?? []), ...extra]; changed = true; }
+        });
+      }
+      // Starter stories, by seedKey
+      existing.stories = existing.stories ?? [];
+      for (const st of (seed as any).stories ?? []) {
+        if (!existing.stories.some((x: any) => x.seedKey === st.seedKey)) { existing.stories.push(st); changed = true; }
+      }
       if (changed) {
         existing.markModified('units');
+        existing.markModified('stories');
         await existing.save();
       }
     }
@@ -100,11 +152,22 @@ export class LanguagesService implements OnModuleInit {
   }
 
   /** Today's numbers reset at midnight, the week's on Monday; a missed day breaks the streak */
-  private fresh(p: LanguageProfileDocument) {
+  private fresh(p: LanguageProfileDocument, unlimited = false) {
     const today = dayKey();
-    const brokenStreak = !!p.lastDay && p.lastDay !== today && p.lastDay !== dayKey(-1);
+    const missed = p.lastDay ? daysBetween(p.lastDay, today) - 1 : 0;
+    const brokenStreak = !!p.lastDay && missed > 0 && missed > (p.freezes ?? 0);
     return {
       streak: brokenStreak ? 0 : p.streak,
+      freezes: p.freezes ?? 0,
+      /** Days the next lesson will cover with freezes */
+      freezeUsedOnNext: !brokenStreak && missed > 0 ? missed : 0,
+      stars: p.stars ?? 0,
+      lives: unlimited ? LIVES_MAX : this.livesNow(p),
+      livesMax: LIVES_MAX,
+      unlimitedLives: unlimited,
+      nextLifeAt: unlimited || this.livesNow(p) >= LIVES_MAX ? null : new Date((p.livesAt ? new Date(p.livesAt).getTime() : Date.now()) + LIFE_MS * (Math.floor((Date.now() - (p.livesAt ? new Date(p.livesAt).getTime() : Date.now())) / LIFE_MS) + 1)).toISOString(),
+      division: p.division ?? 0,
+      badges: (p.badges ?? []).length,
       longestStreak: p.longestStreak,
       dailyGoal: p.dailyGoal,
       todayXp: p.todayKey === today ? p.todayXp : 0,
@@ -116,7 +179,35 @@ export class LanguagesService implements OnModuleInit {
   }
 
   async me(userId: string) {
-    return this.fresh(await this.profileOf(userId));
+    return this.fresh(await this.profileOf(userId), await this.hasPlan(userId));
+  }
+
+  /** Lives right now, counting the ones that came back since */
+  private livesNow(p: any): number {
+    const stored = p.lives ?? LIVES_MAX;
+    if (stored >= LIVES_MAX || !p.livesAt) return Math.min(LIVES_MAX, stored);
+    const back = Math.floor((Date.now() - new Date(p.livesAt).getTime()) / LIFE_MS);
+    return Math.min(LIVES_MAX, stored + Math.max(0, back));
+  }
+
+  /** Lives after a change, keeping the regeneration clock right */
+  private livesPatch(p: any, delta: number) {
+    const now = this.livesNow(p);
+    const next = Math.max(0, Math.min(LIVES_MAX, now + delta));
+    // The clock restarts when dropping below the maximum
+    const livesAt = next >= LIVES_MAX ? undefined
+      : now >= LIVES_MAX || !p.livesAt ? new Date()
+        : new Date(new Date(p.livesAt).getTime() + Math.floor((Date.now() - new Date(p.livesAt).getTime()) / LIFE_MS) * LIFE_MS);
+    return { lives: next, livesAt };
+  }
+
+  /** An active paid plan means unlimited lives */
+  private async hasPlan(userId: string): Promise<boolean> {
+    const sub = await this.subscriptionModel.exists({
+      userId: new Types.ObjectId(userId), status: SubscriptionStatus.ACTIVE,
+      $or: [{ endDate: { $exists: false } }, { endDate: null }, { endDate: { $gt: new Date() } }],
+    });
+    return !!sub;
   }
 
   async updateMe(userId: string, dto: UpdateLanguageProfileDto) {
@@ -130,8 +221,9 @@ export class LanguagesService implements OnModuleInit {
       this.profileOf(userId),
     ]);
     const progress = new Map(profile.courses.map((c) => [String(c.courseId), c]));
+    const unlimited = await this.hasPlan(userId);
     return {
-      profile: this.fresh(profile),
+      profile: this.fresh(profile, unlimited),
       courses: docs.map((c: any) => {
         const lessons = this.lessonsOf(c);
         const mine = progress.get(String(c._id));
@@ -154,26 +246,39 @@ export class LanguagesService implements OnModuleInit {
   async path(userId: string, courseId: string, uiLang?: string) {
     const c = await this.findCourse(courseId, true);
     const profile = await this.profileOf(userId);
-    const done = new Set(profile.courses.find((x) => String(x.courseId) === String(c._id))?.completed ?? []);
+    const mine = profile.courses.find((x) => String(x.courseId) === String(c._id));
+    const done = new Set(mine?.completed ?? []);
+    const gold = new Set(mine?.gold ?? []);
+    const checkpoints = new Set(mine?.checkpoints ?? []);
+    const storiesDone = new Set(mine?.stories ?? []);
     let currentGiven = false;
-    const units = (c.units ?? []).map((u: any) => ({
-      _id: String(u._id), title: u.title, level: u.level, description: u.description,
-      lessons: (u.lessons ?? []).filter((l: any) => l.isPublished !== false).map((l: any) => {
+    const units = (c.units ?? []).map((u: any) => {
+      const lessons = (u.lessons ?? []).filter((l: any) => l.isPublished !== false).map((l: any) => {
         const id = String(l._id);
         let state: 'done' | 'current' | 'locked' = 'locked';
         if (done.has(id)) state = 'done';
         else if (!currentGiven) { state = 'current'; currentGiven = true; }
-        return { _id: id, title: l.title, exercises: l.exercises?.length ?? 0, state };
-      }),
-    }));
+        return { _id: id, title: l.title, exercises: l.exercises?.length ?? 0, state, gold: gold.has(id) };
+      });
+      const allDone = lessons.length > 0 && lessons.every((l: any) => l.state === 'done');
+      // Stories that follow this unit
+      const stories = (c.stories ?? []).filter((st: any) => st.isPublished !== false && st.unitSeedKey && st.unitSeedKey === u.seedKey)
+        .map((st: any) => ({ _id: String(st._id), title: st.title, done: storiesDone.has(String(st._id)), open: allDone }));
+      return {
+        _id: String(u._id), title: u.title, level: u.level, description: u.description, tips: u.tips || null,
+        lessons, stories, checkpoint: { open: allDone, passed: checkpoints.has(String(u._id)) },
+      };
+    });
     return {
       course: {
         _id: String(c._id), targetLang: c.targetLang, baseLang: c.baseLang,
         title: c.title?.[uiLang === 'fr' ? 'fr' : 'en'] ?? c.title?.en,
       },
       units,
-      profile: this.fresh(profile),
+      profile: this.fresh(profile, await this.hasPlan(userId)),
       dueCount: await this.dueCount(userId, c._id),
+      mistakesCount: await this.memoryModel.countDocuments({ userId: new Types.ObjectId(userId), courseId: c._id, wrong: { $gt: 0 }, box: { $lte: 1 } }),
+      bestMock: mine?.bestMock ?? 0,
       finished: done.size,
     };
   }
@@ -182,7 +287,13 @@ export class LanguagesService implements OnModuleInit {
     const c = await this.findCourse(courseId, true);
     const { lesson, unlocked } = await this.locate(userId, c, lessonId);
     if (!unlocked) throw new ForbiddenException('Finish the previous lessons first');
+    const p = await this.profileOf(userId);
+    const unlimited = await this.hasPlan(userId);
+    if (!unlimited && this.livesNow(p) <= 0) {
+      throw new ForbiddenException({ code: 'NO_LIVES', message: 'You are out of lives. Practise or wait for one to come back.' });
+    }
     return {
+      lives: unlimited ? null : this.livesNow(p),
       _id: String(lesson._id), title: lesson.title, targetLang: c.targetLang, baseLang: c.baseLang,
       exercises: (lesson.exercises ?? []).map((e: any) => ({ ...e, _id: String(e._id) })),
     };
@@ -201,45 +312,105 @@ export class LanguagesService implements OnModuleInit {
     const own = new Set((lesson.exercises ?? []).map((e: any) => String(e._id)));
     await this.remember(userId, c._id, (dto.results ?? []).filter((r) => own.has(r.exerciseId)));
     const wanted = alreadyDone ? XP_REPEAT : XP_NEW + (dto.mistakes === 0 ? XP_PERFECT_BONUS : 0);
-    return this.award(userId, c, wanted, dto.mistakes === 0, String(lesson._id));
+    return this.award(userId, c, wanted, dto.mistakes === 0, {
+      kind: 'lesson', lessonId: String(lesson._id), alreadyDone, mistakes: dto.mistakes,
+    });
   }
 
-  /** XP (with the daily cap), streak and daily goal; optionally marks a lesson done */
-  private async award(userId: string, c: any, wanted: number, perfect: boolean, completeLessonId?: string) {
-    const p = await this.profileOf(userId);
-    const now = this.fresh(p);
+  /**
+   * One place for everything a finished activity gives: XP (daily cap), stars, streak (freezes
+   * cover missed days, a new one every 7 days), lives, gold lessons, badges and activity.
+   */
+  private async award(
+    userId: string, c: any, wanted: number, perfect: boolean,
+    opts: {
+      kind: 'lesson' | 'practice' | 'checkpoint' | 'story' | 'mock';
+      lessonId?: string; alreadyDone?: boolean; mistakes?: number; unitId?: string; storyId?: string; mockScore?: number;
+    },
+  ) {
+    const p: any = await this.profileOf(userId);
+    const unlimited = await this.hasPlan(userId);
+    const now = this.fresh(p, unlimited);
     const today = dayKey();
     const xp = Math.max(0, Math.min(wanted, XP_DAILY_CAP - now.todayXp));
 
-    // Streak: +1 on the first lesson of a new day, back to 1 after a missed day
+    // Streak: +1 on the first activity of a new day; freezes cover missed days
     let streak = now.streak;
-    if (p.lastDay !== today) streak = p.lastDay === dayKey(-1) ? p.streak + 1 : 1;
+    let freezes = p.freezes ?? 0;
+    let freezeUsed = 0;
+    const firstToday = p.lastDay !== today;
+    if (firstToday) {
+      const missed = p.lastDay ? daysBetween(p.lastDay, today) - 1 : 0;
+      if (!p.lastDay) streak = 1;
+      else if (missed <= 0) streak = p.streak + 1;
+      else if (missed <= freezes) { freezes -= missed; freezeUsed = missed; streak = p.streak + 1; }
+      else streak = 1;
+      if (streak > 0 && streak % 7 === 0) freezes = Math.min(FREEZE_MAX, freezes + 1);
+    }
     const goalBefore = now.todayXp >= p.dailyGoal;
     const todayXp = now.todayXp + xp;
 
+    // Stars
+    let stars = 0;
+    if (opts.kind === 'lesson') stars = opts.alreadyDone ? 1 : STARS.lesson + (perfect ? STARS.perfect : 0);
+    else stars = STARS[opts.kind];
+
+    // Per-course progress
     const courses = [...p.courses];
-    const i = courses.findIndex((x) => String(x.courseId) === String(c._id));
-    const entry = i >= 0 ? { ...courses[i] } : { courseId: c._id as Types.ObjectId, completed: [] as string[], xp: 0 };
-    if (completeLessonId && !entry.completed.includes(completeLessonId)) entry.completed = [...entry.completed, completeLessonId];
+    const i = courses.findIndex((x: any) => String(x.courseId) === String(c._id));
+    const entry: any = i >= 0 ? { ...courses[i] } : { courseId: c._id as Types.ObjectId, completed: [], xp: 0, gold: [], checkpoints: [], stories: [], bestMock: 0 };
+    const addTo = (k: string, v?: string) => { if (v && !(entry[k] ?? []).includes(v)) entry[k] = [...(entry[k] ?? []), v]; };
+    if (opts.kind === 'lesson') {
+      addTo('completed', opts.lessonId);
+      // Gold: a finished lesson redone with no mistakes
+      if (opts.alreadyDone && perfect) addTo('gold', opts.lessonId);
+    }
+    if (opts.kind === 'checkpoint') addTo('checkpoints', opts.unitId);
+    if (opts.kind === 'story') addTo('stories', opts.storyId);
+    if (opts.kind === 'mock') entry.bestMock = Math.max(entry.bestMock ?? 0, opts.mockScore ?? 0);
     entry.xp = (entry.xp ?? 0) + xp;
     if (i >= 0) courses[i] = entry; else courses.push(entry);
 
+    // Lives: mistakes in a lesson cost one each; practice gives one back
+    const lifeDelta = unlimited ? 0 : opts.kind === 'lesson' ? -(opts.mistakes ?? 0) : opts.kind === 'practice' ? 1 : 0;
+    const lives = lifeDelta ? this.livesPatch(p, lifeDelta) : {};
+
+    // Activity (for the weekly report and reminder timing)
+    const activeDays = [...new Set([...(p.activeDays ?? []), today])].slice(-14);
+    const activeHours = (p.activeHours?.length === 24 ? [...p.activeHours] : Array(24).fill(0));
+    activeHours[hourNow()] += 1;
+
+    const next: any = {
+      ...p.toObject(), streak, freezes, courses, todayXp, totalXp: p.totalXp + xp,
+      lessonsDone: (p.lessonsDone ?? 0) + (opts.kind === 'lesson' && !opts.alreadyDone ? 1 : 0),
+      perfectLessons: (p.perfectLessons ?? 0) + (opts.kind === 'lesson' && perfect ? 1 : 0),
+    };
+    const newBadges = badgeIdsFor(next, opts).filter((id) => !(p.badges ?? []).some((b: any) => b.id === id));
+
     await this.profileModel.updateOne({ _id: p._id }, {
       $set: {
-        streak, longestStreak: Math.max(p.longestStreak, streak), lastDay: today,
-        todayKey: today, todayXp, totalXp: p.totalXp + xp,
-        weekKey: weekKey(), weekXp: now.weekXp + xp, courses,
+        streak, longestStreak: Math.max(p.longestStreak, streak), lastDay: today, freezes,
+        todayKey: today, todayXp, totalXp: p.totalXp + xp, stars: (p.stars ?? 0) + stars,
+        weekKey: weekKey(), weekXp: now.weekXp + xp, courses, activeDays, activeHours,
+        lessonsDone: next.lessonsDone, perfectLessons: next.perfectLessons,
+        ...lives,
       },
+      ...(newBadges.length ? { $push: { badges: { $each: newBadges.map((id) => ({ id, at: new Date() })) } } } : {}),
     });
     return {
       xpGained: xp,
+      starsGained: stars,
       perfect,
       streak,
-      streakGrew: p.lastDay !== today,
+      streakGrew: firstToday,
+      freezeUsed,
       goalReached: !goalBefore && todayXp >= p.dailyGoal,
       todayXp,
       dailyGoal: p.dailyGoal,
       capped: xp === 0 && now.todayXp >= XP_DAILY_CAP,
+      gold: opts.kind === 'lesson' && !!opts.alreadyDone && perfect,
+      newBadges: newBadges.map((id) => ({ id, ...BADGES[id] })),
+      lives: unlimited ? null : (lives as any).lives ?? this.livesNow(p),
     };
   }
 
@@ -302,10 +473,18 @@ export class LanguagesService implements OnModuleInit {
   }
 
   /** Practice: what's due first (weakest box first), topped up with the least-known ones */
-  async practice(userId: string, courseId: string) {
+  async practice(userId: string, courseId: string, kind: 'review' | 'mistakes' = 'review') {
     const c = await this.findCourse(courseId, true);
     const pool = await this.finishedExercises(userId, c);
     if (!pool.size) throw new BadRequestException('Finish a lesson first, then practise it here');
+    if (kind === 'mistakes') {
+      // Recent mistakes not yet relearned
+      const wrong = await this.memoryModel
+        .find({ userId: new Types.ObjectId(userId), courseId: c._id, wrong: { $gt: 0 }, box: { $lte: 1 }, exerciseId: { $in: [...pool.keys()] } })
+        .sort({ updatedAt: -1 }).limit(12).lean();
+      if (!wrong.length) throw new BadRequestException('No mistakes to review. Nice!');
+      return { dueCount: wrong.length, exercises: wrong.map((m) => pool.get(m.exerciseId)).filter(Boolean), targetLang: c.targetLang, baseLang: c.baseLang };
+    }
     const memories = await this.memoryModel
       .find({ userId: new Types.ObjectId(userId), courseId: c._id, exerciseId: { $in: [...pool.keys()] } })
       .sort({ due: 1, box: 1 }).lean();
@@ -333,7 +512,7 @@ export class LanguagesService implements OnModuleInit {
     await this.remember(userId, c._id, valid);
     const right = valid.filter((r) => r.correct).length;
     const wanted = Math.min(XP_PRACTICE_MAX, XP_PRACTICE_BASE + Math.floor(right / 2));
-    return this.award(userId, c, wanted, right === valid.length);
+    return this.award(userId, c, wanted, right === valid.length, { kind: 'practice' });
   }
 
   /** How many exercises are due for review in a course (for the "Practice" badge) */
@@ -396,19 +575,25 @@ export class LanguagesService implements OnModuleInit {
       { $match: { weekKey: week, weekXp: { $gt: 0 } } },
       { $lookup: { from: 'users', localField: 'userId', foreignField: '_id', as: 'u', pipeline: [{ $project: { name: 1, profilePicture: 1, 'studentProfile.universityName': 1 } }] } },
       { $unwind: '$u' },
-      { $project: { userId: 1, weekXp: 1, streak: 1, name: '$u.name', picture: '$u.profilePicture', campus: '$u.studentProfile.universityName' } },
+      { $project: { userId: 1, weekXp: 1, streak: 1, division: 1, name: '$u.name', picture: '$u.profilePicture', campus: '$u.studentProfile.universityName' } },
     ]);
     // First name and initial only
     const short = (n?: string) => {
       const parts = String(n ?? '').trim().split(/\s+/).filter(Boolean);
       return parts.length ? `${parts[0]}${parts[1] ? ` ${parts[1][0]}.` : ''}` : '—';
     };
-    const group = myCampus ? rows.filter((r) => r.campus === myCampus) : rows;
+    const myDivision = myProfile.division ?? 0;
+    // Your campus and your division (bronze … diamond)
+    const group = (myCampus ? rows.filter((r) => r.campus === myCampus) : rows).filter((r) => (r.division ?? 0) === myDivision);
     const ranked = group.sort((a, b) => b.weekXp - a.weekXp);
     const myRank = myXp > 0 ? ranked.findIndex((r) => String(r.userId) === userId) + 1 : null;
+    const following = new Set((await this.followModel.find({ userId: new Types.ObjectId(userId) }).select('followId').lean()).map((f) => String(f.followId)));
     const people = ranked.slice(0, 30).map((r, i) => ({
-      rank: i + 1, name: short(r.name), picture: r.picture, xp: r.weekXp, streak: r.streak, me: String(r.userId) === userId,
+      id: String(r.userId), rank: i + 1, name: short(r.name), picture: r.picture, xp: r.weekXp, streak: r.streak,
+      me: String(r.userId) === userId, following: following.has(String(r.userId)),
     }));
+    // Promotion / relegation zones shown on the list (needs 5+ people)
+    const zone = ranked.length >= 5 ? Math.max(1, Math.ceil(ranked.length * 0.2)) : 0;
 
     // Campus against campus: total XP this week
     const byCampus = new Map<string, { xp: number; learners: number }>();
@@ -429,6 +614,10 @@ export class LanguagesService implements OnModuleInit {
     return {
       scope: myCampus ? 'campus' : 'everyone',
       campus: myCampus ?? null,
+      division: myDivision,
+      promoteTop: myDivision < DIVISIONS - 1 ? zone : 0,
+      relegateBottom: myDivision > 0 ? zone : 0,
+      groupSize: ranked.length,
       myXp, myRank, people, campuses,
       endsAt: new Date(monday).toISOString(),
     };
@@ -480,6 +669,7 @@ export class LanguagesService implements OnModuleInit {
       u.title = dto.title;
       if (dto.description !== undefined) u.description = dto.description;
       if (dto.level) u.level = dto.level;
+      if (dto.tips !== undefined) u.tips = dto.tips;
     });
   }
 
@@ -608,29 +798,334 @@ export class LanguagesService implements OnModuleInit {
     return { exercises: usable };
   }
 
-  // ── Evening reminder: keep the streak going ───────────────────────────────
+  // ── Streak reminder at the hour each learner usually practises ───────────────
 
-  @Cron('0 19 * * *', { name: 'language-streak-reminders', timeZone: 'Africa/Douala' })
+  /** Usual practice hour (8–21), or 19:00 until there's enough history */
+  private usualHour(p: any): number {
+    const h: number[] = p.activeHours ?? [];
+    const total = h.reduce((a, b) => a + (b || 0), 0);
+    if (total < 5) return 19;
+    let best = 19;
+    for (let i = 8; i <= 21; i++) if ((h[i] ?? 0) > (h[best] ?? 0)) best = i;
+    return best;
+  }
+
+  @Cron('0 * * * *', { name: 'language-streak-reminders' })
   async remindStreaks() {
+    const hour = hourNow();
+    if (hour < 8 || hour > 21) return;
     const today = dayKey();
     const atRisk = await this.profileModel
       .find({ reminders: true, streak: { $gt: 0 }, lastDay: dayKey(-1), remindedDay: { $ne: today } })
-      .select('userId streak').limit(2000).lean();
+      .select('userId streak activeHours freezes').limit(5000).lean();
     let sent = 0;
     for (const p of atRisk) {
+      // At their usual hour, and in any case by 20:00
+      if (this.usualHour(p) !== hour && hour !== 20) continue;
       const claimed = await this.profileModel.updateOne({ _id: p._id, remindedDay: { $ne: today } }, { $set: { remindedDay: today } });
       if (!claimed.modifiedCount) continue;
+      const freeze = (p.freezes ?? 0) > 0;
       await this.notifications.create(
         {
           userId: String(p.userId), type: NotificationType.SYSTEM,
           title: `Keep your ${p.streak}-day streak`,
-          message: 'One short lesson tonight keeps it going.',
+          message: freeze ? 'A freeze will protect it, but a short lesson keeps it growing.' : 'One short lesson today keeps it going.',
           link: '/languages',
         } as any,
-        { title: `Gardez votre série de ${p.streak} jours`, message: 'Une petite leçon ce soir suffit pour la continuer.' },
+        {
+          title: `Gardez votre série de ${p.streak} jours`,
+          message: freeze ? 'Un gel la protégera, mais une petite leçon la fait grandir.' : "Une petite leçon aujourd'hui suffit pour la continuer.",
+        },
       ).catch(() => undefined);
       sent++;
     }
     if (sent) this.logger.log(`Sent ${sent} language streak reminder(s)`);
   }
+
+  // ── Monday: settle last week's divisions, then send each learner their weekly report ──
+
+  @Cron('10 0 * * 1', { name: 'language-divisions', timeZone: 'Africa/Douala' })
+  async settleDivisions() {
+    const last = lastWeekKey();
+    const rows: any[] = await this.profileModel.aggregate([
+      { $match: { weekKey: last, settledWeek: { $ne: last } } },
+      { $lookup: { from: 'users', localField: 'userId', foreignField: '_id', as: 'u', pipeline: [{ $project: { 'studentProfile.universityName': 1 } }] } },
+      { $project: { weekXp: 1, division: 1, badges: 1, campus: { $ifNull: [{ $arrayElemAt: ['$u.studentProfile.universityName', 0] }, ''] } } },
+    ]);
+    const groups = new Map<string, any[]>();
+    for (const r of rows) {
+      const k = `${r.campus}|${r.division ?? 0}`;
+      groups.set(k, [...(groups.get(k) ?? []), r]);
+    }
+    for (const list of groups.values()) {
+      list.sort((a, b) => b.weekXp - a.weekXp);
+      const zone = list.length >= 5 ? Math.max(1, Math.ceil(list.length * 0.2)) : 0;
+      for (let i = 0; i < list.length; i++) {
+        const r = list[i];
+        let division = r.division ?? 0;
+        if (zone && i < zone && r.weekXp > 0) division = Math.min(DIVISIONS - 1, division + 1);
+        else if (zone && i >= list.length - zone) division = Math.max(0, division - 1);
+        const update: any = { $set: { division, settledWeek: last } };
+        if (list.length >= 3 && i < 3 && r.weekXp > 0 && !(r.badges ?? []).some((b: any) => b.id === 'league_top3')) {
+          update.$push = { badges: { id: 'league_top3', at: new Date() } };
+        }
+        await this.profileModel.updateOne({ _id: r._id }, update);
+      }
+    }
+    if (rows.length) this.logger.log(`Language divisions settled for ${rows.length} learner(s)`);
+  }
+
+  @Cron('0 9 * * 1', { name: 'language-weekly-report', timeZone: 'Africa/Douala' })
+  async weeklyReports() {
+    const last = lastWeekKey();
+    const from = new Date(`${last}T00:00:00+01:00`);
+    const to = new Date(from.getTime() + 7 * 86_400_000);
+    const profiles = await this.profileModel.find({ weekKey: last, weekXp: { $gt: 0 }, reportedWeek: { $ne: last } })
+      .select('userId weekXp activeDays streak').limit(5000).lean();
+    let sent = 0;
+    for (const p of profiles) {
+      const claimed = await this.profileModel.updateOne({ _id: p._id, reportedWeek: { $ne: last } }, { $set: { reportedWeek: last } });
+      if (!claimed.modifiedCount) continue;
+      const days = (p.activeDays ?? []).filter((d) => d >= last && daysBetween(last, d) < 7).length;
+      const words = await this.memoryModel.countDocuments({ userId: p.userId, createdAt: { $gte: from, $lt: to } });
+      await this.notifications.create(
+        {
+          userId: String(p.userId), type: NotificationType.SYSTEM,
+          title: 'Your week in languages',
+          message: `${p.weekXp} XP, ${days} day(s) of practice, ${words} new item(s) learned. Keep it up!`,
+          link: '/languages',
+        } as any,
+        { title: 'Votre semaine de langues', message: `${p.weekXp} XP, ${days} jour(s) de pratique, ${words} nouvel(s) élément(s) appris. Continuez !` },
+      ).catch(() => undefined);
+      sent++;
+    }
+    if (sent) this.logger.log(`Sent ${sent} weekly language report(s)`);
+  }
+
+  // ── Shop: stars for a streak freeze or a full set of lives ─────────────────
+
+  async shop(userId: string) {
+    const p = await this.profileOf(userId);
+    const unlimited = await this.hasPlan(userId);
+    return {
+      stars: p.stars ?? 0,
+      items: [
+        { id: 'freeze', price: SHOP.freeze, owned: p.freezes ?? 0, max: FREEZE_MAX, available: (p.freezes ?? 0) < FREEZE_MAX },
+        { id: 'refill', price: SHOP.refill, owned: unlimited ? LIVES_MAX : this.livesNow(p), max: LIVES_MAX, available: !unlimited && this.livesNow(p) < LIVES_MAX },
+      ],
+    };
+  }
+
+  async buy(userId: string, item: 'freeze' | 'refill') {
+    const p: any = await this.profileOf(userId);
+    const price = SHOP[item];
+    if ((p.stars ?? 0) < price) throw new BadRequestException({ code: 'NOT_ENOUGH_STARS', message: 'Not enough stars yet' });
+    if (item === 'freeze' && (p.freezes ?? 0) >= FREEZE_MAX) throw new BadRequestException('You already hold the most freezes');
+    if (item === 'refill' && this.livesNow(p) >= LIVES_MAX) throw new BadRequestException('Your lives are already full');
+    // Conditional on the stars still being there, so two taps can't spend them twice
+    const set: any = item === 'freeze' ? { freezes: (p.freezes ?? 0) + 1 } : { lives: LIVES_MAX, livesAt: null };
+    const res = await this.profileModel.updateOne({ _id: p._id, stars: { $gte: price } }, { $inc: { stars: -price }, $set: set });
+    if (!res.modifiedCount) throw new BadRequestException({ code: 'NOT_ENOUGH_STARS', message: 'Not enough stars yet' });
+    return this.shop(userId);
+  }
+
+  /** Leaving a lesson early still costs the lives already lost */
+  async spendLives(userId: string, count: number) {
+    if (await this.hasPlan(userId)) return { lives: null };
+    const p = await this.profileOf(userId);
+    const patch = this.livesPatch(p, -Math.max(0, Math.min(LIVES_MAX, count)));
+    await this.profileModel.updateOne({ _id: p._id }, { $set: patch });
+    return { lives: patch.lives };
+  }
+
+  // ── Badges ─────────────────────────────────────────────────────────────────
+
+  async badges(userId: string) {
+    const p = await this.profileOf(userId);
+    const earned = new Map((p.badges ?? []).map((b) => [b.id, b.at]));
+    return Object.entries(BADGES).map(([id, b]) => ({ id, ...b, earnedAt: earned.get(id) ?? null }));
+  }
+
+  // ── Checkpoints: a test at the end of each unit ────────────────────────────
+
+  private unitOf(c: any, unitId: string) {
+    const u = (c.units ?? []).find((x: any) => String(x._id) === unitId);
+    if (!u) throw new NotFoundException('Unit not found');
+    return u;
+  }
+
+  async checkpoint(userId: string, courseId: string, unitId: string) {
+    const c = await this.findCourse(courseId, true);
+    const u = this.unitOf(c, unitId);
+    const profile = await this.profileOf(userId);
+    const done = new Set(profile.courses.find((x) => String(x.courseId) === String(c._id))?.completed ?? []);
+    const lessons = (u.lessons ?? []).filter((l: any) => l.isPublished !== false);
+    if (!lessons.every((l: any) => done.has(String(l._id)))) throw new ForbiddenException('Finish the unit first');
+    const pool = lessons.flatMap((l: any) => (l.exercises ?? []).filter((e: any) => e.type !== 'speak'));
+    const picked = pool.sort(() => Math.random() - 0.5).slice(0, CHECKPOINT_SIZE).map((e: any) => ({ ...e, _id: String(e._id) }));
+    return { title: u.title, exercises: picked, targetLang: c.targetLang, baseLang: c.baseLang };
+  }
+
+  async completeCheckpoint(userId: string, courseId: string, unitId: string, dto: ResultsDto) {
+    const c = await this.findCourse(courseId, true);
+    const u = this.unitOf(c, unitId);
+    const own = new Set((u.lessons ?? []).flatMap((l: any) => (l.exercises ?? []).map((e: any) => String(e._id))));
+    const valid = dto.results.filter((r) => own.has(r.exerciseId));
+    if (valid.length < 5) throw new BadRequestException('Checkpoint not finished');
+    await this.remember(userId, c._id, valid);
+    const score = valid.filter((r) => r.correct).length / valid.length;
+    if (score < CHECKPOINT_PASS) return { passed: false, score: Math.round(score * 100) };
+    const res = await this.award(userId, c, 20, score === 1, { kind: 'checkpoint', unitId });
+    return { passed: true, score: Math.round(score * 100), ...res };
+  }
+
+  // ── Mock exam: 20 questions across the course, timed in the app ────────────
+
+  async mock(userId: string, courseId: string) {
+    const c = await this.findCourse(courseId, true);
+    const pool = this.lessonsOf(c).flatMap((l: any) => (l.exercises ?? []).filter((e: any) => ['choice', 'tiles', 'fill', 'type', 'listen'].includes(e.type)));
+    if (pool.length < 5) throw new BadRequestException('This course is too short for a test yet');
+    const picked = pool.sort(() => Math.random() - 0.5).slice(0, MOCK_SIZE).map((e: any) => ({ ...e, _id: String(e._id) }));
+    return { exercises: picked, minutes: 10, targetLang: c.targetLang, baseLang: c.baseLang };
+  }
+
+  async completeMock(userId: string, courseId: string, dto: ResultsDto) {
+    const c = await this.findCourse(courseId, true);
+    const own = new Set(this.lessonsOf(c).flatMap((l: any) => (l.exercises ?? []).map((e: any) => String(e._id))));
+    const valid = dto.results.filter((r) => own.has(r.exerciseId));
+    if (valid.length < 5) throw new BadRequestException('Test not finished');
+    const score = Math.round((valid.filter((r) => r.correct).length / valid.length) * 100);
+    const res = await this.award(userId, c, score >= 50 ? 15 : 5, score === 100, { kind: 'mock', mockScore: score });
+    return { score, ...res };
+  }
+
+  // ── Words learned: vocabulary from finished lessons, with how well it's known ──
+
+  async words(userId: string, courseId: string) {
+    const c = await this.findCourse(courseId, true);
+    const pool = await this.finishedExercises(userId, c);
+    const items = [...pool.values()].filter((e: any) => e.type === 'choice' && e.instruction === 'meaning' && e.prompt && e.answers?.[0]);
+    const memories = await this.memoryModel.find({ userId: new Types.ObjectId(userId), exerciseId: { $in: items.map((e: any) => e._id) } }).lean();
+    const box = new Map(memories.map((m) => [m.exerciseId, m.box]));
+    const seen = new Set<string>();
+    return items
+      .filter((e: any) => (seen.has(e.prompt) ? false : (seen.add(e.prompt), true)))
+      .map((e: any) => ({ word: e.prompt, romanization: e.promptRomanization, meaning: e.answers[0], strength: box.get(e._id) ?? 0 }))
+      .sort((a, b) => a.strength - b.strength || a.word.localeCompare(b.word));
+  }
+
+  // ── "Explain my answer" (AI, short, in the explanation language) ────────────
+
+  async explain(dto: ExplainDto) {
+    const key = this.config.get<string>('OPENAI_API_KEY');
+    if (!key) throw new ServiceUnavailableException('Explanations need OPENAI_API_KEY on the server');
+    const names: Record<string, string> = { fr: 'French', en: 'English', zh: 'Mandarin Chinese' };
+    const prompt = [
+      `A learner of ${names[dto.targetLang]} (explanations in ${names[dto.baseLang]}) answered an exercise.`,
+      `Exercise: ${dto.prompt}`, `Expected answer: ${dto.expected}`, `Learner's answer: ${dto.given || '(empty)'}`,
+      `In ${names[dto.baseLang]}, explain in at most 3 short sentences why the expected answer is right and what was wrong,`,
+      'with one simple tip. Be kind and concrete. No preamble.',
+    ].join('\n');
+    let res: Response;
+    try {
+      res = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
+        body: JSON.stringify({ model: this.config.get<string>('OPENAI_MODEL') || 'gpt-4o-mini', temperature: 0.3, max_tokens: 220, messages: [{ role: 'user', content: prompt }] }),
+        signal: AbortSignal.timeout(30_000),
+      });
+    } catch {
+      throw new ServiceUnavailableException('The AI service could not be reached');
+    }
+    if (!res.ok) throw new ServiceUnavailableException('The AI service refused the request');
+    const data: any = await res.json();
+    const text = String(data?.choices?.[0]?.message?.content ?? '').trim();
+    if (!text) throw new ServiceUnavailableException('No explanation came back');
+    return { text: text.slice(0, 800) };
+  }
+
+  // ── Stories ────────────────────────────────────────────────────────────────
+
+  async story(userId: string, courseId: string, storyId: string) {
+    const c = await this.findCourse(courseId, true);
+    const st = (c.stories ?? []).find((x: any) => String(x._id) === storyId && x.isPublished !== false);
+    if (!st) throw new NotFoundException('Story not found');
+    if (st.unitSeedKey) {
+      const u = (c.units ?? []).find((x: any) => x.seedKey === st.unitSeedKey);
+      const profile = await this.profileOf(userId);
+      const done = new Set(profile.courses.find((x) => String(x.courseId) === String(c._id))?.completed ?? []);
+      if (u && !(u.lessons ?? []).filter((l: any) => l.isPublished !== false).every((l: any) => done.has(String(l._id)))) {
+        throw new ForbiddenException('Finish the unit to open this story');
+      }
+    }
+    return {
+      _id: String(st._id), title: st.title, level: st.level, lines: st.lines,
+      questions: (st.questions ?? []).map((q: any) => ({ ...q, _id: String(q._id) })),
+      targetLang: c.targetLang, baseLang: c.baseLang,
+    };
+  }
+
+  async completeStory(userId: string, courseId: string, storyId: string, dto: StoryCompleteDto) {
+    const c = await this.findCourse(courseId, true);
+    const st = (c.stories ?? []).find((x: any) => String(x._id) === storyId);
+    if (!st) throw new NotFoundException('Story not found');
+    if (dto.correct > dto.total) throw new BadRequestException('More right answers than questions');
+    const profile = await this.profileOf(userId);
+    const already = (profile.courses.find((x) => String(x.courseId) === String(c._id))?.stories ?? []).includes(storyId);
+    return this.award(userId, c, already ? 3 : 10, dto.correct === dto.total, { kind: 'story', storyId });
+  }
+
+  // ── Friends: follow learners, a shared weekly goal ─────────────────────────
+
+  async follow(userId: string, followId: string) {
+    if (!Types.ObjectId.isValid(followId) || followId === userId) throw new BadRequestException('You can’t follow that account');
+    if (!(await this.profileModel.exists({ userId: new Types.ObjectId(followId) }))) throw new NotFoundException('Learner not found');
+    const count = await this.followModel.countDocuments({ userId: new Types.ObjectId(userId) });
+    if (count >= 100) throw new BadRequestException('You follow the most learners already');
+    await this.followModel.updateOne(
+      { userId: new Types.ObjectId(userId), followId: new Types.ObjectId(followId) },
+      { $setOnInsert: { userId: new Types.ObjectId(userId), followId: new Types.ObjectId(followId) } },
+      { upsert: true },
+    );
+    // First friend badge
+    await this.profileModel.updateOne(
+      { userId: new Types.ObjectId(userId), 'badges.id': { $ne: 'friend_1' } },
+      { $push: { badges: { id: 'friend_1', at: new Date() } } },
+    );
+    return { following: true };
+  }
+
+  async unfollow(userId: string, followId: string) {
+    if (!Types.ObjectId.isValid(followId)) throw new BadRequestException('Unknown learner');
+    await this.followModel.deleteOne({ userId: new Types.ObjectId(userId), followId: new Types.ObjectId(followId) });
+    return { following: false };
+  }
+
+  async friends(userId: string) {
+    const week = weekKey();
+    const ids = (await this.followModel.find({ userId: new Types.ObjectId(userId) }).select('followId').lean()).map((f) => f.followId);
+    const [profiles, users, me] = await Promise.all([
+      this.profileModel.find({ userId: { $in: ids } }).select('userId weekKey weekXp streak lastDay').lean(),
+      this.userModel.find({ _id: { $in: ids } }).select('name profilePicture').lean(),
+      this.profileOf(userId),
+    ]);
+    const byUser = new Map(profiles.map((p) => [String(p.userId), p]));
+    const short = (n?: string) => {
+      const parts = String(n ?? '').trim().split(/\s+/).filter(Boolean);
+      return parts.length ? `${parts[0]}${parts[1] ? ` ${parts[1][0]}.` : ''}` : '—';
+    };
+    const list = users.map((u: any) => {
+      const p: any = byUser.get(String(u._id));
+      return {
+        id: String(u._id), name: short(u.name), picture: u.profilePicture,
+        weekXp: p?.weekKey === week ? p.weekXp : 0, streak: p?.streak ?? 0, activeToday: p?.lastDay === dayKey(),
+      };
+    }).sort((a, b) => b.weekXp - a.weekXp);
+    // Shared weekly goal: grows with the group
+    const myXp = me.weekKey === week ? me.weekXp : 0;
+    const target = 100 + 100 * Math.min(list.length, 9);
+    const total = myXp + list.reduce((a, f) => a + f.weekXp, 0);
+    return { friends: list, quest: { target, total, done: total >= target }, myXp };
+  }
+
 }

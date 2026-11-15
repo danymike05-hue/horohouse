@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Headers, Param, Patch, Post, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Headers, Param, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { IsIn } from 'class-validator';
 import { Throttle } from '@nestjs/throttler';
@@ -7,7 +7,8 @@ import { Roles, RolesGuard } from '../auth/guards/roles.guard';
 import { UserRole } from '../users/schemas/user.schema';
 import { LanguagesService } from './languages.service';
 import {
-  CompleteLessonDto, CourseDto, DraftDto, LessonDto, ResultsDto, UnitDto, UpdateCourseDto, UpdateLanguageProfileDto, UpdateLessonDto,
+  BuyDto, CompleteLessonDto, CourseDto, DraftDto, ExplainDto, LessonDto, ResultsDto, SpendLivesDto, StoryCompleteDto, UnitDto,
+  UpdateCourseDto, UpdateLanguageProfileDto, UpdateLessonDto,
 } from './dto/languages.dto';
 
 class MoveDto { @IsIn(['up', 'down']) dir: 'up' | 'down'; }
@@ -87,6 +88,34 @@ export class LanguagesController {
   @Patch('me')
   updateMe(@Req() req: any, @Body() dto: UpdateLanguageProfileDto) { return this.service.updateMe(uid(req), dto); }
 
+  @Get('shop')
+  shop(@Req() req: any) { return this.service.shop(uid(req)); }
+
+  @Post('shop/buy')
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
+  buy(@Req() req: any, @Body() dto: BuyDto) { return this.service.buy(uid(req), dto.item); }
+
+  @Post('lives/spend')
+  spendLives(@Req() req: any, @Body() dto: SpendLivesDto) { return this.service.spendLives(uid(req), dto.count); }
+
+  @Get('badges')
+  badges(@Req() req: any) { return this.service.badges(uid(req)); }
+
+  @Get('friends')
+  friends(@Req() req: any) { return this.service.friends(uid(req)); }
+
+  @Post('follow/:userId')
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
+  follow(@Req() req: any, @Param('userId') followId: string) { return this.service.follow(uid(req), followId); }
+
+  @Delete('follow/:userId')
+  unfollow(@Req() req: any, @Param('userId') followId: string) { return this.service.unfollow(uid(req), followId); }
+
+  @Post('explain')
+  @Throttle({ default: { limit: 20, ttl: 3_600_000 } })
+  @ApiOperation({ summary: 'AI: a short explanation of a wrong answer' })
+  explain(@Body() dto: ExplainDto) { return this.service.explain(dto); }
+
   @Get('league')
   @ApiOperation({ summary: "This week's league: my campus, and campus against campus" })
   league(@Req() req: any) { return this.service.league(uid(req)); }
@@ -101,7 +130,9 @@ export class LanguagesController {
 
   @Get('courses/:courseId/practice')
   @ApiOperation({ summary: 'Review session: due and weak exercises from finished lessons' })
-  practice(@Req() req: any, @Param('courseId') courseId: string) { return this.service.practice(uid(req), courseId); }
+  practice(@Req() req: any, @Param('courseId') courseId: string, @Query('kind') kind?: string) {
+    return this.service.practice(uid(req), courseId, kind === 'mistakes' ? 'mistakes' : 'review');
+  }
 
   @Post('courses/:courseId/practice/complete')
   @Throttle({ default: { limit: 30, ttl: 60_000 } })
@@ -117,6 +148,40 @@ export class LanguagesController {
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
   submitPlacement(@Req() req: any, @Param('courseId') courseId: string, @Body() dto: ResultsDto) {
     return this.service.submitPlacement(uid(req), courseId, dto);
+  }
+
+  @Get('courses/:courseId/units/:unitId/checkpoint')
+  checkpoint(@Req() req: any, @Param('courseId') courseId: string, @Param('unitId') unitId: string) {
+    return this.service.checkpoint(uid(req), courseId, unitId);
+  }
+
+  @Post('courses/:courseId/units/:unitId/checkpoint')
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
+  completeCheckpoint(@Req() req: any, @Param('courseId') courseId: string, @Param('unitId') unitId: string, @Body() dto: ResultsDto) {
+    return this.service.completeCheckpoint(uid(req), courseId, unitId, dto);
+  }
+
+  @Get('courses/:courseId/mock')
+  mock(@Req() req: any, @Param('courseId') courseId: string) { return this.service.mock(uid(req), courseId); }
+
+  @Post('courses/:courseId/mock')
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  completeMock(@Req() req: any, @Param('courseId') courseId: string, @Body() dto: ResultsDto) {
+    return this.service.completeMock(uid(req), courseId, dto);
+  }
+
+  @Get('courses/:courseId/words')
+  words(@Req() req: any, @Param('courseId') courseId: string) { return this.service.words(uid(req), courseId); }
+
+  @Get('courses/:courseId/stories/:storyId')
+  story(@Req() req: any, @Param('courseId') courseId: string, @Param('storyId') storyId: string) {
+    return this.service.story(uid(req), courseId, storyId);
+  }
+
+  @Post('courses/:courseId/stories/:storyId/complete')
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
+  completeStory(@Req() req: any, @Param('courseId') courseId: string, @Param('storyId') storyId: string, @Body() dto: StoryCompleteDto) {
+    return this.service.completeStory(uid(req), courseId, storyId, dto);
   }
 
   @Get('courses/:courseId/lessons/:lessonId')
