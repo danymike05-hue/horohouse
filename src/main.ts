@@ -102,8 +102,14 @@ async function bootstrap() {
   //    fastify.addContentTypeParser('application/json', ...) ourselves,
   //    which was colliding with Nest's own internal registration and
   //    crashing the server with FST_ERR_CTP_ALREADY_PRESENT.
+  // Railway puts one proxy in front of us. Without this every request looked like it came
+  // from that proxy, so rate limits were shared by everyone (5 password resets a minute for
+  // the whole site). One hop only: an X-Forwarded-For sent by the client can't fake the IP.
+  const trustHops = Number(process.env.TRUST_PROXY_HOPS ?? (process.env.NODE_ENV === 'production' ? 1 : 0));
   const fastifyAdapter = new FastifyAdapter({
     logger: false,
+    // Same as a hop count: trust only the closest `trustHops` proxies
+    trustProxy: trustHops > 0 ? (_addr: string, hop: number) => hop < trustHops : false,
   });
 
   const app = await NestFactory.create<NestFastifyApplication>(
@@ -138,6 +144,22 @@ async function bootstrap() {
   await app.register(multipart as any, MULTIPART_OPTIONS);
   await app.register(cookie as any, {
     secret: configService.get<string>('JWT_SECRET', 'horohouse_cookie_secret'),
+  });
+
+  // No MongoDB operators from outside: a body or query with a key like "$ne" or "$where"
+  // is refused before it can reach a query (many routes take untyped bodies)
+  const hasOperatorKey = (v: unknown, depth = 0): boolean => {
+    if (!v || typeof v !== 'object' || depth > 20) return false;
+    for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
+      if (k.startsWith('$') || k === '__proto__' || k === 'constructor') return true;
+      if (hasOperatorKey(val, depth + 1)) return true;
+    }
+    return false;
+  };
+  app.getHttpAdapter().getInstance().addHook('preValidation', async (req: any, reply: any) => {
+    if (hasOperatorKey(req.body) || hasOperatorKey(req.query) || hasOperatorKey(req.params)) {
+      return reply.code(400).send({ statusCode: 400, message: 'Invalid characters in request' });
+    }
   });
 
   // Global pipes

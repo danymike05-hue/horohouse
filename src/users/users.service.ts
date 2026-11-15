@@ -53,10 +53,68 @@ const PUBLIC_HOST_PROFILE_FIELDS = [
 ] as const;
 
 import { isIdentityVerified } from '../common/identity.util';
+import { escapeRegex } from '../common/regex.util';
 
 @Injectable()
 export class UsersService {
   private readonly logger = new Logger(UsersService.name);
+
+  // ─── Saved Mobile Money numbers (to pay with) ───────────────────────────────
+
+  private static readonly MAX_PAYMENT_NUMBERS = 5;
+
+  /** "+237 6 70 12 34 56" → "670123456"; anything else is refused */
+  private static localMomo(phone: string): string {
+    const local = String(phone ?? '').replace(/[^\d]/g, '').replace(/^237/, '');
+    if (!/^6\d{8}$/.test(local)) throw new BadRequestException('Enter a 9-digit Cameroon Mobile Money number starting with 6');
+    return local;
+  }
+
+  async listPaymentNumbers(userId: string) {
+    const u = await this.userModel.findById(userId).select('paymentNumbers').lean();
+    if (!u) throw new NotFoundException('User not found');
+    return (u.paymentNumbers ?? []).map((n: any) => ({ _id: String(n._id), phone: n.phone, provider: n.provider, label: n.label, isDefault: !!n.isDefault }));
+  }
+
+  async addPaymentNumber(userId: string, dto: { phone: string; provider: 'MTN' | 'ORANGE'; label?: string; makeDefault?: boolean }) {
+    const phone = UsersService.localMomo(dto.phone);
+    if (!['MTN', 'ORANGE'].includes(dto.provider)) throw new BadRequestException('Provider must be MTN or ORANGE');
+    const user = await this.userModel.findById(userId);
+    if (!user) throw new NotFoundException('User not found');
+    const list: any[] = (user as any).paymentNumbers ?? [];
+    if (list.some((n) => n.phone === phone)) throw new BadRequestException('This number is already saved');
+    if (list.length >= UsersService.MAX_PAYMENT_NUMBERS) throw new BadRequestException(`You can save up to ${UsersService.MAX_PAYMENT_NUMBERS} numbers`);
+    const makeDefault = !!dto.makeDefault || list.length === 0;
+    if (makeDefault) list.forEach((n) => { n.isDefault = false; });
+    list.push({ phone, provider: dto.provider, label: dto.label?.trim().slice(0, 40) || undefined, isDefault: makeDefault });
+    (user as any).paymentNumbers = list;
+    user.markModified('paymentNumbers');
+    await user.save();
+    return this.listPaymentNumbers(userId);
+  }
+
+  async setDefaultPaymentNumber(userId: string, numberId: string) {
+    const user = await this.userModel.findById(userId);
+    if (!user) throw new NotFoundException('User not found');
+    const list: any[] = (user as any).paymentNumbers ?? [];
+    if (!list.some((n) => String(n._id) === numberId)) throw new NotFoundException('Number not found');
+    list.forEach((n) => { n.isDefault = String(n._id) === numberId; });
+    user.markModified('paymentNumbers');
+    await user.save();
+    return this.listPaymentNumbers(userId);
+  }
+
+  async removePaymentNumber(userId: string, numberId: string) {
+    const user = await this.userModel.findById(userId);
+    if (!user) throw new NotFoundException('User not found');
+    const list: any[] = ((user as any).paymentNumbers ?? []).filter((n: any) => String(n._id) !== numberId);
+    // Someone has to be the default while numbers remain
+    if (list.length && !list.some((n) => n.isDefault)) list[0].isDefault = true;
+    (user as any).paymentNumbers = list;
+    user.markModified('paymentNumbers');
+    await user.save();
+    return this.listPaymentNumbers(userId);
+  }
 
   constructor(
     @InjectModel(User.name) private userModel: Model<UserDocument>,
@@ -114,9 +172,9 @@ export class UsersService {
     if (typeof isActive === 'boolean') filter.isActive = isActive;
     if (search) {
       filter.$or = [
-        { name: { $regex: search, $options: 'i' } },
-        { email: { $regex: search, $options: 'i' } },
-        { phoneNumber: { $regex: search, $options: 'i' } },
+        { name: { $regex: escapeRegex(search), $options: 'i' } },
+        { email: { $regex: escapeRegex(search), $options: 'i' } },
+        { phoneNumber: { $regex: escapeRegex(search), $options: 'i' } },
       ];
     }
 

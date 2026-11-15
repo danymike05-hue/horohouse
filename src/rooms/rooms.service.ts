@@ -546,6 +546,14 @@ export class RoomsService {
       }
     }
 
+    /** For upload routes: refuse before the upload is read */
+    async assertCanManageRoom(roomId: string, user: User): Promise<void> {
+        const room = await this.findRoomOrThrow(roomId);
+        const property = await this.propertyModel.findById(room.propertyId).exec();
+        if (!property) throw new NotFoundException('Parent property not found');
+        this.assertCanManage(property, user);
+    }
+
     private assertCanManage(property: Property, user: User): void {
         const isOwner = property.ownerId.toString() === user._id.toString();
         const isAgent = property.agentId?.toString() === user._id.toString();

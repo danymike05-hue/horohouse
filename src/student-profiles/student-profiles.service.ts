@@ -25,6 +25,7 @@ import {
 import { User, UserDocument, UserRole, StudentVerificationStatus } from '../users/schemas/user.schema';
 import { NotificationsService } from '../notifications/notifications.service';
 import { NotificationType } from '../notifications/schemas/notification.schema';
+import { escapeRegex } from '../common/regex.util';
 
 @Injectable()
 export class StudentProfilesService {
@@ -162,7 +163,7 @@ export class StudentProfilesService {
 
     const filter: any = {};
     if (verificationStatus) filter.verificationStatus = verificationStatus;
-    if (campusCity) filter.campusCity = { $regex: campusCity, $options: 'i' };
+    if (campusCity) filter.campusCity = { $regex: escapeRegex(campusCity), $options: 'i' };
     if (typeof isAmbassador === 'boolean') filter.isAmbassador = isAmbassador;
 
     const [profiles, total] = await Promise.all([

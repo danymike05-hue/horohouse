@@ -19,6 +19,7 @@ import {
   Header,
   NotFoundException,
 } from '@nestjs/common';
+import { readUploads } from '../common/upload.util';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiQuery, ApiParam } from '@nestjs/swagger';
 import { FastifyRequest } from 'fastify';
 import { MultipartFile } from '@fastify/multipart';
@@ -778,18 +779,8 @@ export class PropertiesController {
     @Param('id') id: string,
     @Req() req: FastifyRequest & { user: User },
   ) {
-    const files: { buffer: Buffer }[] = [];
-    // @ts-ignore fastify types
-    const parts = req.parts();
-    for await (const part of parts as AsyncIterable<MultipartFile>) {
-      if (part.type === 'file') {
-        const chunks: Buffer[] = [];
-        for await (const chunk of part.file) {
-          chunks.push(Buffer.from(chunk));
-        }
-        files.push({ buffer: Buffer.concat(chunks) });
-      }
-    }
+    await this.propertiesService.assertCanManageById(id, (req as any).user);
+    const files = await readUploads(req, { kind: 'image', maxFiles: 20, maxFileMb: 15 });
     const property = await this.propertiesService.uploadImages(id, files, (req as any).user);
     return { message: 'Images uploaded successfully', property };
   }
@@ -815,18 +806,8 @@ export class PropertiesController {
     @Param('id') id: string,
     @Req() req: FastifyRequest & { user: User },
   ) {
-    const files: { buffer: Buffer }[] = [];
-    // @ts-ignore fastify types
-    const parts = req.parts();
-    for await (const part of parts as AsyncIterable<MultipartFile>) {
-      if (part.type === 'file') {
-        const chunks: Buffer[] = [];
-        for await (const chunk of part.file) {
-          chunks.push(Buffer.from(chunk));
-        }
-        files.push({ buffer: Buffer.concat(chunks) });
-      }
-    }
+    await this.propertiesService.assertCanManageById(id, (req as any).user);
+    const files = await readUploads(req, { kind: 'video', maxFiles: 3, maxFileMb: 100 });
     const property = await this.propertiesService.uploadVideos(id, files, (req as any).user);
     return { message: 'Videos uploaded successfully', property };
   }

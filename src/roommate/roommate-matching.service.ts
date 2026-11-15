@@ -38,6 +38,7 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { NotificationType } from '../notifications/schemas/notification.schema';
 import { ChatService } from '../chat/chat.service';
 import { CreateConversationDto } from '../chat/dto/chat.dto';
+import { escapeRegex } from '../common/regex.util';
 
 @Injectable()
 export class RoommateMatchingService {
@@ -327,7 +328,7 @@ export class RoommateMatchingService {
       userId: { $nin: Array.from(excludedIds).map((id) => new Types.ObjectId(id)) },
     };
 
-    if (dto.campusCity) filter.campusCity = { $regex: dto.campusCity, $options: 'i' };
+    if (dto.campusCity) filter.campusCity = { $regex: escapeRegex(dto.campusCity), $options: 'i' };
     if (dto.mode) filter.mode = dto.mode;
     if (dto.maxBudget) filter.budgetPerPersonMax = { $lte: dto.maxBudget };
     if (dto.sleepSchedule) filter.sleepSchedule = dto.sleepSchedule;

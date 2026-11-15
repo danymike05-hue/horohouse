@@ -769,6 +769,19 @@ pushTokens: PushToken[];
   @Prop({ type: Object, default: null })
   agentPreferences?: AgentPreferences;
 
+  /** Mobile Money numbers saved to pay with (the default is offered first at checkout) */
+  @Prop({
+    type: [{
+      phone: { type: String, required: true },
+      provider: { type: String, enum: ['MTN', 'ORANGE'], required: true },
+      label: { type: String },
+      isDefault: { type: Boolean, default: false },
+      addedAt: { type: Date, default: Date.now },
+    }],
+    default: [],
+  })
+  paymentNumbers?: Array<{ _id?: Types.ObjectId; phone: string; provider: 'MTN' | 'ORANGE'; label?: string; isDefault: boolean; addedAt?: Date }>;
+
   createdAt: Date;
   updatedAt: Date;
 

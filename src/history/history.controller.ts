@@ -19,14 +19,15 @@ import {
 
 import { HistoryService, LogActivityDto } from './history.service';
 import { UserRole } from '../users/schemas/user.schema';
-import { Roles } from '../auth/guards/roles.guard';
+import { Roles, RolesGuard } from '../auth/guards/roles.guard';
 import { Public } from '../auth/guards/roles.guard';
 import { JwtAuthGuard } from '../auth/guards/jwt.auth.guard';
 
 @ApiTags('History')
 @ApiBearerAuth('JWT-auth')
 @Controller('history')
-@UseGuards(JwtAuthGuard)
+// RolesGuard enforces the @Roles(...) below; without it they were ignored
+@UseGuards(JwtAuthGuard, RolesGuard)
 export class HistoryController {
   constructor(private readonly historyService: HistoryService) { }
 

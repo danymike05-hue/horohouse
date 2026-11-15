@@ -396,6 +396,7 @@ export class AuthController {
   }
 
   @Get('profile')
+  @UseGuards(JwtAuthGuard)
   @AllowIncompleteOnboarding()
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get current user profile' })
@@ -470,6 +471,7 @@ export class AuthController {
 
   @Post('enable-2fa')
   @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Enable two-factor authentication' })
   @ApiResponse({ status: 200, description: '2FA enabled successfully' })
@@ -479,6 +481,7 @@ export class AuthController {
 
   @Post('disable-2fa')
   @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Disable two-factor authentication' })
   @ApiResponse({ status: 200, description: '2FA disabled successfully' })
@@ -540,6 +543,7 @@ export class AuthController {
 
   @Post('resend-phone-verification')
   @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Resend phone verification' })
   @ApiResponse({ status: 200, description: 'Verification SMS sent' })

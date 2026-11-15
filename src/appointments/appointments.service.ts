@@ -6,6 +6,7 @@ import { CreateAppointmentDto } from './dto/create-appointment.dto';
 import { UpdateAppointmentDto } from './dto/update-appointment.dto';
 import { User, UserRole } from '../users/schemas/user.schema';
 import { Property, PropertyDocument } from '../properties/schemas/property.schema';
+import { escapeRegex } from '../common/regex.util';
 
 export interface AppointmentFilters {
     status?: AppointmentStatus;
@@ -120,10 +121,10 @@ export class AppointmentsService {
         if (search) {
             conditions.push({
                 $or: [
-                    { title: { $regex: search, $options: 'i' } },
-                    { clientName: { $regex: search, $options: 'i' } },
-                    { property: { $regex: search, $options: 'i' } },
-                    { clientEmail: { $regex: search, $options: 'i' } },
+                    { title: { $regex: escapeRegex(search), $options: 'i' } },
+                    { clientName: { $regex: escapeRegex(search), $options: 'i' } },
+                    { property: { $regex: escapeRegex(search), $options: 'i' } },
+                    { clientEmail: { $regex: escapeRegex(search), $options: 'i' } },
                 ]
             });
         }

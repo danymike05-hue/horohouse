@@ -78,8 +78,9 @@ export class SplitPaymentsController {
   @Roles(UserRole.LANDLORD, UserRole.ADMIN)
   @ApiOperation({ summary: 'Get all cycles for a specific lease' })
   @ApiParam({ name: 'leaseId' })
-  getCyclesByLease(@Param('leaseId') leaseId: string) {
-    return this.splitPaymentsService.findByLease(leaseId);
+  getCyclesByLease(@Param('leaseId') leaseId: string, @Req() req: FastifyRequest & { user: User }) {
+    const isAdmin = (req.user as any).role === UserRole.ADMIN;
+    return this.splitPaymentsService.findByLease(leaseId, isAdmin ? undefined : req.user._id.toString());
   }
 
   @Post('cycles/:cycleId/charge')
@@ -126,8 +127,8 @@ export class SplitPaymentsController {
   @Get('cycles/:cycleId')
   @ApiOperation({ summary: 'Get a single payment cycle by ID' })
   @ApiParam({ name: 'cycleId' })
-  getCycle(@Param('cycleId') cycleId: string) {
-    return this.splitPaymentsService.findById(cycleId);
+  getCycle(@Param('cycleId') cycleId: string, @Req() req: FastifyRequest & { user: User }) {
+    return this.splitPaymentsService.findByIdFor(cycleId, req.user._id.toString(), (req.user as any).role === UserRole.ADMIN);
   }
 
   // ── Admin — disbursement ──────────────────────────────────────────────────

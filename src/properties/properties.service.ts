@@ -45,6 +45,7 @@ import {
   SetCalendarPricesDto,
   AddExternalCalendarDto,
 } from './dto/property.dto';
+import { escapeRegex } from '../common/regex.util';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -596,9 +597,9 @@ export class PropertiesService implements OnModuleInit {
     if (filters.ownerId) query.ownerId = new Types.ObjectId(filters.ownerId);
     if (filters.search) {
       query.$or = [
-        { title: { $regex: filters.search, $options: 'i' } },
-        { city: { $regex: filters.search, $options: 'i' } },
-        { address: { $regex: filters.search, $options: 'i' } },
+        { title: { $regex: escapeRegex(filters.search), $options: 'i' } },
+        { city: { $regex: escapeRegex(filters.search), $options: 'i' } },
+        { address: { $regex: escapeRegex(filters.search), $options: 'i' } },
       ];
     }
 
@@ -1894,7 +1895,7 @@ export class PropertiesService implements OnModuleInit {
     if (filters.propertyType) query.type = filters.propertyType;
     if (filters.listingType) query.listingType = filters.listingType;
     if (filters.city) query.city = filters.city.trim().toLowerCase();
-    if (filters.neighborhood) query.neighborhood = new RegExp(filters.neighborhood.trim(), 'i');
+    if (filters.neighborhood) query.neighborhood = new RegExp(escapeRegex(filters.neighborhood.trim()), 'i');
     if (filters.bedrooms) query['amenities.bedrooms'] = { $gte: filters.bedrooms };
     if (filters.bathrooms) query['amenities.bathrooms'] = { $gte: filters.bathrooms };
     if (filters.furnished !== undefined) query['amenities.furnished'] = filters.furnished;
@@ -2184,6 +2185,14 @@ export class PropertiesService implements OnModuleInit {
     } catch (err) {
       if (!(await this.coHosts.isActive(user._id, property._id))) throw err;
     }
+  }
+
+  /** For upload routes: refuse before the upload is read */
+  async assertCanManageById(propertyId: string, user: User): Promise<void> {
+    if (!Types.ObjectId.isValid(propertyId)) throw new NotFoundException('Property not found');
+    const property = await this.propertyModel.findById(propertyId).select('ownerId agentId hostId coHosts').exec();
+    if (!property) throw new NotFoundException('Property not found');
+    this.assertCanManage(property as any, user);
   }
 
   private assertCanManage(property: Property, user: User): void {

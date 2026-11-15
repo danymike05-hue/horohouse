@@ -4,6 +4,7 @@ import { Model, Types } from 'mongoose';
 
 import { History, HistoryDocument, ActivityType, SearchFilters, DeviceInfo } from './schemas/history.schema';
 import { LogActivityDto } from './dto/log-activity.dto';
+import { escapeRegex } from '../common/regex.util';
 
 @Injectable()
 export class HistoryService {
@@ -543,7 +544,7 @@ export class HistoryService {
 
     if (activityType) filter.activityType = activityType;
     if (userId) filter.userId = new Types.ObjectId(userId);
-    if (city) filter.city = new RegExp(city, 'i');
+    if (city) filter.city = new RegExp(escapeRegex(city), 'i');
     if (ipAddress) filter.ipAddress = ipAddress;
 
     if (startDate || endDate) {

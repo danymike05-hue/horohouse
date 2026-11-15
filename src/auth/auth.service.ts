@@ -918,22 +918,10 @@ async registerWithEmail(dto: RegisterWithEmailDto, req?: any): Promise<AuthToken
   /**
    * Enable two-factor authentication
    */
-  async enable2FA(user: User): Promise<{ message: string; secret?: string }> {
-    try {
-      // For now, we'll just mark 2FA as enabled
-      // In a real implementation, you'd generate a TOTP secret
-      const userId = user._id ? user._id.toString() : (user as any).id || (user as any).sub;
-      await this.userModel.findByIdAndUpdate(userId, {
-        twoFactorEnabled: true
-      });
-
-      this.logger.log(`2FA enabled for user: ${userId}`);
-
-      return { message: 'Two-factor authentication enabled successfully' };
-    } catch (error) {
-      this.logger.error('2FA enable failed:', error);
-      throw error;
-    }
+  async enable2FA(_user: User): Promise<{ message: string; secret?: string }> {
+    // Sign-in never asks for a second code yet, so turning this "on" protected nothing
+    // while telling people it did. Refused until there is a real authenticator flow.
+    throw new BadRequestException('Two-step verification is not available yet');
   }
 
   /**

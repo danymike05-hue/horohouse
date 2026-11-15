@@ -9,6 +9,8 @@ import {
 } from '../schemas/wallet.schema';
 // ✅ CamerPayService replaces FlutterwaveService
 import { CamerPayService } from '../services/camerpay.service';
+import { NotificationsService } from '../../notifications/notifications.service';
+import { NotificationType } from '../../notifications/schemas/notification.schema';
 import { Transaction, TransactionDocument, TransactionType } from '../schemas/transaction.schema';
 
 @Injectable()
@@ -28,6 +30,7 @@ export class WalletService {
     @InjectModel(Transaction.name) private transactionModel: Model<TransactionDocument>,
     // ✅ Injected CamerPayService
     private camerPayService: CamerPayService,
+    private notificationsService: NotificationsService,
   ) {}
 
   // ─── Wallet CRUD ────────────────────────────────────────────────────────────
@@ -94,12 +97,19 @@ export class WalletService {
     amount: number,
     description: string,
     reference?: string,
+    opts: { availableOnly?: boolean } = {},
   ): Promise<WalletDocument> {
     if (!(amount > 0)) throw new BadRequestException('Invalid amount');
     const current = await this.getWallet(userId);
     const now = new Date();
+    const filter: any = { _id: current._id, balance: { $gte: amount } };
+    // Withdrawals: held earnings stay put. Checked in the write itself, so two requests
+    // sent at once can't both pass a check made beforehand.
+    if (opts.availableOnly) {
+      filter.$expr = { $gte: [{ $ifNull: ['$availableBalance', '$balance'] }, amount] };
+    }
     const updated = await this.walletModel.findOneAndUpdate(
-      { _id: current._id, balance: { $gte: amount } },
+      filter,
       [
         {
           $set: {
@@ -233,8 +243,29 @@ export class WalletService {
 
     const reference = `WD-${Date.now()}`;
 
-    // Reserve funds immediately
-    await this.debitWallet(userId, amount, `Withdrawal via ${withdrawalMethod}`, reference);
+    // Reserve funds immediately (only from what's available, never from held earnings)
+    await this.debitWallet(userId, amount, `Withdrawal via ${withdrawalMethod}`, reference, { availableOnly: true });
+
+    // Sent somewhere other than the saved payout method: tell the owner, in case it isn't them
+    const digits = (v?: string) => String(v ?? '').replace(/\D/g, '').replace(/^237/, '');
+    const savedTo = withdrawalMethod === 'bank_transfer' ? wallet.bankAccountNumber : wallet.mobileMoneyNumber;
+    const sentTo = withdrawalMethod === 'bank_transfer' ? accountDetails.accountNumber : accountDetails.phoneNumber;
+    if (digits(sentTo) && digits(sentTo) !== digits(savedTo)) {
+      const masked = `•••• ${digits(sentTo).slice(-4)}`;
+      this.notificationsService.create(
+        {
+          userId,
+          type: NotificationType.SYSTEM,
+          title: 'Withdrawal to a new account',
+          message: `${amount.toLocaleString('fr-FR')} XAF is being sent to ${masked}, which isn't your saved payout method. If this wasn't you, change your password and contact support now.`,
+          link: '/settings/payments',
+        } as any,
+        {
+          title: 'Retrait vers un nouveau compte',
+          message: `${amount.toLocaleString('fr-FR')} XAF est envoyé vers ${masked}, qui n'est pas votre moyen de versement enregistré. Si ce n'est pas vous, changez votre mot de passe et contactez le support immédiatement.`,
+        },
+      ).catch((e: any) => this.logger.warn(`Withdrawal alert not sent for ${userId}: ${e?.message}`));
+    }
 
     const transaction = new this.transactionModel({
       userId: new Types.ObjectId(userId),

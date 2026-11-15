@@ -174,8 +174,9 @@ async initializePayment(payload: {
 
   verifyWebhookSignature(rawBody: string, signature: string): boolean {
     if (!this.webhookSecret) {
-      this.logger.warn('CAMERPAY_WEBHOOK_SECRET not set — skipping sig check');
-      return true;
+      // Fail closed: without the secret anyone could post a "SUCCESSFUL" payment here
+      this.logger.error('CAMERPAY_WEBHOOK_SECRET not set — rejecting webhook');
+      return false;
     }
     try {
       const expected = crypto

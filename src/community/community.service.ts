@@ -15,6 +15,7 @@ import {
 import { User, UserDocument } from '../users/schemas/user.schema';
 import { CreatePostDto } from './dto/create-post.dto';
 import { UpdatePostDto } from './dto/update-post.dto';
+import { escapeRegex } from '../common/regex.util';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -144,9 +145,9 @@ export class CommunityService {
     if (filters.tag) query.tags = filters.tag;
     if (filters.search) {
       query.$or = [
-        { title:   { $regex: filters.search, $options: 'i' } },
-        { excerpt: { $regex: filters.search, $options: 'i' } },
-        { tags:    { $regex: filters.search, $options: 'i' } },
+        { title:   { $regex: escapeRegex(filters.search), $options: 'i' } },
+        { excerpt: { $regex: escapeRegex(filters.search), $options: 'i' } },
+        { tags:    { $regex: escapeRegex(filters.search), $options: 'i' } },
       ];
     }
 

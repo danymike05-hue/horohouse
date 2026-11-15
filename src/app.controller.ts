@@ -1,7 +1,9 @@
-import { Controller, Get } from '@nestjs/common';
+import { Controller, Get, UseGuards } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import { AppService } from './app.service';
-import { Public } from './auth/guards/roles.guard';
+import { Public, Roles, RolesGuard } from './auth/guards/roles.guard';
+import { JwtAuthGuard } from './auth/guards/jwt.auth.guard';
+import { UserRole } from './users/schemas/user.schema';
 
 @ApiTags('Health')
 @Controller()
@@ -24,7 +26,10 @@ export class AppController {
     return this.appService.getHello();
   }
 
+  // Sends a real email on every call: admins only
   @Get('test-email')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN)
 async testEmail() {
   const nodemailer = require('nodemailer');
   const config = {

@@ -10,9 +10,20 @@ import {
   HttpCode,
   Param,
   Logger,
+  ForbiddenException,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
 import { JwtAuthGuard } from 'src/auth/guards/jwt.auth.guard';
+import { Roles, RolesGuard } from 'src/auth/guards/roles.guard';
+import { UserRole } from 'src/users/schemas/user.schema';
+
+/** The signed-in user's id, whichever shape the JWT strategy gave */
+const uidOf = (req: any): string | undefined => {
+  const u = req?.user;
+  const id = u?._id ?? u?.id ?? u?.userId ?? u?.sub;
+  return id ? String(id) : undefined;
+};
+const isAdmin = (req: any) => req?.user?.role === UserRole.ADMIN;
 import { AiChatService, ChatRequest, ChatResponse } from './ai-chat.service';
 
 @ApiTags('AI Chat')
@@ -64,10 +75,8 @@ export class AiChatController {
       // Get user from request if authenticated
       const user = req.user;
 
-      // If user is authenticated, use their ID
-      if (user && !chatRequest.userId) {
-        chatRequest.userId = user.userId;
-      }
+      // The session is the caller's, never a userId sent in the body
+      chatRequest.userId = uidOf(req);
 
       this.logger.log(`Chat request from user: ${chatRequest.userId || 'guest'}`);
 
@@ -95,6 +104,7 @@ async chatGuest(@Body() chatRequest: ChatRequest): Promise<ChatResponse> {
     this.logger.log(`Guest chat request from session: ${chatRequest.sessionId || 'new'}`);
 
     // Process chat without user authentication
+    chatRequest.userId = undefined;
     const response = await this.aiChatService.processChat(chatRequest, undefined);
 
     return response;
@@ -185,9 +195,13 @@ async chatGuest(@Body() chatRequest: ChatRequest): Promise<ChatResponse> {
     status: 200,
     description: 'Chat session data',
   })
-  async getSession(@Param('sessionId') sessionId: string) {
+  async getSession(@Param('sessionId') sessionId: string, @Request() req) {
     try {
       const session = await this.aiChatService.getSession(sessionId);
+      // Only its owner (or an admin) can read a session
+      if (session && String(session.userId) !== uidOf(req) && !isAdmin(req)) {
+        return { success: false, message: 'Session not found' };
+      }
 
       if (!session) {
         return {
@@ -229,8 +243,9 @@ async chatGuest(@Body() chatRequest: ChatRequest): Promise<ChatResponse> {
       },
     },
   })
-  async getLeadScore(@Param('userId') userId: string) {
+  async getLeadScore(@Param('userId') userId: string, @Request() req) {
     try {
+      if (userId !== uidOf(req) && !isAdmin(req)) throw new ForbiddenException('Admins only');
       const leadScore = await this.aiChatService.getLeadScore(userId);
 
       return {
@@ -244,7 +259,8 @@ async chatGuest(@Body() chatRequest: ChatRequest): Promise<ChatResponse> {
   }
 
   @Get('hot-leads')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN)
   @ApiBearerAuth()
   @ApiOperation({ 
     summary: 'Get hot leads for sales team',
@@ -301,6 +317,8 @@ async chatGuest(@Body() chatRequest: ChatRequest): Promise<ChatResponse> {
   }
 
   @Get('stats')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN)
   @ApiOperation({ 
     summary: 'Get chat statistics',
     description: 'Analytics including active sessions, messages, and lead distribution'
@@ -342,7 +360,8 @@ async chatGuest(@Body() chatRequest: ChatRequest): Promise<ChatResponse> {
   }
 
   @Post('cleanup')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN)
   @ApiBearerAuth()
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ 

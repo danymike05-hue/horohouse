@@ -176,9 +176,23 @@ export class SplitPaymentsService {
   }
 
   /** Get all cycles for a lease, newest first */
-  async findByLease(leaseId: string): Promise<SplitPayment[]> {
+  /** A cycle for its landlord, a tenant in it, or an admin; others get 404 */
+  async findByIdFor(cycleId: string, userId: string, isAdmin: boolean): Promise<SplitPayment> {
+    const cycle: any = await this.findById(cycleId);
+    const idOf = (v: any): string => String(v?._id ?? v ?? '');
+    const inIt = idOf(cycle.landlordUserId) === userId
+      || (cycle.tenantShares ?? []).some((t: any) => idOf(t.tenantUserId) === userId);
+    if (!inIt && !isAdmin) throw new NotFoundException('Payment cycle not found');
+    return cycle;
+  }
+
+  /** A lease's cycles; a landlord only sees their own */
+  async findByLease(leaseId: string, landlordUserId?: string): Promise<SplitPayment[]> {
+    if (!Types.ObjectId.isValid(leaseId)) throw new BadRequestException('Invalid lease ID');
+    const filter: any = { leaseId: new Types.ObjectId(leaseId) };
+    if (landlordUserId) filter.landlordUserId = new Types.ObjectId(landlordUserId);
     return this.splitPaymentModel
-      .find({ leaseId: new Types.ObjectId(leaseId) })
+      .find(filter)
       .populate('propertyId', 'title address city')
       .sort({ cycleStart: -1 })
       .exec();

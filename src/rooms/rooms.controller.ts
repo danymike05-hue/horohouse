@@ -13,6 +13,7 @@ import {
     HttpStatus,
     BadRequestException,
 } from '@nestjs/common';
+import { readUploads } from '../common/upload.util';
 import {
     ApiTags,
     ApiOperation,
@@ -125,18 +126,8 @@ export class RoomsController {
         @Param('id') id: string,
         @Req() req: FastifyRequest & { user: User },
     ) {
-        const files: { buffer: Buffer }[] = [];
-        // @ts-ignore fastify types
-        const parts = req.parts();
-        for await (const part of parts as AsyncIterable<any>) {
-            if (part.type === 'file') {
-                const chunks: Buffer[] = [];
-                for await (const chunk of part.file) {
-                    chunks.push(Buffer.from(chunk));
-                }
-                files.push({ buffer: Buffer.concat(chunks) });
-            }
-        }
+        await this.roomsService.assertCanManageRoom(id, req.user);
+        const files = await readUploads(req, { kind: 'image', maxFiles: 20, maxFileMb: 15 });
         const room = await this.roomsService.uploadImages(id, files, req.user);
         return { message: 'Images uploaded successfully', room };
     }

@@ -1,4 +1,12 @@
-import { IsBoolean, IsIn, IsOptional } from 'class-validator';
+import { IsBoolean, IsIn, IsOptional, IsString, Length } from 'class-validator';
+
+/** A Mobile Money number to pay with */
+class AddPaymentNumberDto {
+  @IsString() @Length(9, 20) phone: string;
+  @IsIn(['MTN', 'ORANGE']) provider: 'MTN' | 'ORANGE';
+  @IsOptional() @IsString() @Length(0, 40) label?: string;
+  @IsOptional() @IsBoolean() makeDefault?: boolean;
+}
 import {
   Controller,
   Get,
@@ -123,6 +131,31 @@ export class UsersController {
     return this.usersService.removeFromFavorites(req.user.id, propertyId);
   }
 
+  // ── Saved Mobile Money numbers (to pay with) ──
+  @Get('me/payment-numbers')
+  @ApiOperation({ summary: 'My saved Mobile Money numbers' })
+  listPaymentNumbers(@Req() req: any) {
+    return this.usersService.listPaymentNumbers(req.user.id);
+  }
+
+  @Post('me/payment-numbers')
+  @ApiOperation({ summary: 'Save a Mobile Money number to pay with (up to 5)' })
+  addPaymentNumber(@Req() req: any, @Body() dto: AddPaymentNumberDto) {
+    return this.usersService.addPaymentNumber(req.user.id, dto);
+  }
+
+  @Patch('me/payment-numbers/:numberId/default')
+  @ApiOperation({ summary: 'Make a saved number the default' })
+  setDefaultPaymentNumber(@Req() req: any, @Param('numberId') numberId: string) {
+    return this.usersService.setDefaultPaymentNumber(req.user.id, numberId);
+  }
+
+  @Delete('me/payment-numbers/:numberId')
+  @ApiOperation({ summary: 'Remove a saved number' })
+  removePaymentNumber(@Req() req: any, @Param('numberId') numberId: string) {
+    return this.usersService.removePaymentNumber(req.user.id, numberId);
+  }
+
   // The app records views and clears history here; these two routes were missing (404).
   @Post('me/recently-viewed/:propertyId')
   @HttpCode(HttpStatus.OK)
@@ -183,14 +216,23 @@ export class UsersController {
   @ApiResponse({ status: 200, description: 'Profile picture uploaded successfully' })
   async uploadProfilePicture(@Req() req: any): Promise<User> {
     // Await the multipart file (Fastify multipart)
-    const data = await req.file();
+    const data = await req.file({ limits: { fileSize: 10 * 1024 * 1024 } });
 
     if (!data) {
       throw new BadRequestException('No file uploaded');
     }
+    if (!/^image\//.test(String(data.mimetype || '').toLowerCase())) {
+      data.file.resume();
+      throw new BadRequestException('Upload a photo (JPG, PNG, WEBP or HEIC)');
+    }
 
-    // Convert file stream to buffer (Fastify gives a stream, so buffer is async)
-    const buffer = await data.toBuffer();
+    // Convert file stream to buffer (throws past 10 MB)
+    let buffer: Buffer;
+    try {
+      buffer = await data.toBuffer();
+    } catch {
+      throw new BadRequestException('The photo can be up to 10 MB');
+    }
 
     // Create an object to pass to service:
     const file = {

@@ -17,6 +17,7 @@ import {
   CityPerformance,
   HostLeaderboard,
 } from './dto/admin-analytics.dto';
+import { escapeRegex } from '../common/regex.util';
 
 export interface DateRange {
   startDate: Date;
@@ -361,7 +362,7 @@ export class AdminAnalyticsService {
       listingType: ListingType.SHORT_TERM,
       isActive:    true,
     };
-    if (filters.city)       propertyFilter.city  = new RegExp(filters.city, 'i');
+    if (filters.city)       propertyFilter.city  = new RegExp(escapeRegex(filters.city), 'i');
     if (filters.propertyId) propertyFilter._id   = new Types.ObjectId(filters.propertyId);
 
     // Count active properties (denominator for occupancy)

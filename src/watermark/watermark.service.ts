@@ -1,6 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
 import * as fs from 'fs';
-import * as sharp from 'sharp';
+// sharp 0.35 ships ESM-style types; at runtime require() still returns the function
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const sharp: typeof import('sharp').default = require('sharp');
 
 @Injectable()
 export class WatermarkService {

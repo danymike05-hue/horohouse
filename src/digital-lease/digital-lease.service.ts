@@ -159,6 +159,16 @@ export class DigitalLeaseService {
   // READ
   // ══════════════════════════════════════════════════════════════════════════
 
+  /** A lease for someone on it (landlord or tenant) or an admin; others get 404, not a hint it exists */
+  async findByIdFor(leaseId: string, userId: string, role?: string): Promise<DigitalLease> {
+    const lease: any = await this.findById(leaseId);
+    const idOf = (v: any): string => String(v?._id ?? v ?? '');
+    const onIt = idOf(lease.landlordUserId) === userId
+      || (lease.tenants ?? []).some((t: any) => idOf(t.tenantUserId) === userId);
+    if (!onIt && role !== UserRole.ADMIN) throw new NotFoundException('Lease not found');
+    return lease;
+  }
+
   async findById(leaseId: string): Promise<DigitalLease> {
     if (!Types.ObjectId.isValid(leaseId)) {
       throw new BadRequestException('Invalid lease ID');

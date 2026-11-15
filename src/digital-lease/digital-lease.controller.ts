@@ -100,8 +100,8 @@ export class DigitalLeaseController {
   @Get(':leaseId')
   @ApiOperation({ summary: 'Get a lease by ID' })
   @ApiParam({ name: 'leaseId' })
-  findOne(@Param('leaseId') leaseId: string) {
-    return this.digitalLeaseService.findById(leaseId);
+  findOne(@Param('leaseId') leaseId: string, @Req() req: FastifyRequest & { user: User }) {
+    return this.digitalLeaseService.findByIdFor(leaseId, req.user._id.toString(), (req.user as any).role);
   }
 
   // ── E-signature ───────────────────────────────────────────────────────────

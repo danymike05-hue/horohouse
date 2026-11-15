@@ -16,6 +16,7 @@ import { AuthorProfile,  AuthorProfileDocument, AuthorRole } from '../schemas/au
 import { CreatePostDto, UpdatePostDto, QueryPostsDto, SchedulePostDto, ReviewPostDto } from '../dto/insights.dto';
 import { InsightsSeoService } from './insights-seo.service';
 import { InsightsRecommendationService } from './insights-recommendation.service';
+import { escapeRegex } from '../../common/regex.util';
 
 @Injectable()
 export class InsightsService {
@@ -47,7 +48,7 @@ export class InsightsService {
       if (t) filter.tags = t._id;
     }
     if (postType) filter.postType = postType;
-    if (city) filter['neighborhood.city'] = { $regex: city, $options: 'i' };
+    if (city) filter['neighborhood.city'] = { $regex: escapeRegex(city), $options: 'i' };
     if (author) {
       const a = await this.authorModel.findOne({ slug: author }).lean();
       if (a) filter.author = a._id;
@@ -153,7 +154,7 @@ export class InsightsService {
       .find({
         status: PostStatus.PUBLISHED,
         postType: PostType.NEIGHBORHOOD_GUIDE,
-        'neighborhood.city': { $regex: city, $options: 'i' },
+        'neighborhood.city': { $regex: escapeRegex(city), $options: 'i' },
       })
       .sort({ publishedAt: -1 })
       .populate('author', 'displayName slug avatar')

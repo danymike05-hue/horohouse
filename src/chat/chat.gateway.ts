@@ -161,6 +161,8 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
   ) {
     try {
       const userId = client.data.user.userId || client.data.user.sub;
+      // Throws unless this user is a participant: the room carries every new message
+      await this.chatService.getConversation(String(data?.conversationId ?? ''), String(userId));
       client.join(`conversation:${data.conversationId}`);
       this.logger.log(`✅ User ${userId} joined conversation: ${data.conversationId}`);
       return { success: true };
@@ -266,6 +268,7 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     @MessageBody() data: { conversationId: string },
   ) {
     const userId = client.data.user.userId || client.data.user.sub;
+    if (!client.rooms.has(`conversation:${data?.conversationId}`)) return;
     client.to(`conversation:${data.conversationId}`).emit('typing:start', {
       conversationId: data.conversationId,
       userId,
@@ -278,6 +281,7 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     @MessageBody() data: { conversationId: string },
   ) {
     const userId = client.data.user.userId || client.data.user.sub;
+    if (!client.rooms.has(`conversation:${data?.conversationId}`)) return;
     client.to(`conversation:${data.conversationId}`).emit('typing:stop', {
       conversationId: data.conversationId,
       userId,
@@ -438,6 +442,12 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     @MessageBody() data: { callId: string },
   ) {
     try {
+      const userId = String(client.data.user.userId || client.data.user.sub);
+      const existing: any = await this.callService.getCall(data.callId);
+      const idOf = (v: any) => String(v?._id ?? v ?? '');
+      if (![idOf(existing.initiatorId), idOf(existing.recipientId)].includes(userId)) {
+        return { success: false, error: 'Not your call' };
+      }
       this.logger.log(`✅ Call ${data.callId} marked as connected`);
       const call = await this.callService.setCallConnected(data.callId);
 
@@ -467,6 +477,9 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
       const recipient = call.recipientId as any;
       const initiatorId = initiator._id ? initiator._id.toString() : initiator.toString();
       const recipientId = recipient._id ? recipient._id.toString() : recipient.toString();
+      if (userId !== initiatorId && userId !== recipientId) {
+        return { success: false, error: 'Not your call' };
+      }
       const targetUserId = userId === initiatorId ? recipientId : initiatorId;
 
       this.emitToUser(targetUserId, 'call:ice-candidate', {
@@ -488,6 +501,12 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     @MessageBody() data: { callId: string },
   ) {
     try {
+      const userId = String(client.data.user.userId || client.data.user.sub);
+      const existing: any = await this.callService.getCall(data.callId);
+      const idOf = (v: any) => String(v?._id ?? v ?? '');
+      if (![idOf(existing.initiatorId), idOf(existing.recipientId)].includes(userId)) {
+        return { success: false, error: 'Not your call' };
+      }
       this.logger.log(`⏰ Call ${data.callId} marked as missed`);
       const call = await this.callService.markCallAsMissed(data.callId);
       const initiatorIdString = call.initiatorId.toString();

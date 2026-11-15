@@ -8,6 +8,7 @@ import { User, UserDocument } from '../users/schemas/user.schema';
 import { Property, PropertyDocument } from '../properties/schemas/property.schema';
 import { EmailService } from '../email/email.service';
 import { CreateSavedSearchDto, UpdateSavedSearchDto } from './dto/saved-search.dto';
+import { escapeRegex } from '../common/regex.util';
 
 @Injectable()
 export class SavedSearchesService {
@@ -464,11 +465,11 @@ private buildPropertyQuery(criteria: any): any {
   }
 
   if (criteria.city) {
-    query.city = { $regex: criteria.city, $options: 'i' };
+    query.city = { $regex: escapeRegex(criteria.city), $options: 'i' };
   }
 
   if (criteria.state) {
-    query.state = { $regex: criteria.state, $options: 'i' };
+    query.state = { $regex: escapeRegex(criteria.state), $options: 'i' };
   }
 
   if (criteria.bedrooms) {
