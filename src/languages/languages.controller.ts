@@ -7,7 +7,7 @@ import { Roles, RolesGuard } from '../auth/guards/roles.guard';
 import { UserRole } from '../users/schemas/user.schema';
 import { LanguagesService } from './languages.service';
 import {
-  CompleteLessonDto, CourseDto, DraftDto, LessonDto, UnitDto, UpdateCourseDto, UpdateLanguageProfileDto, UpdateLessonDto,
+  CompleteLessonDto, CourseDto, DraftDto, LessonDto, ResultsDto, UnitDto, UpdateCourseDto, UpdateLanguageProfileDto, UpdateLessonDto,
 } from './dto/languages.dto';
 
 class MoveDto { @IsIn(['up', 'down']) dir: 'up' | 'down'; }
@@ -87,12 +87,36 @@ export class LanguagesController {
   @Patch('me')
   updateMe(@Req() req: any, @Body() dto: UpdateLanguageProfileDto) { return this.service.updateMe(uid(req), dto); }
 
+  @Get('league')
+  @ApiOperation({ summary: "This week's league: my campus, and campus against campus" })
+  league(@Req() req: any) { return this.service.league(uid(req)); }
+
   @Get('courses')
   courses(@Req() req: any, @Headers('accept-language') lang?: string) { return this.service.courses(uid(req), uiLang(lang)); }
 
   @Get('courses/:courseId')
   path(@Req() req: any, @Param('courseId') courseId: string, @Headers('accept-language') lang?: string) {
     return this.service.path(uid(req), courseId, uiLang(lang));
+  }
+
+  @Get('courses/:courseId/practice')
+  @ApiOperation({ summary: 'Review session: due and weak exercises from finished lessons' })
+  practice(@Req() req: any, @Param('courseId') courseId: string) { return this.service.practice(uid(req), courseId); }
+
+  @Post('courses/:courseId/practice/complete')
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
+  completePractice(@Req() req: any, @Param('courseId') courseId: string, @Body() dto: ResultsDto) {
+    return this.service.completePractice(uid(req), courseId, dto);
+  }
+
+  @Get('courses/:courseId/placement')
+  @ApiOperation({ summary: 'Placement test: a few questions per unit' })
+  placement(@Req() req: any, @Param('courseId') courseId: string) { return this.service.placement(uid(req), courseId); }
+
+  @Post('courses/:courseId/placement')
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  submitPlacement(@Req() req: any, @Param('courseId') courseId: string, @Body() dto: ResultsDto) {
+    return this.service.submitPlacement(uid(req), courseId, dto);
   }
 
   @Get('courses/:courseId/lessons/:lessonId')

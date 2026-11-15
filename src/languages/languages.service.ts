@@ -6,10 +6,11 @@ import { Cron } from '@nestjs/schedule';
 import { Model, Types } from 'mongoose';
 import { ConfigService } from '@nestjs/config';
 import {
-  LanguageCourse, LanguageCourseDocument, LanguageProfile, LanguageProfileDocument,
+  LanguageCourse, LanguageCourseDocument, LanguageMemory, LanguageMemoryDocument, LanguageProfile, LanguageProfileDocument,
 } from './schemas/language.schemas';
+import { User, UserDocument } from '../users/schemas/user.schema';
 import {
-  CompleteLessonDto, CourseDto, DraftDto, LessonDto, UnitDto, UpdateCourseDto, UpdateLanguageProfileDto, UpdateLessonDto,
+  CompleteLessonDto, CourseDto, DraftDto, ExerciseResultDto, LessonDto, ResultsDto, UnitDto, UpdateCourseDto, UpdateLanguageProfileDto, UpdateLessonDto,
 } from './dto/languages.dto';
 import { starterCourses } from './seed/build';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -20,6 +21,14 @@ const XP_NEW = 10;
 const XP_PERFECT_BONUS = 5;
 const XP_REPEAT = 5;
 const XP_DAILY_CAP = 300;
+/** Practice: 5 XP, +1 for every 2 right answers, at most 10 */
+const XP_PRACTICE_BASE = 5;
+const XP_PRACTICE_MAX = 10;
+/** Days until the next review, by box (0 = due now) */
+const BOX_DAYS = [0, 1, 3, 7, 14, 30];
+/** Placement: questions per unit, and how many must be right to skip the unit */
+const PLACEMENT_PER_UNIT = 3;
+const PLACEMENT_PASS = 2;
 
 /** Days in Cameroon time (UTC+1, no daylight saving) */
 const dayKey = (offsetDays = 0) => new Date(Date.now() + 3600_000 + offsetDays * 86_400_000).toISOString().slice(0, 10);
@@ -37,6 +46,8 @@ export class LanguagesService implements OnModuleInit {
   constructor(
     @InjectModel(LanguageCourse.name) private courseModel: Model<LanguageCourseDocument>,
     @InjectModel(LanguageProfile.name) private profileModel: Model<LanguageProfileDocument>,
+    @InjectModel(LanguageMemory.name) private memoryModel: Model<LanguageMemoryDocument>,
+    @InjectModel(User.name) private userModel: Model<UserDocument>,
     private notifications: NotificationsService,
     private config: ConfigService,
   ) {}
@@ -44,11 +55,40 @@ export class LanguagesService implements OnModuleInit {
   /** First start: put the starter courses in (only when there are none) */
   async onModuleInit() {
     try {
-      if (await this.courseModel.estimatedDocumentCount()) return;
-      await this.courseModel.insertMany(starterCourses());
-      this.logger.log('Language starter courses added');
+      await this.syncStarterContent();
     } catch (err: any) {
       this.logger.warn(`Could not add starter courses: ${err?.message}`);
+    }
+  }
+
+  /**
+   * Starter content: new courses are inserted; existing ones only get the starter units they
+   * don't have yet (matched by seedKey, or by title for units added before seedKey existed).
+   * Nothing an admin changed is overwritten.
+   */
+  private async syncStarterContent() {
+    for (const seed of starterCourses()) {
+      const existing: any = await this.courseModel.findOne({ slug: seed.slug });
+      if (!existing) {
+        await this.courseModel.create(seed);
+        this.logger.log(`Language course added: ${seed.slug}`);
+        continue;
+      }
+      let changed = false;
+      (seed.units as any[]).forEach((su: any, i: number) => {
+        // Tag an older copy of this starter unit (same position and title) with its key
+        const untagged = existing.units.find((u: any) => !u.seedKey && u.title === su.title);
+        if (untagged) { untagged.seedKey = su.seedKey; changed = true; }
+        if (!existing.units.some((u: any) => u.seedKey === su.seedKey)) {
+          existing.units.push(su);
+          changed = true;
+          this.logger.log(`Starter unit added to ${seed.slug}: ${su.title} (#${i + 1})`);
+        }
+      });
+      if (changed) {
+        existing.markModified('units');
+        await existing.save();
+      }
     }
   }
 
@@ -133,6 +173,8 @@ export class LanguagesService implements OnModuleInit {
       },
       units,
       profile: this.fresh(profile),
+      dueCount: await this.dueCount(userId, c._id),
+      finished: done.size,
     };
   }
 
@@ -155,11 +197,19 @@ export class LanguagesService implements OnModuleInit {
     const exCount = lesson.exercises?.length ?? 0;
     if (exCount && dto.total < Math.min(exCount, 3)) throw new BadRequestException('Lesson not finished');
 
+    // Only this lesson's own exercises go into the review schedule
+    const own = new Set((lesson.exercises ?? []).map((e: any) => String(e._id)));
+    await this.remember(userId, c._id, (dto.results ?? []).filter((r) => own.has(r.exerciseId)));
+    const wanted = alreadyDone ? XP_REPEAT : XP_NEW + (dto.mistakes === 0 ? XP_PERFECT_BONUS : 0);
+    return this.award(userId, c, wanted, dto.mistakes === 0, String(lesson._id));
+  }
+
+  /** XP (with the daily cap), streak and daily goal; optionally marks a lesson done */
+  private async award(userId: string, c: any, wanted: number, perfect: boolean, completeLessonId?: string) {
     const p = await this.profileOf(userId);
     const now = this.fresh(p);
     const today = dayKey();
-    let xp = alreadyDone ? XP_REPEAT : XP_NEW + (dto.mistakes === 0 ? XP_PERFECT_BONUS : 0);
-    xp = Math.max(0, Math.min(xp, XP_DAILY_CAP - now.todayXp));
+    const xp = Math.max(0, Math.min(wanted, XP_DAILY_CAP - now.todayXp));
 
     // Streak: +1 on the first lesson of a new day, back to 1 after a missed day
     let streak = now.streak;
@@ -170,7 +220,7 @@ export class LanguagesService implements OnModuleInit {
     const courses = [...p.courses];
     const i = courses.findIndex((x) => String(x.courseId) === String(c._id));
     const entry = i >= 0 ? { ...courses[i] } : { courseId: c._id as Types.ObjectId, completed: [] as string[], xp: 0 };
-    if (!entry.completed.includes(String(lesson._id))) entry.completed = [...entry.completed, String(lesson._id)];
+    if (completeLessonId && !entry.completed.includes(completeLessonId)) entry.completed = [...entry.completed, completeLessonId];
     entry.xp = (entry.xp ?? 0) + xp;
     if (i >= 0) courses[i] = entry; else courses.push(entry);
 
@@ -183,7 +233,7 @@ export class LanguagesService implements OnModuleInit {
     });
     return {
       xpGained: xp,
-      perfect: dto.mistakes === 0,
+      perfect,
       streak,
       streakGrew: p.lastDay !== today,
       goalReached: !goalBefore && todayXp >= p.dailyGoal,
@@ -210,6 +260,178 @@ export class LanguagesService implements OnModuleInit {
     const c = await this.courseModel.findOne({ _id: id, ...(publishedOnly ? { isPublished: true } : {}) }).lean();
     if (!c) throw new NotFoundException('Course not found');
     return c;
+  }
+
+  // ── Review schedule ─────────────────────────────────────────────────────────
+
+  /** Move each answered exercise up a box (right) or back to box 0 (wrong) */
+  private async remember(userId: string, courseId: any, results: ExerciseResultDto[]) {
+    if (!results.length) return;
+    const uid = new Types.ObjectId(userId);
+    const cid = new Types.ObjectId(String(courseId));
+    const existing = await this.memoryModel.find({ userId: uid, exerciseId: { $in: results.map((r) => r.exerciseId) } }).lean();
+    const byId = new Map(existing.map((m) => [m.exerciseId, m]));
+    const now = Date.now();
+    const ops = results.map((r) => {
+      const prev = byId.get(r.exerciseId);
+      const box = r.correct ? Math.min(5, (prev?.box ?? 0) + 1) : 0;
+      return {
+        updateOne: {
+          filter: { userId: uid, exerciseId: r.exerciseId },
+          update: {
+            $set: { courseId: cid, box, due: new Date(now + BOX_DAYS[box] * 86_400_000) },
+            $inc: { seen: 1, wrong: r.correct ? 0 : 1 },
+          },
+          upsert: true,
+        },
+      };
+    });
+    await this.memoryModel.bulkWrite(ops as any, { ordered: false }).catch((e) => this.logger.warn(`Review schedule not saved: ${e?.message}`));
+  }
+
+  /** Every exercise of the lessons this learner finished, by id */
+  private async finishedExercises(userId: string, c: any) {
+    const profile = await this.profileOf(userId);
+    const done = new Set(profile.courses.find((x) => String(x.courseId) === String(c._id))?.completed ?? []);
+    const map = new Map<string, any>();
+    for (const l of this.lessonsOf(c)) {
+      if (!done.has(String(l._id))) continue;
+      for (const e of l.exercises ?? []) map.set(String(e._id), { ...e, _id: String(e._id) });
+    }
+    return map;
+  }
+
+  /** Practice: what's due first (weakest box first), topped up with the least-known ones */
+  async practice(userId: string, courseId: string) {
+    const c = await this.findCourse(courseId, true);
+    const pool = await this.finishedExercises(userId, c);
+    if (!pool.size) throw new BadRequestException('Finish a lesson first, then practise it here');
+    const memories = await this.memoryModel
+      .find({ userId: new Types.ObjectId(userId), courseId: c._id, exerciseId: { $in: [...pool.keys()] } })
+      .sort({ due: 1, box: 1 }).lean();
+    const now = Date.now();
+    const due = memories.filter((m) => new Date(m.due).getTime() <= now).sort((a, b) => a.box - b.box);
+    const picked: string[] = due.slice(0, 12).map((m) => m.exerciseId);
+    // Top up: exercises never reviewed, then the lowest boxes
+    const known = new Map(memories.map((m) => [m.exerciseId, m.box]));
+    const rest = [...pool.keys()]
+      .filter((id) => !picked.includes(id))
+      .sort((a, b) => (known.get(a) ?? -1) - (known.get(b) ?? -1) || Math.random() - 0.5);
+    for (const id of rest) { if (picked.length >= 10) break; picked.push(id); }
+    return {
+      dueCount: due.length,
+      exercises: picked.map((id) => pool.get(id)).filter(Boolean),
+      targetLang: c.targetLang, baseLang: c.baseLang,
+    };
+  }
+
+  async completePractice(userId: string, courseId: string, dto: ResultsDto) {
+    const c = await this.findCourse(courseId, true);
+    const pool = await this.finishedExercises(userId, c);
+    const valid = dto.results.filter((r) => pool.has(r.exerciseId));
+    if (valid.length < 3) throw new BadRequestException('Practice not finished');
+    await this.remember(userId, c._id, valid);
+    const right = valid.filter((r) => r.correct).length;
+    const wanted = Math.min(XP_PRACTICE_MAX, XP_PRACTICE_BASE + Math.floor(right / 2));
+    return this.award(userId, c, wanted, right === valid.length);
+  }
+
+  /** How many exercises are due for review in a course (for the "Practice" badge) */
+  async dueCount(userId: string, courseId: any) {
+    return this.memoryModel.countDocuments({ userId: new Types.ObjectId(userId), courseId: new Types.ObjectId(String(courseId)), due: { $lte: new Date() } });
+  }
+
+  // ── Placement test ──────────────────────────────────────────────────────────
+
+  /** A few questions from each unit, in course order */
+  async placement(userId: string, courseId: string) {
+    const c = await this.findCourse(courseId, true);
+    const prefer = ['choice', 'tiles', 'fill', 'type'];
+    const questions: any[] = [];
+    for (const u of c.units ?? []) {
+      const all = (u.lessons ?? []).filter((l: any) => l.isPublished !== false).flatMap((l: any) => l.exercises ?? []);
+      const usable = all.filter((e: any) => prefer.includes(e.type));
+      // Spread across the unit: take evenly spaced questions
+      const step = Math.max(1, Math.floor(usable.length / PLACEMENT_PER_UNIT));
+      for (let i = 0; i < usable.length && questions.filter((q) => q.unitId === String(u._id)).length < PLACEMENT_PER_UNIT; i += step) {
+        questions.push({ ...usable[i], _id: String(usable[i]._id), unitId: String(u._id) });
+      }
+    }
+    return { questions, targetLang: c.targetLang, baseLang: c.baseLang };
+  }
+
+  /** Units passed in a row from the start are opened (their lessons count as done, no XP) */
+  async submitPlacement(userId: string, courseId: string, dto: ResultsDto) {
+    const c = await this.findCourse(courseId, true);
+    const score = new Map<string, number>();
+    for (const r of dto.results) if (r.unitId && r.correct) score.set(r.unitId, (score.get(r.unitId) ?? 0) + 1);
+    const passedUnits: any[] = [];
+    for (const u of c.units ?? []) {
+      if ((score.get(String(u._id)) ?? 0) >= PLACEMENT_PASS) passedUnits.push(u); else break;
+    }
+    const lessonIds = passedUnits.flatMap((u) => (u.lessons ?? []).filter((l: any) => l.isPublished !== false).map((l: any) => String(l._id)));
+    if (lessonIds.length) {
+      const p = await this.profileOf(userId);
+      const courses = [...p.courses];
+      const i = courses.findIndex((x) => String(x.courseId) === String(c._id));
+      const entry = i >= 0 ? { ...courses[i] } : { courseId: c._id as Types.ObjectId, completed: [] as string[], xp: 0 };
+      entry.completed = [...new Set([...entry.completed, ...lessonIds])];
+      if (i >= 0) courses[i] = entry; else courses.push(entry);
+      await this.profileModel.updateOne({ _id: p._id }, { $set: { courses } });
+    }
+    return { unitsPassed: passedUnits.length, lessonsOpened: lessonIds.length, totalUnits: (c.units ?? []).length };
+  }
+
+  // ── Leagues: this week's XP, within your campus and campus against campus ──
+
+  async league(userId: string) {
+    const week = weekKey();
+    const me: any = await this.userModel.findById(userId).select('studentProfile.universityName').lean();
+    const myCampus: string | undefined = me?.studentProfile?.universityName || undefined;
+    const myProfile = await this.profileOf(userId);
+    const myXp = myProfile.weekKey === week ? myProfile.weekXp : 0;
+
+    // Learners with XP this week, with their name and campus
+    const rows: any[] = await this.profileModel.aggregate([
+      { $match: { weekKey: week, weekXp: { $gt: 0 } } },
+      { $lookup: { from: 'users', localField: 'userId', foreignField: '_id', as: 'u', pipeline: [{ $project: { name: 1, profilePicture: 1, 'studentProfile.universityName': 1 } }] } },
+      { $unwind: '$u' },
+      { $project: { userId: 1, weekXp: 1, streak: 1, name: '$u.name', picture: '$u.profilePicture', campus: '$u.studentProfile.universityName' } },
+    ]);
+    // First name and initial only
+    const short = (n?: string) => {
+      const parts = String(n ?? '').trim().split(/\s+/).filter(Boolean);
+      return parts.length ? `${parts[0]}${parts[1] ? ` ${parts[1][0]}.` : ''}` : '—';
+    };
+    const group = myCampus ? rows.filter((r) => r.campus === myCampus) : rows;
+    const ranked = group.sort((a, b) => b.weekXp - a.weekXp);
+    const myRank = myXp > 0 ? ranked.findIndex((r) => String(r.userId) === userId) + 1 : null;
+    const people = ranked.slice(0, 30).map((r, i) => ({
+      rank: i + 1, name: short(r.name), picture: r.picture, xp: r.weekXp, streak: r.streak, me: String(r.userId) === userId,
+    }));
+
+    // Campus against campus: total XP this week
+    const byCampus = new Map<string, { xp: number; learners: number }>();
+    for (const r of rows) {
+      if (!r.campus) continue;
+      const cur = byCampus.get(r.campus) ?? { xp: 0, learners: 0 };
+      cur.xp += r.weekXp; cur.learners += 1;
+      byCampus.set(r.campus, cur);
+    }
+    const campuses = [...byCampus.entries()]
+      .map(([name, v]) => ({ name, ...v, mine: name === myCampus }))
+      .sort((a, b) => b.xp - a.xp)
+      .slice(0, 15)
+      .map((x, i) => ({ rank: i + 1, ...x }));
+
+    // Week ends Monday 00:00 Cameroon time
+    const monday = new Date(`${week}T00:00:00+01:00`).getTime() + 7 * 86_400_000;
+    return {
+      scope: myCampus ? 'campus' : 'everyone',
+      campus: myCampus ?? null,
+      myXp, myRank, people, campuses,
+      endsAt: new Date(monday).toISOString(),
+    };
   }
 
   // ── Admins ──────────────────────────────────────────────────────────────────

@@ -112,6 +112,32 @@ export const FR_EN_UNITS: SeedUnit<Pair>[] = [
       },
     ],
   },
+  {
+    title: { en: 'Scholarships and studying abroad', fr: "Les bourses et les études à l'étranger" },
+    level: 'A2',
+    lessons: [
+      {
+        title: { en: 'Applying', fr: 'Postuler' },
+        phrases: [
+          { fr: 'la bourse', en: 'the scholarship' },
+          { fr: 'la lettre de motivation', en: 'the cover letter' },
+          { fr: 'le relevé de notes', en: 'the transcript' },
+          { fr: 'la date limite', en: 'the deadline' },
+          { fr: 'Je veux postuler', en: 'I want to apply' },
+        ],
+      },
+      {
+        title: { en: 'Leaving to study', fr: 'Partir étudier' },
+        phrases: [
+          { fr: "J'ai besoin d'un visa", en: 'I need a visa' },
+          { fr: 'Mon passeport est prêt', en: 'My passport is ready' },
+          { fr: "J'ai été admis à l'université", en: 'I was admitted to the university' },
+          { fr: 'Je pars en septembre', en: 'I leave in September' },
+          { fr: 'Je cherche un logement près du campus', en: 'I am looking for housing near the campus' },
+        ],
+      },
+    ],
+  },
 ];
 
 export const ZH_UNITS: SeedUnit<ZhPhrase>[] = [
@@ -189,6 +215,32 @@ export const ZH_UNITS: SeedUnit<ZhPhrase>[] = [
           { zh: '厕所 在 哪里', py: 'cèsuǒ zài nǎlǐ', en: 'Where is the toilet?', fr: 'Où sont les toilettes ?' },
           { zh: '我 不 懂', py: 'wǒ bù dǒng', en: 'I do not understand', fr: 'Je ne comprends pas' },
           { zh: '请 再 说 一 遍', py: 'qǐng zài shuō yí biàn', en: 'Please say it again', fr: 'Pouvez-vous répéter ?' },
+        ],
+      },
+    ],
+  },
+  {
+    title: { en: 'Studying in China', fr: 'Étudier en Chine' },
+    level: 'A2',
+    lessons: [
+      {
+        title: { en: 'Scholarship words', fr: 'Le vocabulaire des bourses' },
+        phrases: [
+          { zh: '奖学金', py: 'jiǎngxuéjīn', en: 'scholarship', fr: 'bourse' },
+          { zh: '签证', py: 'qiānzhèng', en: 'visa', fr: 'visa' },
+          { zh: '护照', py: 'hùzhào', en: 'passport', fr: 'passeport' },
+          { zh: '留学', py: 'liúxué', en: 'to study abroad', fr: "étudier à l'étranger" },
+          { zh: '申请 奖学金', py: 'shēnqǐng jiǎngxuéjīn', en: 'to apply for a scholarship', fr: 'postuler à une bourse' },
+        ],
+      },
+      {
+        title: { en: 'My plans', fr: 'Mes projets' },
+        phrases: [
+          { zh: '我 想 去 中国 留学', py: 'wǒ xiǎng qù Zhōngguó liúxué', en: 'I want to study in China', fr: 'Je veux étudier en Chine' },
+          { zh: '我 有 护照', py: 'wǒ yǒu hùzhào', en: 'I have a passport', fr: "J'ai un passeport" },
+          { zh: '我 学 中文', py: 'wǒ xué Zhōngwén', en: 'I learn Chinese', fr: "J'apprends le chinois" },
+          { zh: '我 会 说 一点 中文', py: 'wǒ huì shuō yìdiǎn Zhōngwén', en: 'I can speak a little Chinese', fr: 'Je parle un peu chinois' },
+          { zh: '北京 大学', py: 'Běijīng dàxué', en: 'Peking University', fr: 'Université de Pékin' },
         ],
       },
     ],

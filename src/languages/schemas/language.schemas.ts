@@ -53,6 +53,8 @@ export class Unit {
   /** CEFR level, e.g. A1 */
   @Prop({ default: 'A1' }) level: string;
   @Prop({ type: [LessonSchema], default: [] }) lessons: Lesson[];
+  /** Set on starter units, so later starter units can be added without duplicating or overwriting */
+  @Prop() seedKey?: string;
 }
 export const UnitSchema = SchemaFactory.createForClass(Unit);
 
@@ -94,3 +96,22 @@ export class LanguageProfile {
 export type LanguageProfileDocument = LanguageProfile & Document;
 export const LanguageProfileSchema = SchemaFactory.createForClass(LanguageProfile);
 LanguageProfileSchema.index({ lastDay: 1, streak: 1 });
+
+/**
+ * How well a learner knows one exercise (Leitner boxes 0–5). Right answers move it up a box
+ * and push the next review further out; a wrong answer sends it back to box 0.
+ */
+@Schema({ timestamps: true })
+export class LanguageMemory {
+  @Prop({ type: Types.ObjectId, ref: 'User', required: true }) userId: Types.ObjectId;
+  @Prop({ type: Types.ObjectId, required: true }) courseId: Types.ObjectId;
+  @Prop({ required: true }) exerciseId: string;
+  @Prop({ default: 0, min: 0, max: 5 }) box: number;
+  @Prop({ required: true }) due: Date;
+  @Prop({ default: 0 }) seen: number;
+  @Prop({ default: 0 }) wrong: number;
+}
+export type LanguageMemoryDocument = LanguageMemory & Document;
+export const LanguageMemorySchema = SchemaFactory.createForClass(LanguageMemory);
+LanguageMemorySchema.index({ userId: 1, exerciseId: 1 }, { unique: true });
+LanguageMemorySchema.index({ userId: 1, courseId: 1, due: 1 });

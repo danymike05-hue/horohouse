@@ -90,9 +90,11 @@ function buildCourse<T>(
   let seed = 11;
   return {
     slug, targetLang: target, baseLang: base, order, title, description, isPublished: true,
-    units: units.map((u) => ({
+    units: units.map((u, ui) => ({
       title: u.title[base === 'fr' ? 'fr' : 'en'],
       level: u.level,
+      // Stable id for this starter unit, so later versions can add units without duplicating
+      seedKey: `${slug}:u${ui}`,
       lessons: u.lessons.map((l) => {
         seed += 7;
         const items = l.phrases.map(toItem);

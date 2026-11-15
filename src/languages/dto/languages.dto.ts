@@ -6,9 +6,22 @@ import { EXERCISE_TYPES, LANGS } from '../schemas/language.schemas';
 
 const LANG_LIST = LANGS as unknown as string[];
 
+/** First-try result for one exercise (drives the review schedule) */
+export class ExerciseResultDto {
+  @IsString() @Length(1, 40) exerciseId: string;
+  @IsBoolean() correct: boolean;
+  /** Placement test only: which unit the question came from */
+  @IsOptional() @IsString() @Length(1, 40) unitId?: string;
+}
+
 export class CompleteLessonDto {
   @IsInt() @Min(0) @Max(100) mistakes: number;
   @IsInt() @Min(1) @Max(100) total: number;
+  @IsOptional() @IsArray() @ArrayMaxSize(60) @ValidateNested({ each: true }) @Type(() => ExerciseResultDto) results?: ExerciseResultDto[];
+}
+
+export class ResultsDto {
+  @IsArray() @ArrayMaxSize(60) @ValidateNested({ each: true }) @Type(() => ExerciseResultDto) results: ExerciseResultDto[];
 }
 
 export class UpdateLanguageProfileDto {
