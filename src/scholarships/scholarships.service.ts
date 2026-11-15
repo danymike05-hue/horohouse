@@ -97,6 +97,20 @@ export class ScholarshipsService {
     return { items: docs.map((s) => this.view(s, savedIds)), total, page, limit };
   }
 
+  /** For the list's header: how many are open, how many close within 30 days, and the next five */
+  async summary(userId: string) {
+    const base = { $and: [{ isPublished: true }, openFilter()] };
+    const soon = { $and: [...base.$and, { deadline: { $lte: new Date(Date.now() + 30 * DAY) } }] };
+    const [open, closingSoon, next, savedRows] = await Promise.all([
+      this.scholarshipModel.countDocuments(base),
+      this.scholarshipModel.countDocuments(soon),
+      this.scholarshipModel.find(soon).sort({ deadline: 1 }).limit(5).lean(),
+      this.savedModel.find({ userId: new Types.ObjectId(userId) }).select('scholarshipId').lean(),
+    ]);
+    const savedIds = new Set(savedRows.map((r) => String(r.scholarshipId)));
+    return { open, closingSoon, next: next.map((s) => this.view(s, savedIds)) };
+  }
+
   async detail(userId: string, id: string) {
     const s = await this.findPublished(id);
     const saved = await this.savedModel.exists({ userId: new Types.ObjectId(userId), scholarshipId: s._id });
@@ -273,6 +287,7 @@ export class ScholarshipsService {
       applyUrl: s.applyUrl,
       sourceUrl: s.sourceUrl,
       lastCheckedAt: s.lastCheckedAt,
+      createdAt: s.createdAt,
       isPublished: !!s.isPublished,
       saved: savedIds.has(id),
     };

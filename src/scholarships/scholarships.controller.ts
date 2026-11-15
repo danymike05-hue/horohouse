@@ -59,6 +59,12 @@ export class ScholarshipsController {
     return this.service.list(uid(req), q);
   }
 
+  @Get('summary')
+  @ApiOperation({ summary: 'Open count, closing within 30 days, and the next five deadlines' })
+  summary(@Req() req: any) {
+    return this.service.summary(uid(req));
+  }
+
   @Get('saved')
   @ApiOperation({ summary: 'Scholarships I saved' })
   saved(@Req() req: any) {
