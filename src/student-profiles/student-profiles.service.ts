@@ -188,13 +188,24 @@ export class StudentProfilesService {
     userId: string,
     dto: UpdateStudentProfileDto,
   ): Promise<StudentProfile> {
+    // A student card was checked for one university: moving to another needs a new check,
+    // or the "verified" badge would carry over to a school nobody verified
+    const set: any = { ...dto };
+    const current = await this.studentProfileModel.findOne({ userId: new Types.ObjectId(userId) }).select('universityName verificationStatus').lean();
+    const movingSchool = !!current && !!dto.universityName && dto.universityName !== current.universityName;
+    if (movingSchool && [StudentVerificationStatus.VERIFIED, StudentVerificationStatus.PENDING].includes(current!.verificationStatus as any)) {
+      set.verificationStatus = StudentVerificationStatus.UNVERIFIED;
+    }
     const profile = await this.studentProfileModel
       .findOneAndUpdate(
         { userId: new Types.ObjectId(userId) },
-        { $set: dto },
+        { $set: set },
         { new: true },
       )
       .exec();
+    if (profile && set.verificationStatus) {
+      await this.userModel.findByIdAndUpdate(userId, { $set: { 'studentProfile.verificationStatus': set.verificationStatus } }).exec();
+    }
 
     if (!profile) {
       throw new NotFoundException(
