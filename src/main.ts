@@ -135,6 +135,8 @@ async function bootstrap() {
       'Origin',
       'X-Requested-With',
       'X-CamerPay-Signature',
+      // Website asks for cookie sessions (tokens kept out of the response body)
+      'X-Auth-Mode',
     ],
   };
 

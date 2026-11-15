@@ -10,7 +10,7 @@ import {
   MessageBody,
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
-import { Logger } from '@nestjs/common';
+import { Logger, OnModuleDestroy } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
@@ -18,6 +18,7 @@ import { CallService } from './call.service';
 import { ChatService } from './chat.service';
 import { User, UserDocument } from '../users/schemas/user.schema';
 import { PushNotificationsService } from '../notifications/push-notifications.service';
+import { sessionIsLive, startSessionSweep } from '../common/socket-sessions.util';
 import {
   InitiateCallDto,
   AnswerCallDto,
@@ -25,6 +26,13 @@ import {
   EndCallDto,
   IceCandidateDto,
 } from './dto/call.dto';
+
+/** The website's httpOnly access_token cookie, sent with the socket handshake */
+function cookieToken(socket: any): string | undefined {
+  const raw = String(socket?.handshake?.headers?.cookie ?? '');
+  const m = raw.match(/(?:^|;\s*)access_token=([^;]+)/);
+  return m ? decodeURIComponent(m[1]) : undefined;
+}
 
 @WebSocketGateway({
   namespace: '/chat',
@@ -40,12 +48,17 @@ import {
   transports: ['websocket', 'polling'],
   allowEIO3: true,
 })
-export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect {
+export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect, OnModuleDestroy {
   @WebSocketServer()
   server: Server;
 
   private readonly logger = new Logger(ChatGateway.name);
   private userSockets = new Map<string, Set<string>>();
+  private sessionSweep?: NodeJS.Timeout;
+
+  onModuleDestroy() {
+    if (this.sessionSweep) clearInterval(this.sessionSweep);
+  }
 
   constructor(
     private readonly chatService: ChatService,
@@ -62,7 +75,8 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
 
     server.use(async (socket: Socket, next) => {
       try {
-        const token = socket.handshake?.auth?.token;
+        // Website: httpOnly cookie. App: token in the handshake.
+        const token = cookieToken(socket) || socket.handshake?.auth?.token;
 
         this.logger.log(`🔐 Connection attempt - Socket ID: ${socket.id}, Token present: ${!!token}`);
 
@@ -81,6 +95,11 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
             userId: payload.sub || payload.userId,
           };
 
+          // A valid token whose session was ended (signed out, password changed) is refused
+          if (!(await sessionIsLive(this.userModel, String(payload.sub || payload.userId), payload.sessionId))) {
+            return next(new Error('Authentication error: session ended'));
+          }
+
           this.logger.log(`✅ Token verified - User ID: ${payload.sub || payload.userId}, Email: ${payload.email}`);
           next();
         } catch (error) {
@@ -94,6 +113,14 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     });
 
     this.logger.log('✅ Authentication middleware registered');
+
+    // Sessions ended after connecting: disconnect those sockets within a minute
+    this.sessionSweep = startSessionSweep({
+      getServer: () => this.server,
+      userModel: this.userModel,
+      sessionOf: (s) => ({ userId: s.data?.user?.userId, sessionId: s.data?.user?.sessionId }),
+      logger: this.logger,
+    });
   }
   
 

@@ -4,6 +4,7 @@ import {
   Get,
   Body,
   UseGuards,
+  UseInterceptors,
   Req,
   Res,
   Param,
@@ -38,6 +39,7 @@ import { JwtAuthGuard } from './guards/jwt.auth.guard';
 import { User } from '../users/schemas/user.schema';
 import { GoogleOAuthGuard } from './guards/google-oauth.guard';
 import { AllowIncompleteOnboarding } from './guards/onboarding.guard';
+import { CookieAuthInterceptor } from './cookie-auth.interceptor';
 import { ForgotPasswordDto, ResetPasswordDto, ValidateResetTokenDto } from './dto/password-reset.dto';
 import { SelectRoleDto, SetPhoneDto } from './dto/google-onboarding.dto';
 
@@ -49,6 +51,8 @@ declare module 'fastify' {
 
 @ApiTags('Authentication')
 @Controller('auth')
+// Website cookie mode: tokens stay in httpOnly cookies, out of the JSON body
+@UseInterceptors(CookieAuthInterceptor)
 export class AuthController {
   private readonly logger = new Logger(AuthController.name);
 
@@ -272,8 +276,12 @@ export class AuthController {
   async googleExchange(
     @Body() dto: OAuthExchangeDto,
     @Req() req: FastifyRequest,
+    @Res({ passthrough: true }) res: FastifyReply,
   ): Promise<AuthTokens> {
-    return this.authService.exchangeOAuthCode(dto.code, dto.codeVerifier, req);
+    const tokens = await this.authService.exchangeOAuthCode(dto.code, dto.codeVerifier, req);
+    // The website keeps its session in these httpOnly cookies (the app uses the body)
+    this.setAuthCookies(res, tokens);
+    return tokens;
   }
 
   // 🔥 FIX: Manually handle redirect for Fastify compatibility
@@ -348,9 +356,16 @@ export class AuthController {
         return res;
       }
 
-      // Web (same-site): httpOnly cookies carry the session.
-      // TODO(web): the web app should stop reading tokens from this URL and rely
-      // on the cookies; then drop `token`/`refresh` below.
+      // Website with a PKCE challenge: same as the app, a one-time code (no tokens in the URL)
+      if (target.challenge) {
+        const { user, isNewUser } = await this.authService.googleSignIn(dto);
+        const code = await this.authService.issueOAuthCode(user, target.challenge, isNewUser);
+        res.redirect(withParams(target.url, { code }), 302);
+        return res;
+      }
+
+      // Older website builds (no challenge): tokens in the URL. Remove once the
+      // current website is deployed everywhere.
       const authResult = await this.authService.googleAuth(dto, req);
       this.setAuthCookies(res, authResult);
       res.redirect(withParams(target.url, {

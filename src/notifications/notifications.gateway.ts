@@ -3,12 +3,17 @@ import {
   WebSocketServer,
   OnGatewayConnection,
   OnGatewayDisconnect,
+  OnGatewayInit,
   SubscribeMessage,
   ConnectedSocket,
   MessageBody,
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
-import { Logger, UseGuards } from '@nestjs/common';
+import { Logger, OnModuleDestroy, UseGuards } from '@nestjs/common';
+import { InjectModel } from '@nestjs/mongoose';
+import { Model } from 'mongoose';
+import { User, UserDocument } from '../users/schemas/user.schema';
+import { sessionIsLive, startSessionSweep } from '../common/socket-sessions.util';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { Notification } from './schemas/notification.schema';
@@ -21,6 +26,13 @@ interface AuthenticatedSocket extends Socket {
   };
 }
 
+/** The website's httpOnly access_token cookie, sent with the socket handshake */
+function cookieToken(socket: any): string | undefined {
+  const raw = String(socket?.handshake?.headers?.cookie ?? '');
+  const m = raw.match(/(?:^|;\s*)access_token=([^;]+)/);
+  return m ? decodeURIComponent(m[1]) : undefined;
+}
+
 @WebSocketGateway({
   cors: {
     origin: process.env.FRONTEND_URL || ['http://localhost:3000', 'http://localhost:3000'],
@@ -29,7 +41,7 @@ interface AuthenticatedSocket extends Socket {
   namespace: 'notifications',
   transports: ['websocket', 'polling'],
 })
-export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisconnect {
+export class NotificationsGateway implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect, OnModuleDestroy {
   @WebSocketServer()
   server: Server;
 
@@ -41,10 +53,27 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
   // Track socket metadata: socketId -> userId
   private socketToUser: Map<string, string> = new Map();
 
+  private sessionSweep?: NodeJS.Timeout;
+
   constructor(
     private jwtService: JwtService,
     private configService: ConfigService,
+    @InjectModel(User.name) private userModel: Model<UserDocument>,
   ) {}
+
+  // Sessions ended after connecting (sign-out, password change): disconnect within a minute
+  afterInit() {
+    this.sessionSweep = startSessionSweep({
+      getServer: () => this.server,
+      userModel: this.userModel,
+      sessionOf: (s) => ({ userId: s.data?.userId, sessionId: s.data?.sessionId }),
+      logger: this.logger,
+    });
+  }
+
+  onModuleDestroy() {
+    if (this.sessionSweep) clearInterval(this.sessionSweep);
+  }
 
   /**
    * Handle new WebSocket connections
@@ -54,7 +83,8 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
     this.logger.log(`Client attempting connection: ${client.id}`);
 
     // Extract token from various sources
-    const token = 
+    const token =
+      cookieToken(client) ||
       client.handshake.auth?.token || 
       client.handshake.headers?.authorization?.replace('Bearer ', '') ||
       client.handshake.query?.token as string;
@@ -88,6 +118,13 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
     if (!userId) {
       this.logger.warn(`No userId (sub) in token for client ${client.id}`);
       client.emit('error', { message: 'Invalid token payload' });
+      client.disconnect();
+      return;
+    }
+
+    // A valid token whose session was ended (signed out, password changed) is refused
+    if (!(await sessionIsLive(this.userModel, String(userId), sessionId))) {
+      client.emit('error', { message: 'Session ended' });
       client.disconnect();
       return;
     }

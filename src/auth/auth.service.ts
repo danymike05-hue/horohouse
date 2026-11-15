@@ -558,6 +558,15 @@ async registerWithEmail(dto: RegisterWithEmailDto, req?: any): Promise<AuthToken
     const webBase = (this.configService.get<string>('FRONTEND_URL') || 'http://localhost:3000').replace(/\/+$/, '');
     const fallback: OAuthRedirectTarget = { kind: 'web', url: `${webBase}/auth/callback` };
     if (!state) return fallback;
+    // Website: "web:<PKCE challenge>". Back to our own callback page with a one-time
+    // code instead of tokens in the URL (works whichever host FRONTEND_URL uses)
+    if (state.startsWith('web:')) {
+      const challenge = state.slice(4);
+      if (!/^[A-Za-z0-9_-]{43,128}$/.test(challenge)) {
+        return { kind: 'rejected', url: '', reason: 'The sign-in challenge is missing or invalid.' };
+      }
+      return { ...fallback, challenge };
+    }
 
     let parsed: URL;
     try {
