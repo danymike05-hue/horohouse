@@ -34,6 +34,7 @@ import { FeedbackModule } from './feedback/feedback.module';
 import { RoomsModule } from './rooms/rooms.module';
 import { StudentProfilesModule } from './student-profiles/student-profiles.module';
 import { ScholarshipsModule } from './scholarships/scholarships.module';
+import { LanguagesModule } from './languages/languages.module';
 import { StudentPropertiesModule } from './student-properties/student-properties.module';
 import { SplitPaymentsModule } from './split-payments/split-payments.module';
 import { DigitalLeaseModule } from './digital-lease/digital-lease.module';
@@ -124,6 +125,7 @@ import { TranslationsModule } from './translations/translations.module';
     RoomsModule,
     StudentProfilesModule,
     ScholarshipsModule,
+    LanguagesModule,
     StudentPropertiesModule,
     SplitPaymentsModule,
     DigitalLeaseModule,
