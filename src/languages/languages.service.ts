@@ -313,7 +313,7 @@ export class LanguagesService implements OnModuleInit {
     await this.remember(userId, c._id, (dto.results ?? []).filter((r) => own.has(r.exerciseId)));
     const wanted = alreadyDone ? XP_REPEAT : XP_NEW + (dto.mistakes === 0 ? XP_PERFECT_BONUS : 0);
     return this.award(userId, c, wanted, dto.mistakes === 0, {
-      kind: 'lesson', lessonId: String(lesson._id), alreadyDone, mistakes: dto.mistakes,
+      kind: 'lesson', lessonId: String(lesson._id), alreadyDone, mistakes: Math.min(dto.mistakes, dto.livesLost ?? dto.mistakes),
     });
   }
 

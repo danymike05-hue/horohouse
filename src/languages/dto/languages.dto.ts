@@ -17,6 +17,8 @@ export class ExerciseResultDto {
 export class CompleteLessonDto {
   @IsInt() @Min(0) @Max(100) mistakes: number;
   @IsInt() @Min(1) @Max(100) total: number;
+  /** Lives lost since the last refill (a refill mid-lesson resets it); defaults to mistakes */
+  @IsOptional() @IsInt() @Min(0) @Max(100) livesLost?: number;
   @IsOptional() @IsArray() @ArrayMaxSize(60) @ValidateNested({ each: true }) @Type(() => ExerciseResultDto) results?: ExerciseResultDto[];
 }
 
