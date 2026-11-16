@@ -31,8 +31,20 @@ const XP_PRACTICE_MAX = 10;
 /** Days until the next review, by box (0 = due now) */
 const BOX_DAYS = [0, 1, 3, 7, 14, 30];
 /** Placement: questions per unit, and how many must be right to skip the unit */
-const PLACEMENT_PER_UNIT = 3;
-const PLACEMENT_PASS = 2;
+// Placement goes level by level (A1, A2, B1…): a few questions per level, spread over its units
+const PLACEMENT_PER_LEVEL = 4;
+const PLACEMENT_PASS = 3;
+const LEVELS = ['A1', 'A2', 'B1', 'B2', 'C1', 'C2'];
+
+/** Units grouped by CEFR level, in level order (units without a known level count as A1) */
+function levelGroups(units: any[]): { level: string; units: any[] }[] {
+  const by = new Map<string, any[]>();
+  for (const u of units) {
+    const lv = LEVELS.includes(u.level) ? u.level : 'A1';
+    by.set(lv, [...(by.get(lv) ?? []), u]);
+  }
+  return LEVELS.filter((lv) => by.has(lv)).map((level) => ({ level, units: by.get(level)! }));
+}
 /** Stars earned (spent in the shop) */
 const STARS = { lesson: 5, perfect: 5, practice: 2, checkpoint: 15, story: 5, mock: 10 } as const;
 /** Lives: 5 at most, one back every 3 hours; an active plan means unlimited */
@@ -109,7 +121,10 @@ export class LanguagesService implements OnModuleInit {
         // Tag an older copy of this starter unit with its key: same title, or (if an admin
         // renamed it) the untagged unit in the same position
         const untagged = existing.units.find((u: any) => !u.seedKey && u.title === su.title)
-          ?? (existing.units[i] && !existing.units[i].seedKey && !existing.units.some((u: any) => u.seedKey === su.seedKey) ? existing.units[i] : undefined);
+          ?? (existing.units[i] && !existing.units[i].seedKey && !existing.units.some((u: any) => u.seedKey === su.seedKey)
+            // Same position only counts if it looks like the same unit (an admin's own unit stays theirs)
+            && existing.units[i].level === su.level && existing.units[i].lessons?.[0]?.title === su.lessons?.[0]?.title
+            ? existing.units[i] : undefined);
         if (untagged) { untagged.seedKey = su.seedKey; changed = true; }
         if (!existing.units.some((u: any) => u.seedKey === su.seedKey)) {
           existing.units.push(su);
@@ -527,26 +542,41 @@ export class LanguagesService implements OnModuleInit {
     const c = await this.findCourse(courseId, true);
     const prefer = ['choice', 'tiles', 'fill', 'type'];
     const questions: any[] = [];
-    for (const u of c.units ?? []) {
-      const all = (u.lessons ?? []).filter((l: any) => l.isPublished !== false).flatMap((l: any) => l.exercises ?? []);
-      const usable = all.filter((e: any) => prefer.includes(e.type));
-      // Spread across the unit: take evenly spaced questions
-      const step = Math.max(1, Math.floor(usable.length / PLACEMENT_PER_UNIT));
-      for (let i = 0; i < usable.length && questions.filter((q) => q.unitId === String(u._id)).length < PLACEMENT_PER_UNIT; i += step) {
-        questions.push({ ...usable[i], _id: String(usable[i]._id), unitId: String(u._id) });
+    for (const group of levelGroups(c.units ?? [])) {
+      // Round robin over the level's units, evenly spaced inside each
+      const perUnit = group.units.map((u: any) => {
+        const usable = (u.lessons ?? []).filter((l: any) => l.isPublished !== false).flatMap((l: any) => l.exercises ?? []).filter((e: any) => prefer.includes(e.type));
+        const step = Math.max(1, Math.floor(usable.length / PLACEMENT_PER_LEVEL));
+        return usable.filter((_: any, i: number) => i % step === 0).map((e: any) => ({ ...e, _id: String(e._id), unitId: String(u._id), level: group.level }));
+      });
+      const picked: any[] = [];
+      for (let k = 0; picked.length < PLACEMENT_PER_LEVEL && perUnit.some((list) => list.length > k); k++) {
+        for (const list of perUnit) if (list[k] && picked.length < PLACEMENT_PER_LEVEL) picked.push(list[k]);
       }
+      questions.push(...picked);
     }
     return { questions, targetLang: c.targetLang, baseLang: c.baseLang };
   }
 
-  /** Units passed in a row from the start are opened (their lessons count as done, no XP) */
+  /** Levels passed in a row from A1 are opened (their lessons count as done, no XP) */
   async submitPlacement(userId: string, courseId: string, dto: ResultsDto) {
     const c = await this.findCourse(courseId, true);
+    const unitLevel = new Map<string, string>((c.units ?? []).map((u: any): [string, string] => [String(u._id), String(u.level || 'A1')]));
     const score = new Map<string, number>();
-    for (const r of dto.results) if (r.unitId && r.correct) score.set(r.unitId, (score.get(r.unitId) ?? 0) + 1);
+    const asked = new Map<string, number>();
+    for (const r of dto.results) {
+      const lv = r.unitId ? unitLevel.get(r.unitId) : undefined;
+      if (!lv) continue;
+      asked.set(lv, (asked.get(lv) ?? 0) + 1);
+      if (r.correct) score.set(lv, (score.get(lv) ?? 0) + 1);
+    }
     const passedUnits: any[] = [];
-    for (const u of c.units ?? []) {
-      if ((score.get(String(u._id)) ?? 0) >= PLACEMENT_PASS) passedUnits.push(u); else break;
+    let levelReached: string | null = null;
+    for (const group of levelGroups(c.units ?? [])) {
+      // 3 of 4 right; a level with fewer questions needs all but one (at least one)
+      const n = Math.min(PLACEMENT_PER_LEVEL, asked.get(group.level) ?? 0);
+      const need = n >= PLACEMENT_PER_LEVEL ? PLACEMENT_PASS : Math.max(1, n - 1);
+      if (n > 0 && (score.get(group.level) ?? 0) >= need) { passedUnits.push(...group.units); levelReached = group.level; } else break;
     }
     const lessonIds = passedUnits.flatMap((u) => (u.lessons ?? []).filter((l: any) => l.isPublished !== false).map((l: any) => String(l._id)));
     if (lessonIds.length) {
@@ -558,7 +588,7 @@ export class LanguagesService implements OnModuleInit {
       if (i >= 0) courses[i] = entry; else courses.push(entry);
       await this.profileModel.updateOne({ _id: p._id }, { $set: { courses } });
     }
-    return { unitsPassed: passedUnits.length, lessonsOpened: lessonIds.length, totalUnits: (c.units ?? []).length };
+    return { unitsPassed: passedUnits.length, lessonsOpened: lessonIds.length, totalUnits: (c.units ?? []).length, levelReached };
   }
 
   // ── Leagues: this week's XP, within your campus and campus against campus ──

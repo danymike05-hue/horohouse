@@ -90,7 +90,7 @@ export class DraftDto {
   @IsIn(LANG_LIST) targetLang: string;
   @IsIn(LANG_LIST) baseLang: string;
   @IsString() @Length(3, 120) theme: string;
-  @IsOptional() @IsIn(['A1', 'A2', 'B1', 'B2']) level?: string;
+  @IsOptional() @IsIn(['A1', 'A2', 'B1', 'B2', 'C1', 'C2']) level?: string;
 }
 
 export class ExplainDto {

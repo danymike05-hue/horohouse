@@ -1,7 +1,12 @@
 // Turns the starter phrases into courses: each lesson gets a mix of meaning, tiles, matching,
 // typing and fill-the-blank exercises. Deterministic (same input → same course).
 import { Exercise, Lang, LanguageCourse } from '../schemas/language.schemas';
-import { FR_EN_UNITS, MARKET_STORY, Pair, ROOM_STORY, SeedUnit, ZH_UNITS, ZhPhrase } from './phrases';
+import { FR_EN_UNITS as FR_EN_START, MARKET_STORY, Pair, ROOM_STORY, SeedUnit, ZH_UNITS as ZH_START, ZhPhrase } from './phrases';
+import { FR_EN_ADVANCED, ZH_ADVANCED } from './phrases-advanced';
+
+// A1 to C2: the first units, then the later levels (appended, so existing units keep their keys)
+const FR_EN_UNITS = [...FR_EN_START, ...FR_EN_ADVANCED];
+const ZH_UNITS = [...ZH_START, ...ZH_ADVANCED];
 
 interface Item { target: string; base: string; romanization?: string }
 
@@ -61,8 +66,10 @@ function lessonExercises(items: Item[], pool: Item[], target: Lang, base: Lang, 
     type: 'match', instruction: 'pairs', prompt: '', answers: [], options: [],
     pairs: four.map((it) => ({ left: show(it.target, target), right: it.base })), promptLang: target, answerLang: base,
   } as Exercise);
-  // 4. Typing: target → type the base (two of them)
-  shuffle(items, seed + 9).slice(0, 2).forEach((it) => {
+  // 4. Typing: target → type the base (two of them). Long sentences are hard to type exactly,
+  // so shorter ones are used when the lesson has them
+  const typable = items.filter((it) => words(it.base).length <= 8);
+  shuffle(typable.length >= 2 ? typable : items, seed + 9).slice(0, 2).forEach((it) => {
     ex.push({
       type: 'type', instruction: 'translate', prompt: show(it.target, target), promptRomanization: it.romanization,
       promptLang: target, answers: [it.base], options: [], pairs: [], answerLang: base,
@@ -77,7 +84,7 @@ function lessonExercises(items: Item[], pool: Item[], target: Lang, base: Lang, 
         answers: [show(it.target, target)], options: opts, optionsRomanization: opts.map((o) => pool.find((x) => show(x.target, 'zh') === o)?.romanization ?? ''),
         pairs: [], answerLang: target, explanation: it.base,
       } as unknown as Exercise);
-    } else if (words(it.target).length <= 6) {
+    } else if (words(it.target).length <= 12) {
       ex.push({
         type: 'listen', instruction: 'listen', prompt: it.target, promptLang: target,
         answers: [it.target], options: [], pairs: [], answerLang: target, explanation: it.base,
