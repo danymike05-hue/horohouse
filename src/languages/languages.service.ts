@@ -36,6 +36,12 @@ const PLACEMENT_PER_LEVEL = 4;
 const PLACEMENT_PASS = 3;
 const LEVELS = ['A1', 'A2', 'B1', 'B2', 'C1', 'C2'];
 
+/** A profile's per-course progress as plain objects that are safe to copy and change */
+function plainCourses(p: any): any[] {
+  const list = typeof p?.toObject === 'function' ? p.toObject().courses : p?.courses;
+  return (list ?? []).map((x: any) => ({ ...x, completed: [...(x.completed ?? [])] }));
+}
+
 /** Units grouped by CEFR level, in level order (units without a known level count as A1) */
 function levelGroups(units: any[]): { level: string; units: any[] }[] {
   const by = new Map<string, any[]>();
@@ -370,8 +376,9 @@ export class LanguagesService implements OnModuleInit {
     if (opts.kind === 'lesson') stars = opts.alreadyDone ? 1 : STARS.lesson + (perfect ? STARS.perfect : 0);
     else stars = STARS[opts.kind];
 
-    // Per-course progress
-    const courses = [...p.courses];
+    // Per-course progress. Plain copies: spreading a Mongoose sub-document doesn't copy its
+    // fields, which used to drop every lesson finished after the first one
+    const courses: any[] = plainCourses(p);
     const i = courses.findIndex((x: any) => String(x.courseId) === String(c._id));
     const entry: any = i >= 0 ? { ...courses[i] } : { courseId: c._id as Types.ObjectId, completed: [], xp: 0, gold: [], checkpoints: [], stories: [], bestMock: 0 };
     const addTo = (k: string, v?: string) => { if (v && !(entry[k] ?? []).includes(v)) entry[k] = [...(entry[k] ?? []), v]; };
@@ -581,7 +588,7 @@ export class LanguagesService implements OnModuleInit {
     const lessonIds = passedUnits.flatMap((u) => (u.lessons ?? []).filter((l: any) => l.isPublished !== false).map((l: any) => String(l._id)));
     if (lessonIds.length) {
       const p = await this.profileOf(userId);
-      const courses = [...p.courses];
+      const courses: any[] = plainCourses(p);
       const i = courses.findIndex((x) => String(x.courseId) === String(c._id));
       const entry = i >= 0 ? { ...courses[i] } : { courseId: c._id as Types.ObjectId, completed: [] as string[], xp: 0 };
       entry.completed = [...new Set([...entry.completed, ...lessonIds])];
