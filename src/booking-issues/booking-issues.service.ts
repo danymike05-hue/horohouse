@@ -113,6 +113,7 @@ export class BookingIssuesService {
       link: `/host/booking/${bookingId}`,
       metadata: { bookingId, propertyId: String(booking.propertyId) },
     });
+    void this.notifications.emailHost?.('issue', bookingId, { category: dto.category, description: dto.description, payoutFrozen: issue.payoutFrozen });
     await this.notifications.notifyAdmins({
       title: 'Stay problem to review',
       message: `Booking ${bookingId}: ${dto.category}. ${issue.payoutFrozen ? 'The host payout is frozen.' : 'The host was already paid.'}`,

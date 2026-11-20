@@ -4,12 +4,12 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { Resend } from 'resend';
 import { User, UserDocument } from '../users/schemas/user.schema';
+import { body as emailBody, frame } from './email-kit';
+import { HostEmailData, HostEmailKind, hostEmail } from './host-emails';
 
 // ─── Brand (same as the app's opening screen) ────────────────────────────────
 
 const BRAND_BLUE = '#155dfc';
-/** Brand slogan: the same in every language */
-const TAGLINE = 'Votre toit, notre mission.';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -102,6 +102,11 @@ export class EmailService {
 
   /** The text picker for this recipient: French if their app is in French. */
   async translatorFor(recipientEmail: string): Promise<T> {
+    const fr = await this.isFrench(recipientEmail);
+    return (en, frText) => (fr ? frText : en);
+  }
+
+  private async isFrench(recipientEmail: string): Promise<boolean> {
     let fr = false;
     try {
       const email = String(recipientEmail ?? '').trim().toLowerCase();
@@ -112,7 +117,7 @@ export class EmailService {
     } catch (err: any) {
       this.logger.warn(`Language lookup failed for an email, sending in English: ${err?.message}`);
     }
-    return (en, frText) => (fr ? frText : en);
+    return fr;
   }
 
   private baseParams(t: T): BaseTemplateParams {
@@ -454,6 +459,51 @@ export class EmailService {
     });
   }
 
+  // ─── Host emails (bookings, cancellations, arrivals, problems, payouts) ──────
+
+  async sendHostEmail(recipientEmail: string, recipientName: string | undefined, kind: HostEmailKind, data: HostEmailData): Promise<void> {
+    const fr = await this.isFrench(recipientEmail);
+    const t: T = (en, frText) => (fr ? frText : en);
+    const site = this.frontendUrl.replace(/\/$/, '');
+    const loc = fr ? '/fr' : '/en';
+    const links = {
+      booking: data.bookingId ? `${site}${loc}/dashboard/host/bookings/${data.bookingId}` : `${site}${loc}/dashboard/host/bookings`,
+      bookings: `${site}${loc}/dashboard/host/bookings`,
+      earnings: `${site}${loc}/dashboard/earnings`,
+      calendar: `${site}${loc}/dashboard/host/calendar`,
+    };
+    const first = (recipientName ?? '').trim().split(/\s+/)[0] ?? '';
+    const mail = hostEmail(kind, data, { t, fr, name: first, links });
+    await this.safeSendMail({
+      to: recipientEmail,
+      subject: mail.subject,
+      text: `${mail.text}
+
+${this.brandName}`,
+      html: this.frameHtml(emailBody(mail.parts), t, {
+        preheader: mail.preheader,
+        reason: t('You get this email because you host on HoroHouse.', 'Vous recevez cet e-mail car vous êtes hôte sur HoroHouse.'),
+        host: true,
+      }),
+    });
+  }
+
+  /** The shared frame (header, footer links) around a body */
+  private frameHtml(inner: string, t: T, o: { preheader?: string; reason?: string; host?: boolean } = {}): string {
+    const site = this.frontendUrl.replace(/\/$/, '');
+    return frame({
+      brandName: this.brandName,
+      logoUrl: `${site}/logoHoroHouseWhite.png`,
+      preheader: o.preheader,
+      reason: o.reason,
+      links: [
+        { label: t('Help centre', 'Centre d’aide'), href: `${site}/support` },
+        ...(o.host ? [{ label: t('My bookings', 'Mes réservations'), href: `${site}/dashboard/host/bookings` }] : []),
+        { label: t('Contact us', 'Nous contacter'), href: `mailto:${this.supportEmail}` },
+      ],
+    }, inner);
+  }
+
 // ─── Transport ───────────────────────────────────────────────────────────────
 
 private getResendClient(): Resend {
@@ -491,28 +541,14 @@ private async safeSendMail(options: SendMailOptions): Promise<void> {
 
   // Same blue, white logo and slogan as the app's opening screen. The logo is served by the
   // website (client/public); the alt text shows the name where images are blocked.
-  private layout(brandName: string, body: string, footer = ''): string {
-    const logo = `${this.frontendUrl.replace(/\/$/, '')}/logoHoroHouseWhite.png`;
-    return `
-<div style="font-family:Arial,Helvetica,sans-serif;background:#f6f9fc;padding:24px;">
-  <table role="presentation" cellpadding="0" cellspacing="0" width="100%"
-         style="max-width:640px;margin:0 auto;background:#fff;border-radius:8px;overflow:hidden;">
-    <tr>
-      <td style="padding:20px 24px;background:${BRAND_BLUE};color:#fff;">
-        <img src="${logo}" width="172" height="80" alt="${brandName}"
-             style="display:block;border:0;width:172px;height:auto;color:#fff;font-size:22px;font-weight:700;" />
-      </td>
-    </tr>
-    <tr><td style="padding:24px;color:#0f172a;">${body}</td></tr>
-    <tr><td style="padding:16px 24px;background:#f8fafc;color:#64748b;font-size:12px;text-align:center;">
-      ${footer ? `${footer}<br/><br/>` : ''}<span style="color:${BRAND_BLUE};font-weight:600;">${brandName}</span> · ${TAGLINE}
-    </td></tr>
-  </table>
-</div>`;
+  private layout(_brandName: string, body: string, footer = ''): string {
+    const t: T = (en) => en;
+    const inner = `<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:15px;line-height:24px;color:#101828;">${body}</div>`;
+    return this.frameHtml(inner, t, { reason: footer || undefined });
   }
 
   private btn(href: string, label: string, color = BRAND_BLUE): string {
-    return `<a href="${href}" style="display:inline-block;background:${color};color:#fff;text-decoration:none;padding:12px 24px;border-radius:6px;font-weight:600;">${label}</a>`;
+    return `<a href="${href}" style="display:inline-block;background:${color};color:#fff;text-decoration:none;padding:13px 26px;border-radius:999px;font-weight:700;">${label}</a>`;
   }
 
   /** The greeting name; without one, "Hi there" / "Bonjour". */

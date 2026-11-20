@@ -11,6 +11,7 @@ import { EmailService } from '../email/email.service';
 import { User, UserDocument, UserRole } from '../users/schemas/user.schema';
 import { Property } from '../properties/schemas/property.schema';
 import { listingCoverUrl, pushImageUrl } from './push-image';
+import type { HostEmailData, HostEmailKind } from '../email/host-emails';
 
 @Injectable()
 export class NotificationsService {
@@ -27,6 +28,52 @@ export class NotificationsService {
     private pushNotificationsService: PushNotificationsService,
     private emailService: EmailService,
   ) { }
+
+  /**
+   * Emails the host about one of their bookings (new request, paid booking, cancellation,
+   * arrival tomorrow, date change, problem, payout). Reads the booking, listing and guest so
+   * callers only pass what is special to the event. Never throws: an email must not break the
+   * booking flow that triggered it.
+   */
+  async emailHost(kind: HostEmailKind, bookingId: string, extra: HostEmailData = {}): Promise<void> {
+    try {
+      if (!Types.ObjectId.isValid(bookingId)) return;
+      const Booking = this.userModel.db.model('Booking');
+      const b: any = await Booking.findById(bookingId).lean().exec();
+      if (!b) return;
+      const [host, guest, property]: any[] = await Promise.all([
+        this.userModel.findById(b.hostId).select('email name').lean().exec(),
+        this.userModel.findById(b.guestId).select('name phoneNumber').lean().exec(),
+        this.propertyModel.findById(b.propertyId).select('title city images shortTermAmenities').lean().exec(),
+      ]);
+      if (!host?.email) return;
+      // Contact details only once the stay is confirmed
+      const confirmed = ['confirmed', 'completed'].includes(String(b.status));
+      await this.emailService.sendHostEmail(host.email, host.name, kind, {
+        bookingId: String(b._id),
+        propertyTitle: property?.title,
+        propertyCity: property?.city,
+        propertyImage: pushImageUrl(listingCoverUrl(property?.images)),
+        guestName: guest?.name,
+        guestPhone: confirmed && /^\+?\d{8,15}$/.test(guest?.phoneNumber ?? '') ? guest.phoneNumber : undefined,
+        checkIn: b.checkIn,
+        checkOut: b.checkOut,
+        nights: b.nights,
+        adults: b.guests?.adults ?? 1,
+        children: b.guests?.children ?? 0,
+        guestNote: b.guestNote,
+        currency: b.currency ?? 'XAF',
+        total: b.priceBreakdown?.totalAmount,
+        earnings: b.payout?.amount,
+        checkInTime: property?.shortTermAmenities?.checkInTime,
+        respondBy: b.expiresAt,
+        instant: !!b.isInstantBook,
+        ...extra,
+      });
+    } catch (err: any) {
+      this.logger.warn(`Host email (${kind}) for booking ${bookingId} failed: ${err?.message}`);
+    }
+  }
 
   /**
    * Create a new notification.
@@ -525,6 +572,7 @@ export class NotificationsService {
       } catch (hostErr: any) {
         this.logger.warn(`Failed to notify host ${hostId} for booking request: ${hostErr?.message}`);
       }
+      void this.emailHost('request', params.bookingId);
     }
 
     // Notify guest
@@ -670,6 +718,10 @@ export class NotificationsService {
         checkOut: params.checkOut,
       },
     });
+
+    if (params.cancelledByGuest) {
+      void this.emailHost('cancelled', params.bookingId, { refundAmount: params.refundAmount });
+    }
 
     // ── Notify the guest about any refund ────────────────────────────────────
     if (params.refundAmount && params.refundAmount > 0) {
@@ -975,6 +1027,7 @@ export class NotificationsService {
       message: `Paiement de ${params.amount} ${params.currency} reçu pour la réservation de ` +
         `${params.guestName} à ${params.propertyTitle}.${quand}`,
     });
+    void this.emailHost('booked', params.bookingId, { availableOn: params.availableOn, earnings: params.amount });
   }
 
   /**

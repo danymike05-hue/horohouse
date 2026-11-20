@@ -65,6 +65,8 @@ export class NotificationsScheduler {
             checkInTime,
           },
         );
+        // The host gets a "guest arrives tomorrow" email with a checklist
+        await this.notificationsService.emailHost?.('arrival', (booking as any)._id.toString());
       }
     } catch (error) {
       this.logger.error('[Scheduler] Check-in reminder job failed:', error);

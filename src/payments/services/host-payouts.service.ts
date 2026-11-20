@@ -213,6 +213,7 @@ export class HostPayoutsService {
     } catch (err: any) {
       this.logger.warn(`release: notification failed for ${bookingId}: ${err?.message}`);
     }
+    void this.notificationsService.emailHost?.('payout', String(bookingId), { amount });
     return true;
   }
 

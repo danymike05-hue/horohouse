@@ -133,6 +133,11 @@ export class BookingChangesService {
       link: `/host/booking/${booking._id}`,
       metadata: { bookingId: String(booking._id), propertyId: String(booking.propertyId) },
     });
+    void this.notifications.emailHost?.('date_change', String(booking._id), {
+      newCheckIn: quote.checkIn,
+      newCheckOut: quote.checkOut,
+      priceDifference: quote.amountDue > 0 ? quote.amountDue : -(quote.refundAmount ?? 0),
+    });
     await this.coHosts.notifyCoHosts(booking.propertyId, {
       type: NotificationType.BOOKING_DATE_CHANGE,
       title: 'A guest wants to change their dates',
