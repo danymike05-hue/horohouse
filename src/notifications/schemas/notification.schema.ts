@@ -35,6 +35,7 @@ export enum NotificationType {
   // ── Stay problems ─────────────────────────────────────────────────────────
   BOOKING_ISSUE      = 'booking_issue',      // Guest/host: a stay problem was reported or decided
   BOOKING_DATE_CHANGE = 'booking_date_change',
+  ESSENTIALS = 'essentials', // Essential kits: orders, deliveries, shop applications and payouts
   VIEWING = 'viewing', // A property viewing was requested, confirmed, moved or cancelled // Guest/host: a date change was asked for or answered
 }
 

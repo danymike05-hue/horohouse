@@ -28,6 +28,7 @@ import { WalletService } from '../payments/services/wallet.service';
 import { Property, PropertyDocument } from '../properties/schemas/property.schema';
 import { User, UserDocument } from '../users/schemas/user.schema';
 import { BookingChangesService } from '../booking-changes/booking-changes.service';
+import { EssentialsService } from '../essentials/essentials.service';
 import { normalizeCmPhone } from './momo.util';
 import type { CheckoutPaymentDocument, CheckoutPurchase, CheckoutPurpose } from './schemas/checkout-payment.schema';
 
@@ -38,6 +39,7 @@ const DURATIONS = [24, 168, 720];
 export interface PurchaseRequest {
   purpose: Exclude<CheckoutPurpose, 'booking'>;
   changeId?: string;
+  orderId?: string;
   planName?: string;
   billingCycle?: 'monthly' | 'quarterly' | 'yearly';
   propertyId?: string;
@@ -56,7 +58,7 @@ export interface PurchaseQuote {
 }
 
 export interface QuoteView {
-  purpose: 'subscription' | 'boost' | 'date_change';
+  purpose: 'subscription' | 'boost' | 'date_change' | 'essentials';
   amount: number;
   currency: 'XAF';
   label: string;
@@ -92,6 +94,7 @@ export class PurchaseGateway {
     @Inject(forwardRef(() => ListingBoostService)) private readonly listingBoosts: ListingBoostService,
     @Inject(forwardRef(() => WalletService)) private readonly walletService: WalletService,
     @Inject(forwardRef(() => BookingChangesService)) private readonly dateChanges: BookingChangesService,
+    private readonly essentials: EssentialsService,
   ) {}
 
   // ───────────────────────────────────────────────────────────────────────────
@@ -103,6 +106,17 @@ export class PurchaseGateway {
     if (!user) throw new NotFoundException('Compte introuvable.');
     const local = normalizeCmPhone(user.phoneNumber);
     const base = { customerName: user.name, customerPhone: local ?? undefined };
+
+    if (req.purpose === 'essentials') {
+      if (!req.orderId || !isValidObjectId(req.orderId)) throw new BadRequestException('Commande invalide.');
+      const o = await this.essentials.payable(userId, req.orderId);
+      return {
+        ...base,
+        amount: o.amount,
+        key: `ess:${req.orderId}`,
+        purchase: { label: o.label, orderId: req.orderId, orderNumber: o.number },
+      };
+    }
 
     if (req.purpose === 'date_change') {
       if (!req.changeId || !isValidObjectId(req.changeId)) throw new BadRequestException('Demande invalide.');
@@ -208,7 +222,8 @@ export class PurchaseGateway {
       label: q.purchase.label ?? '',
       purchase: q.purchase,
       walletBalance,
-      canUseWallet: req.purpose !== 'date_change' && walletBalance >= q.amount && q.amount > 0,
+      // Booking changes and kit orders can be refunded through CamerPay only
+      canUseWallet: req.purpose !== 'date_change' && req.purpose !== 'essentials' && walletBalance >= q.amount && q.amount > 0,
       planBoostsLeft,
       canUsePlanCredit: req.purpose === 'boost' && planBoostsLeft !== 0,
     };
@@ -269,6 +284,18 @@ export class PurchaseGateway {
   ): Promise<{ result: PurchaseResult; purchase: CheckoutPurchase; reason?: string }> {
     const purchase: CheckoutPurchase = { ...(payment.purchase ?? {}) };
     const userId = String(payment.userId);
+
+    if (payment.purpose === 'essentials') {
+      const result = await this.essentials.markPaid(String(purchase.orderId), {
+        checkoutPaymentId: String(payment._id),
+        providerReference: payment.providerReference,
+        method: payment.operator ?? payment.method,
+        paidAt: payment.paidAt,
+      });
+      if (result === 'not_possible') return { result, purchase, reason: 'order_not_payable' };
+      // endsAt tells the waiting screen it is done
+      return { result, purchase: { ...purchase, endsAt: payment.paidAt ?? new Date() } };
+    }
 
     if (payment.purpose === 'date_change') {
       const outcome = await this.dateChanges.applyPaid(String(purchase.changeId), {

@@ -9,6 +9,7 @@ import { ListingBoost, ListingBoostSchema } from '../payments/schemas/listing-bo
 import { Subscription, SubscriptionSchema } from '../payments/schemas/subscription.schema';
 import { Wallet, WalletSchema } from '../payments/schemas/wallet.schema';
 import { Property, PropertySchema } from '../properties/schemas/property.schema';
+import { EssentialsModule } from '../essentials/essentials.module';
 import { PurchaseGateway } from './purchase.gateway';
 import { BookingPaymentGateway } from './booking-payment.gateway';
 import { CamerPayClient } from './camerpay.client';
@@ -32,6 +33,7 @@ import { CheckoutPayment, CheckoutPaymentSchema } from './schemas/checkout-payme
       { name: Property.name, schema: PropertySchema },
     ]),
     forwardRef(() => BookingChangesModule),
+    EssentialsModule,
     forwardRef(() => PaymentsModule), // must export PaymentsService (BookingsModule already relies on it)
   ],
   controllers: [CheckoutController],

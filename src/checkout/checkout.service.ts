@@ -55,6 +55,8 @@ export interface CheckoutPaymentView {
     bookingId?: string;
     checkIn?: string;
     checkOut?: string;
+    orderId?: string;
+    orderNumber?: string;
   };
   method: 'mobile_money' | 'card' | 'wallet' | 'plan_credit';
   operator?: string;
@@ -264,8 +266,9 @@ export class CheckoutService implements OnModuleInit {
     purpose: CheckoutPurpose,
   ): Promise<CheckoutPaymentView> {
     const q = await this.purchases.quote(userId, {
-      purpose: purpose as 'subscription' | 'boost' | 'date_change',
+      purpose: purpose as 'subscription' | 'boost' | 'date_change' | 'essentials',
       changeId: dto.changeId,
+      orderId: dto.orderId,
       planName: dto.planName,
       billingCycle: dto.billingCycle,
       propertyId: dto.propertyId,
@@ -274,7 +277,7 @@ export class CheckoutService implements OnModuleInit {
     });
 
     // A date-change payment has to be refundable through CamerPay like the rest of the booking.
-    if (purpose === 'date_change' && (dto.method === 'wallet' || dto.method === 'plan_credit')) {
+    if ((purpose === 'date_change' || purpose === 'essentials') && (dto.method === 'wallet' || dto.method === 'plan_credit')) {
       throw new BadRequestException({ code: 'METHOD_NOT_ALLOWED', message: 'Choisissez Mobile Money ou la carte pour ce paiement.' });
     }
     if (dto.method === 'wallet' || dto.method === 'plan_credit') return this.payInstantly(userId, dto, purpose, q);
@@ -414,7 +417,7 @@ export class CheckoutService implements OnModuleInit {
   }
 
   private samePurchase(a?: CheckoutPurchase, b?: CheckoutPurchase): boolean {
-    const k = (p?: CheckoutPurchase) => [p?.planName, p?.billingCycle, p?.propertyId, p?.boostType, p?.duration].join('|');
+    const k = (p?: CheckoutPurchase) => [p?.planName, p?.billingCycle, p?.propertyId, p?.boostType, p?.duration, p?.orderId].join('|');
     return k(a) === k(b);
   }
 
@@ -737,6 +740,8 @@ export class CheckoutService implements OnModuleInit {
             bookingId: pu.bookingId,
             checkIn: pu.checkIn ? new Date(pu.checkIn).toISOString() : undefined,
             checkOut: pu.checkOut ? new Date(pu.checkOut).toISOString() : undefined,
+            orderId: pu.orderId,
+            orderNumber: pu.orderNumber,
           }
         : undefined,
       method: doc.method,
