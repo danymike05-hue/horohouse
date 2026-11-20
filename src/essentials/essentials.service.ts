@@ -421,7 +421,7 @@ export class EssentialsService implements OnModuleInit {
         { $match: { 'parts.shopId': shop._id, 'parts.rating': { $gte: 1 } } },
         { $sort: { 'parts.ratedAt': -1 } },
         { $limit: 20 },
-        { $project: { rating: '$parts.rating', review: '$parts.review', at: '$parts.ratedAt', name: '$recipient.name' } },
+        { $project: { rating: '$parts.rating', review: '$parts.review', at: { $ifNull: ['$parts.ratedAt', { $ifNull: ['$parts.deliveredAt', '$updatedAt'] }] }, name: '$recipient.name' } },
       ]),
     ]);
     const tpls = await this.templates.find({ _id: { $in: kits.map((k) => k.templateId) } }).lean();
@@ -554,7 +554,8 @@ export class EssentialsService implements OnModuleInit {
       const belowMin = okLines.length > 0 && subtotal < (shop.minOrder ?? 0);
       return {
         shop: this.shopCard(shop, city),
-        lines: mine.map((p) => ({ index: p.index, kind: p.kind, offerId: p.offerId, qty: p.qty, options: p.options ?? {}, removed: p.removed ?? [], ok: p.ok, problem: p.problem, stock: p.stock, ...(p.line ?? {}) })),
+        // Keys (removed) for sending the cart back; names (removedNames) for showing it
+        lines: mine.map((p) => ({ ...(p.line ?? {}), index: p.index, kind: p.kind, offerId: p.offerId, qty: p.qty, options: p.options ?? {}, removed: p.removed ?? [], removedNames: p.line?.removed ?? [], ok: p.ok, problem: p.problem, stock: p.stock })),
         subtotal,
         deliveryFee: okLines.length && zone ? zone.fee : 0,
         belowMin,
