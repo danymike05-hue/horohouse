@@ -190,6 +190,8 @@ export interface OrderLine {
   offerId: string;
   name: Lang2;
   icon?: string;
+  /** What the app draws for it: "kit:sleep" or an item type key ("blender") */
+  iconKey?: string;
   photo?: string;
   unitPrice: number;
   qty: number;

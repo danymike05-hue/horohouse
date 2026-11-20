@@ -5,6 +5,12 @@ import { Model } from 'mongoose';
 import { Resend } from 'resend';
 import { User, UserDocument } from '../users/schemas/user.schema';
 
+// ─── Brand (same as the app's opening screen) ────────────────────────────────
+
+const BRAND_BLUE = '#155dfc';
+/** Brand slogan: the same in every language */
+const TAGLINE = 'Votre toit, notre mission.';
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 interface SendMailOptions {
@@ -483,23 +489,29 @@ private async safeSendMail(options: SendMailOptions): Promise<void> {
 
   // ─── Shared layout ───────────────────────────────────────────────────────────
 
+  // Same blue, white logo and slogan as the app's opening screen. The logo is served by the
+  // website (client/public); the alt text shows the name where images are blocked.
   private layout(brandName: string, body: string, footer = ''): string {
+    const logo = `${this.frontendUrl.replace(/\/$/, '')}/logoHoroHouseWhite.png`;
     return `
 <div style="font-family:Arial,Helvetica,sans-serif;background:#f6f9fc;padding:24px;">
   <table role="presentation" cellpadding="0" cellspacing="0" width="100%"
          style="max-width:640px;margin:0 auto;background:#fff;border-radius:8px;overflow:hidden;">
     <tr>
-      <td style="padding:24px;background:#0f172a;color:#fff;">
-        <h1 style="margin:0;font-size:20px;">${brandName}</h1>
+      <td style="padding:20px 24px;background:${BRAND_BLUE};color:#fff;">
+        <img src="${logo}" width="172" height="80" alt="${brandName}"
+             style="display:block;border:0;width:172px;height:auto;color:#fff;font-size:22px;font-weight:700;" />
       </td>
     </tr>
     <tr><td style="padding:24px;color:#0f172a;">${body}</td></tr>
-    ${footer ? `<tr><td style="padding:16px 24px;background:#f8fafc;color:#64748b;font-size:12px;text-align:center;">${footer}</td></tr>` : ''}
+    <tr><td style="padding:16px 24px;background:#f8fafc;color:#64748b;font-size:12px;text-align:center;">
+      ${footer ? `${footer}<br/><br/>` : ''}<span style="color:${BRAND_BLUE};font-weight:600;">${brandName}</span> · ${TAGLINE}
+    </td></tr>
   </table>
 </div>`;
   }
 
-  private btn(href: string, label: string, color = '#2563eb'): string {
+  private btn(href: string, label: string, color = BRAND_BLUE): string {
     return `<a href="${href}" style="display:inline-block;background:${color};color:#fff;text-decoration:none;padding:12px 24px;border-radius:6px;font-weight:600;">${label}</a>`;
   }
 
@@ -536,7 +548,7 @@ private async safeSendMail(options: SendMailOptions): Promise<void> {
       <div style="margin-top:24px;">${this.btn(p.resetUrl, t('Reset Password', 'Réinitialiser le mot de passe'))}</div>
       <p style="line-height:1.6;margin-top:16px;font-size:14px;color:#475569;">${t('This link expires in <strong>1 hour</strong>.', 'Ce lien expire dans <strong>1 heure</strong>.')}</p>
       <p style="line-height:1.6;font-size:14px;color:#475569;">${t("If the button doesn't work, copy and paste this link:", 'Si le bouton ne fonctionne pas, copiez et collez ce lien :')}</p>
-      <p style="font-size:14px;color:#2563eb;word-break:break-all;">${p.resetUrl}</p>
+      <p style="font-size:14px;color:${BRAND_BLUE};word-break:break-all;">${p.resetUrl}</p>
       <div style="margin-top:20px;padding:12px 16px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;">
         <p style="margin:0 0 4px 0;font-size:12px;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:0.5px;">${t('Mobile App Reset Token', "Code de réinitialisation pour l'application")}</p>
         <p style="margin:0;font-family:monospace;font-size:13px;color:#0f172a;word-break:break-all;">${p.resetToken}</p>
@@ -575,7 +587,7 @@ private async safeSendMail(options: SendMailOptions): Promise<void> {
       <div style="margin-top:24px;">${this.btn(p.verificationUrl, t('Verify Email Address', "Confirmer l'adresse e-mail"))}</div>
       <p style="line-height:1.6;margin-top:16px;font-size:14px;color:#475569;">${t('This link expires in <strong>24 hours</strong>.', 'Ce lien expire dans <strong>24 heures</strong>.')}</p>
       <p style="font-size:14px;color:#475569;">${t("If the button doesn't work, copy and paste this link:", 'Si le bouton ne fonctionne pas, copiez et collez ce lien :')}</p>
-      <p style="font-size:14px;color:#2563eb;word-break:break-all;">${p.verificationUrl}</p>
+      <p style="font-size:14px;color:${BRAND_BLUE};word-break:break-all;">${p.verificationUrl}</p>
       <p style="line-height:1.6;margin-top:24px;color:#475569;">${t("If you didn't create an account, you can safely ignore this email.", "Si vous n'avez pas créé de compte, vous pouvez ignorer cet e-mail.")}</p>
       <p style="margin-top:8px;">${this.signoff(t)}</p>
     `);
@@ -587,7 +599,7 @@ private async safeSendMail(options: SendMailOptions): Promise<void> {
       <h2 style="margin-top:0;">${t('Complete Your Profile Setup', 'Complétez votre profil')}</h2>
       <p style="line-height:1.6;">${this.hi(t, p.recipientName)}</p>
       <p style="line-height:1.6;">${t(`Welcome to ${p.brandName}! To get the most out of the platform, please complete your profile — it only takes a few minutes.`, `Bienvenue sur ${p.brandName} ! Pour profiter pleinement de la plateforme, complétez votre profil : cela ne prend que quelques minutes.`)}</p>
-      <div style="margin-top:24px;">${this.btn(p.onboardingUrl, t('Complete Profile Setup', 'Compléter mon profil'), '#10b981')}</div>
+      <div style="margin-top:24px;">${this.btn(p.onboardingUrl, t('Complete Profile Setup', 'Compléter mon profil'))}</div>
       <p style="line-height:1.6;margin-top:24px;color:#475569;">${t('This will help us personalise your experience and show you the best matching properties.', 'Cela nous aide à personnaliser votre expérience et à vous montrer les logements qui vous correspondent le mieux.')}</p>
       <p style="margin-top:8px;">${this.signoff(t)}</p>
     `);
@@ -605,7 +617,7 @@ private async safeSendMail(options: SendMailOptions): Promise<void> {
         <li>${t('Contact agents and schedule viewings', 'Contacter des agents et planifier des visites')}</li>
         <li>${t('Manage your preferences', 'Gérer vos préférences')}</li>
       </ul>
-      <div style="margin-top:24px;">${this.btn(p.frontendUrl, t('Start Exploring', 'Commencer à explorer'), '#10b981')}</div>
+      <div style="margin-top:24px;">${this.btn(p.frontendUrl, t('Start Exploring', 'Commencer à explorer'))}</div>
       <p style="line-height:1.6;margin-top:24px;color:#475569;">${t('Our support team is here if you need anything.', 'Notre équipe support est là si vous avez besoin de quoi que ce soit.')}</p>
       <p style="margin-top:8px;">${this.signoff(t)}</p>
     `);
@@ -618,7 +630,7 @@ private async safeSendMail(options: SendMailOptions): Promise<void> {
     const propertiesHtml = p.newProperties.map((prop) => `
       <div style="border:1px solid #e2e8f0;border-radius:8px;padding:16px;margin-bottom:16px;background:#f8fafc;">
         <h3 style="margin:0 0 8px;font-size:16px;">
-          <a href="${p.frontendUrl}/properties/${prop._id}" style="color:#2563eb;text-decoration:none;">${prop.title}</a>
+          <a href="${p.frontendUrl}/properties/${prop._id}" style="color:${BRAND_BLUE};text-decoration:none;">${prop.title}</a>
         </h3>
         <p style="margin:4px 0;font-size:14px;color:#64748b;"><strong>${prop.type}</strong> · ${prop.listingType}</p>
         <p style="margin:4px 0;font-size:14px;color:#64748b;">📍 ${prop.city}${prop.state ? ', ' + prop.state : ''}</p>
@@ -638,7 +650,7 @@ private async safeSendMail(options: SendMailOptions): Promise<void> {
       <div style="text-align:center;">${this.btn(p.searchUrl, t('View All Matches', 'Voir tous les résultats'))}</div>
       <div style="margin-top:32px;padding-top:24px;border-top:1px solid #e2e8f0;">
         <p style="font-size:14px;color:#475569;margin:0;">${t('You can adjust or delete this search at any time.', 'Vous pouvez modifier ou supprimer cette recherche à tout moment.')}</p>
-        <p style="margin:8px 0 0;"><a href="${p.manageSearchesUrl}" style="color:#2563eb;font-size:14px;">${t('Manage Saved Searches →', 'Gérer mes recherches →')}</a></p>
+        <p style="margin:8px 0 0;"><a href="${p.manageSearchesUrl}" style="color:${BRAND_BLUE};font-size:14px;">${t('Manage Saved Searches →', 'Gérer mes recherches →')}</a></p>
       </div>
       <p style="margin-top:24px;">${this.signoff(t)}</p>
     `, `
@@ -725,7 +737,7 @@ private async safeSendMail(options: SendMailOptions): Promise<void> {
       <p>${t(`Your booking for <strong>${p.propertyTitle}</strong> (${p.checkIn} → ${p.checkOut}) is pending payment.`, `Votre réservation pour <strong>${p.propertyTitle}</strong> (${p.checkIn} → ${p.checkOut}) attend votre paiement.`)}</p>
       <p style="font-size:22px;font-weight:700;color:#0f172a;">${p.currency} ${p.totalAmount.toLocaleString(t('en-US', 'fr-FR'))}</p>
       <p style="color:#ef4444;font-size:14px;">${t(`This link expires in ${p.expiresInHours} hours.`, `Ce lien expire dans ${p.expiresInHours} heures.`)}</p>
-      ${this.btn(p.paymentLink, t('Pay Now', 'Payer maintenant'), '#10b981')}
+      ${this.btn(p.paymentLink, t('Pay Now', 'Payer maintenant'))}
       <p style="margin-top:24px;font-size:13px;color:#64748b;">${t('If you did not make this booking, ignore this email.', "Si vous n'avez pas fait cette réservation, ignorez cet e-mail.")}</p>
     `);
   }
@@ -769,7 +781,7 @@ private async safeSendMail(options: SendMailOptions): Promise<void> {
       <div style="margin-top:24px;">${this.btn(this.frontendUrl, t('Browse Properties', 'Voir les logements'))}</div>
       <p style="margin-top:24px;font-size:13px;color:#64748b;">
         ${t('You can unsubscribe at any time by clicking', 'Vous pouvez vous désinscrire à tout moment en cliquant')}
-        <a href="${this.frontendUrl}/unsubscribe?email=${recipientEmail}" style="color:#2563eb;">${t('here', 'ici')}</a>.
+        <a href="${this.frontendUrl}/unsubscribe?email=${recipientEmail}" style="color:${BRAND_BLUE};">${t('here', 'ici')}</a>.
       </p>
       <p style="margin-top:8px;">${this.signoff(t)}</p>
     `),

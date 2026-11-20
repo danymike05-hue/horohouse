@@ -28,6 +28,8 @@ export class ItemsQueryDto extends CityQueryDto {
   @IsOptional() @IsString() @MaxLength(60) q?: string;
   @IsOptional() @IsIn([...ESS_CATEGORIES]) category?: string;
   @IsOptional() @IsIn(['price', 'rating', 'fast']) sort?: 'price' | 'rating' | 'fast';
+  /** Only items up to this price (FCFA) */
+  @IsOptional() @Type(() => Number) @IsInt() @Min(0) maxPrice?: number;
 }
 
 export class CartLineDto {

@@ -311,7 +311,7 @@ export class EssentialsAdminService {
         { $match: { status: { $in: ['paid', 'closed'] }, createdAt: { $gte: since } } },
         { $unwind: '$parts' },
         { $unwind: '$parts.lines' },
-        { $group: { _id: '$parts.lines.name.en', icon: { $first: '$parts.lines.icon' }, qty: { $sum: '$parts.lines.qty' } } },
+        { $group: { _id: '$parts.lines.name.en', icon: { $first: '$parts.lines.icon' }, iconKey: { $first: '$parts.lines.iconKey' }, qty: { $sum: '$parts.lines.qty' } } },
         { $sort: { qty: -1 } },
         { $limit: 10 },
       ]),
@@ -325,7 +325,7 @@ export class EssentialsAdminService {
     return {
       last30: { orders: t.orders, sales: t.total, revenue: t.commission + t.fees },
       byCity: byCity.map((c: any) => ({ city: c._id, orders: c.orders, total: c.total })),
-      top: topLines.map((l: any) => ({ name: l._id, icon: l.icon, qty: l.qty })),
+      top: topLines.map((l: any) => ({ name: l._id, icon: l.icon, iconKey: l.iconKey, qty: l.qty })),
       demand: demand.map((d: any) => ({ city: d._id, count: d.n })),
     };
   }

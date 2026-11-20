@@ -233,12 +233,37 @@ export class EssentialsService implements OnModuleInit {
         itemCount: (t.lines ?? []).reduce((n: number, l: any) => n + (l.qty ?? 1), 0),
         fromPrice: offers.length ? Math.min(...offers.map((o) => o.price)) : null,
         shopCount: offers.length,
+        // The kit made of the others, for less
+        bestValue: t.key === 'arrival',
       };
     });
     const known = new Map<string, string>();
     for (const c of [...(market.cities ?? []), ...(approvedCities as string[])]) if (c && !known.has(cityKey(c))) known.set(cityKey(c), c);
     const liveKeys = new Set((approvedCities as string[]).map(cityKey));
     const popular = types.filter((t: any) => itemCounts.some((r) => r._id === t.key)).slice(0, 12);
+    // A few real items from shops here: best rated shops first, then the cheapest
+    const shopById = new Map(shops.map((s) => [String(s._id), s]));
+    const someItems = await this.itemOffers.find({ shopId: { $in: shopIds }, isActive: true, stock: { $gt: 0 } }).sort({ updatedAt: -1 }).limit(40).lean();
+    const popularItems = someItems
+      .map((o) => this.itemCard(o, typeByKey.get(o.itemTypeKey), shopById.get(String(o.shopId)), city))
+      .sort((a, b) => b.shop.rating - a.shop.rating || a.price - b.price)
+      .slice(0, 6);
+    // The order the student is waiting for, pinned on top
+    const live: any = await this.orders
+      .findOne({ userId: new Types.ObjectId(userId), status: 'paid', 'parts.status': { $in: ['placed', ...LIVE] } })
+      .sort({ createdAt: -1 })
+      .lean();
+    const livePart: any = live?.parts.find((p: any) => ['placed', ...LIVE].includes(p.status));
+    const activeOrder = live && livePart
+      ? {
+          _id: String(live._id),
+          number: live.number,
+          status: livePart.status,
+          shopName: livePart.shopName,
+          iconKey: livePart.lines?.[0]?.iconKey,
+          code: livePart.status !== 'placed' ? deliveryCode(this.codeSecret, String(livePart._id)) : undefined,
+        }
+      : null;
     return {
       city,
       currency: market.currency,
@@ -248,6 +273,8 @@ export class EssentialsService implements OnModuleInit {
       kits,
       categories: ['bedroom', 'kitchen', 'cleaning', 'furniture', 'study', 'bathroom'].map((key) => ({ key, count: catCount[key] ?? 0 })),
       popular: popular.map((t: any) => ({ key: t.key, name: t.name, icon: t.icon })),
+      popularItems,
+      activeOrder,
       cartCount: (cart?.lines ?? []).reduce((n, l) => n + (l.qty ?? 1), 0),
       wanted: !!(await this.interest.exists({ userId: new Types.ObjectId(userId), city: cityKey(city) })),
     };
@@ -306,13 +333,27 @@ export class EssentialsService implements OnModuleInit {
     const others = await this.kitOffers.countDocuments({ templateId: offer.templateId, available: true, shopId: { $in: here.map((s) => s._id).filter((x) => String(x) !== String(shop._id)) } });
     const addOns = await this.itemOffers.find({ shopId: shop._id, isActive: true, stock: { $gt: 0 } }).sort({ price: 1 }).limit(8).lean();
     const addTypes = await this.typeMap(addOns.map((a) => a.itemTypeKey));
+    // What each line costs bought on its own: this shop's price, else the cheapest shop here
+    const keys = (t.lines ?? []).map((l: any) => l.itemTypeKey);
+    const singles = await this.itemOffers
+      .find({ itemTypeKey: { $in: keys }, isActive: true, stock: { $gt: 0 }, shopId: { $in: here.map((s) => s._id) } })
+      .select('itemTypeKey price shopId')
+      .lean();
+    const alone = new Map<string, number>();
+    for (const k of keys) {
+      const mine = singles.filter((x) => x.itemTypeKey === k && String(x.shopId) === String(shop._id));
+      const pool = mine.length ? mine : singles.filter((x) => x.itemTypeKey === k);
+      if (pool.length) alone.set(k, Math.min(...pool.map((x) => x.price)));
+    }
+    const template = await this.templateView(t, offer);
+    template.lines = template.lines.map((l: any) => ({ ...l, alonePrice: alone.get(l.itemTypeKey) ?? null }));
     return {
       _id: String(offer._id),
       price: offer.price,
       photos: offer.photos ?? [],
       available: offer.available && !shop.paused,
       prepHours: offer.prepHours,
-      template: await this.templateView(t, offer),
+      template,
       shop: this.shopCard(shop, city),
       otherShops: others,
       addOns: addOns.map((a) => this.itemCard(a, addTypes.get(a.itemTypeKey), shop, city)),
@@ -337,6 +378,13 @@ export class EssentialsService implements OnModuleInit {
       price: o.price,
       photo: o.photos?.[0],
       stock: o.stock,
+      // Listed in the last three weeks
+      isNew: !!o.createdAt && Date.now() - new Date(o.createdAt).getTime() < 21 * 86_400_000,
+      // Colour choices, for the dots on the card
+      colours: (o.options ?? [])
+        .filter((op: any) => /colou?r|couleur/i.test(String(op.label ?? '')))
+        .flatMap((op: any) => (op.values ?? []).map((v: any) => String(v.label)))
+        .slice(0, 4),
       shop: this.shopCard(shop, city),
     };
   }
@@ -366,6 +414,7 @@ export class EssentialsService implements OnModuleInit {
     } else if (typeKeys) {
       filter.itemTypeKey = { $in: typeKeys };
     }
+    if (q.maxPrice) filter.price = { $lte: Number(q.maxPrice) };
     const offers = await this.itemOffers.find(filter).limit(120).lean();
     const types = await this.typeMap(offers.map((o) => o.itemTypeKey));
     let cards = offers.map((o) => this.itemCard(o, types.get(o.itemTypeKey), byId.get(String(o.shopId)), city));
@@ -397,7 +446,24 @@ export class EssentialsService implements OnModuleInit {
       assembly: !!o.assembly,
       available: o.isActive && o.stock > 0 && !shop.paused,
       others: others.map((x) => this.itemCard(x, type, byId.get(String(x.shopId)), city)),
+      // Only said when other shops here sell it too
+      lowest: others.length > 0 && others.every((x) => x.price >= o.price),
+      together: await this.boughtWith(o, type, shop, city),
     };
+  }
+
+  /** Other items from the same shop, same kind of room first: one delivery for both */
+  private async boughtWith(o: any, type: any, shop: any, city: string) {
+    const list = await this.itemOffers
+      .find({ shopId: shop._id, isActive: true, stock: { $gt: 0 }, _id: { $ne: o._id }, itemTypeKey: { $ne: o.itemTypeKey } })
+      .limit(30)
+      .lean();
+    const types = await this.typeMap(list.map((x) => x.itemTypeKey));
+    const cat = type?.category;
+    return list
+      .sort((a, b) => Number((types.get(b.itemTypeKey) as any)?.category === cat) - Number((types.get(a.itemTypeKey) as any)?.category === cat) || a.price - b.price)
+      .slice(0, 6)
+      .map((x) => this.itemCard(x, types.get(x.itemTypeKey), shop, city));
   }
 
   async itemTypeOffers(key: string, city: string) {
@@ -433,7 +499,7 @@ export class EssentialsService implements OnModuleInit {
         .filter((k) => tById.get(String(k.templateId)))
         .map((k) => {
           const t: any = tById.get(String(k.templateId));
-          return { _id: String(k._id), name: t.name, icon: t.icon, price: k.price, photo: k.photos?.[0] ?? t.image };
+          return { _id: String(k._id), key: t.key, name: t.name, icon: t.icon, price: k.price, photo: k.photos?.[0] ?? t.image };
         }),
       items: items.map((i) => this.itemCard(i, types.get(i.itemTypeKey), shop, city)),
       // First names only
@@ -518,7 +584,7 @@ export class EssentialsService implements OnModuleInit {
         const problem: Problem | undefined = this.zoneFor(shop, city) ? undefined : 'no_delivery';
         return {
           ...l, qty, removed, index, shopId: String(shop._id), ok: !problem, problem,
-          line: { kind: 'kit', offerId: String(o._id), name: t.name, icon: t.icon, photo: o.photos?.[0] ?? t.image, unitPrice: unit, qty, total: unit * qty, choices, removed: removed.map(name), contents },
+          line: { kind: 'kit', offerId: String(o._id), name: t.name, icon: t.icon, iconKey: `kit:${t.key}`, photo: o.photos?.[0] ?? t.image, unitPrice: unit, qty, total: unit * qty, choices, removed: removed.map(name), contents },
         };
       }
       const o: any = itemById.get(l.offerId);
@@ -537,7 +603,7 @@ export class EssentialsService implements OnModuleInit {
       const problem: Problem | undefined = o.stock < qty ? 'stock' : !this.zoneFor(shop, city) ? 'no_delivery' : undefined;
       return {
         ...l, qty, index, shopId: String(shop._id), ok: !problem, problem, stock: o.stock,
-        line: { kind: 'item', offerId: String(o._id), name: both(o.title), icon: type?.icon, photo: o.photos?.[0], unitPrice: unit, qty, total: unit * qty, choices, removed: [], warrantyDays: o.warrantyDays },
+        line: { kind: 'item', offerId: String(o._id), name: both(o.title), icon: type?.icon, iconKey: o.itemTypeKey, photo: o.photos?.[0], unitPrice: unit, qty, total: unit * qty, choices, removed: [], warrantyDays: o.warrantyDays },
       };
     });
   }
@@ -725,7 +791,7 @@ export class EssentialsService implements OnModuleInit {
       currency: o.currency,
       createdAt: o.createdAt,
       date: o.delivery?.date,
-      icons: o.parts.flatMap((p: any) => p.lines.map((l: any) => l.icon)).filter(Boolean).slice(0, 4),
+      icons: o.parts.flatMap((p: any) => p.lines.map((l: any) => l.iconKey)).filter(Boolean).slice(0, 4),
       itemCount: o.parts.reduce((n: number, p: any) => n + p.lines.reduce((m: number, l: any) => m + l.qty, 0), 0),
       parts: o.parts.map((p: any) => ({ shopName: p.shopName, status: p.status })),
     }));
