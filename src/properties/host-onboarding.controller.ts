@@ -1,6 +1,6 @@
 import { Body, Controller, Get, HttpCode, Param, Post, Req, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
-import { IsEmail, IsOptional, IsString, Length } from 'class-validator';
+import { IsEmail, IsIn, IsOptional, IsString, Length } from 'class-validator';
 import { JwtAuthGuard } from '../auth/guards/jwt.auth.guard';
 import { RolesGuard, Roles } from '../auth/guards/roles.guard';
 import { UserRole } from '../users/schemas/user.schema';
@@ -19,6 +19,11 @@ class FindOrCreateHostDto {
   @IsOptional()
   @IsEmail()
   email?: string;
+
+  /** The account a regular user becomes: host (short stays) or landlord (rent / sale) */
+  @IsOptional()
+  @IsIn(['host', 'landlord'])
+  role?: 'host' | 'landlord';
 }
 
 /**

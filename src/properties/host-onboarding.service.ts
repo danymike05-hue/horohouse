@@ -58,8 +58,13 @@ export class HostOnboardingService {
     private readonly notifications: NotificationsService,
   ) {}
 
-  /** Find the host's account by phone or email, or make one. Regular accounts become host accounts. */
-  async findOrCreateHost(input: { name?: string; email?: string; phoneNumber: string }): Promise<HostForListing> {
+  /**
+   * Find the owner's account by phone or email, or make one. Regular accounts become `role`
+   * accounts: host (short stays, the default) or landlord (homes to rent or sell). Host,
+   * landlord and agent accounts keep their role.
+   */
+  async findOrCreateHost(input: { name?: string; email?: string; phoneNumber: string; role?: 'host' | 'landlord' }): Promise<HostForListing> {
+    const targetRole = input.role === 'landlord' ? UserRole.LANDLORD : UserRole.HOST;
     const phoneNumber = normalizeCameroonPhone(input.phoneNumber);
     const email = input.email?.trim().toLowerCase() || undefined;
     if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new BadRequestException('Enter a valid email address');
@@ -97,11 +102,11 @@ export class HostOnboardingService {
         // Students keep their student account (their profile and leases depend on it)
         throw new BadRequestException(`This is a ${user.role} account: it can’t own a listing`);
       }
-      await this.usersService.setRole(String(user._id), UserRole.HOST);
+      await this.usersService.setRole(String(user._id), targetRole);
       upgraded = !created;
-      user.role = UserRole.HOST;
+      user.role = targetRole;
     }
-    if (created) this.logger.log(`Host account created by an admin for listing set-up: ${user._id}`);
+    if (created) this.logger.log(`${targetRole} account created by an admin for listing set-up: ${user._id}`);
 
     return {
       id: String(user._id),
