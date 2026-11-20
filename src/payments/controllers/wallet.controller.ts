@@ -155,11 +155,23 @@ export class WalletController {
   @UseGuards(JwtAuthGuard)
   @ApiOperation({ summary: 'Get wallet transactions' })
   @ApiQuery({ name: 'limit', required: false, type: Number })
+  @ApiQuery({ name: 'from', required: false, type: String, description: 'ISO date: only transactions at or after it' })
+  @ApiQuery({ name: 'to', required: false, type: String, description: 'ISO date: only transactions before it' })
   @ApiResponse({ status: 200, description: 'Transactions retrieved' })
-  async getTransactions(@Req() req: any, @Query('limit') limit?: string) {
+  async getTransactions(
+    @Req() req: any,
+    @Query('limit') limit?: string,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+  ) {
     const n = limit ? parseInt(limit, 10) : NaN;
     const l = Number.isFinite(n) ? Math.min(Math.max(n, 1), 200) : undefined;
-    return this.walletService.getTransactions(req.user.id, l);
+    const fromDate = from ? new Date(from) : undefined;
+    const toDate = to ? new Date(to) : undefined;
+    if ((fromDate && isNaN(fromDate.getTime())) || (toDate && isNaN(toDate.getTime()))) {
+      throw new BadRequestException('from and to must be ISO dates');
+    }
+    return this.walletService.getTransactions(req.user.id, l, fromDate, toDate);
   }
 
   @Get('stats')

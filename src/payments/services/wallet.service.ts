@@ -417,9 +417,18 @@ export class WalletService {
 
   // A host with no earnings yet has no wallet: these used to answer 404 "Wallet not found",
   // which showed "Some data couldn't be loaded" on every new host's dashboard.
-  async getTransactions(userId: string, limit = 50): Promise<WalletTransaction[]> {
+  /** Newest first. from/to (to exclusive) narrow it to a period, e.g. one week or month. */
+  async getTransactions(userId: string, limit = 50, from?: Date, to?: Date): Promise<WalletTransaction[]> {
     const wallet = await this.getOrCreateWallet(userId);
-    return wallet.transactions.slice(0, limit);
+    if (!from && !to) return wallet.transactions.slice(0, limit);
+    const fromMs = from ? from.getTime() : -Infinity;
+    const toMs = to ? to.getTime() : Infinity;
+    return wallet.transactions
+      .filter((t) => {
+        const at = new Date(t.createdAt).getTime();
+        return at >= fromMs && at < toMs;
+      })
+      .slice(0, limit);
   }
 
   async getWalletStats(userId: string): Promise<any> {

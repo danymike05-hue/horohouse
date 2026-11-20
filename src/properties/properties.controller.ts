@@ -679,6 +679,19 @@ export class PropertiesController {
     return this.propertiesService.getMyProperties(filters, options, userId);
   }
 
+  @Patch('my/auto-approve')
+  @Roles(UserRole.HOST, UserRole.AGENT, UserRole.LANDLORD, UserRole.ADMIN)
+  @ApiOperation({ summary: 'Turn auto-approve (Instant Book) on or off for all my short-stay listings' })
+  @ApiBearerAuth()
+  @ApiResponse({ status: 200, description: '{ enabled, updated }' })
+  async setMyAutoApprove(
+    @Body() body: { enabled: boolean },
+    @Req() req: FastifyRequest & { user: User },
+  ) {
+    if (typeof body?.enabled !== 'boolean') throw new BadRequestException('enabled must be true or false');
+    return this.propertiesService.setAutoApproveForHost(this.userIdOf(req.user), body.enabled);
+  }
+
   @Patch(':id/feature')
   @Roles(UserRole.ADMIN)
   @ApiOperation({ summary: 'Toggle property featured status (Admin only)' })

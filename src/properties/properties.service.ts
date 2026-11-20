@@ -1070,6 +1070,28 @@ export class PropertiesService implements OnModuleInit {
   // MY PROPERTIES
   // ════════════════════════════════════════════════════════════════════════════
 
+  /**
+   * Host-wide auto-approve switch. On: guests booking any of this host's short stays are
+   * confirmed straight away (Instant Book, guest pays within 30 min). Off: every booking
+   * is a request the host approves. It sets isInstantBookable on each short-stay listing,
+   * which is what BookingsService.create reads, and keeps hostProfile.instantBookEnabled
+   * (shown on the public host profile) in step. Listings can still be changed one by one.
+   */
+  async setAutoApproveForHost(userId: string, enabled: boolean): Promise<{ enabled: boolean; updated: number }> {
+    if (!Types.ObjectId.isValid(userId)) throw new BadRequestException('Invalid user ID');
+    const userObjectId = new Types.ObjectId(userId);
+    const set: Record<string, any> = { isInstantBookable: enabled };
+    // Turning it off also drops the "verified guests only" rule, which only applies to Instant Book.
+    if (!enabled) set.instantBookRequiresVerifiedGuest = false;
+    const res = await this.propertyModel.updateMany(
+      { $or: [{ ownerId: userObjectId }, { agentId: userObjectId }], listingType: ListingType.SHORT_TERM },
+      { $set: set },
+    );
+    await this.userModel.updateOne({ _id: userObjectId }, { $set: { 'hostProfile.instantBookEnabled': enabled } });
+    this.logger.log(`Auto-approve ${enabled ? 'on' : 'off'} for host ${userId} (${res.modifiedCount} listing(s))`);
+    return { enabled, updated: res.modifiedCount ?? 0 };
+  }
+
   async getMyProperties(
     filters: PropertySearchFilters = {},
     options: PropertySearchOptions = {},
