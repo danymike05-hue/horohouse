@@ -157,6 +157,50 @@ export class EmailService {
     });
   }
 
+  /**
+   * The HoroHouse team set up a home for this host. Tells them to check it and publish it, and
+   * gives a link to choose their password (a 7-day reset token), or to sign in with Google.
+   */
+  async sendHostListingInviteEmail(
+    recipientEmail: string,
+    recipientName: string,
+    homeTitle: string,
+    resetToken: string | null,
+  ): Promise<void> {
+    const t = await this.translatorFor(recipientEmail);
+    const esc = (s: string) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
+    const displayName = this.display(recipientName, t);
+    const title = homeTitle?.trim() || t('your home', 'votre logement');
+    const setUrl = resetToken ? `${this.frontendUrl}/auth/reset-password?token=${resetToken}` : null;
+    const howToSignIn = setUrl
+      ? t(
+        `Open the HoroHouse app and sign in with this email: choose your password with the link below (valid 7 days), or tap "Continue with Google" if this is a Gmail address.`,
+        `Ouvrez l'application HoroHouse et connectez-vous avec cet e-mail : choisissez votre mot de passe avec le lien ci-dessous (valable 7 jours), ou touchez « Continuer avec Google » s'il s'agit d'une adresse Gmail.`,
+      )
+      : t('Open the HoroHouse app and sign in to your account as usual.', "Ouvrez l'application HoroHouse et connectez-vous à votre compte comme d'habitude.");
+    const intro = t(
+      `The HoroHouse team has set up "${title}" for you. It isn't visible to guests yet: check the photos, price and rules, change anything you like, then tap "Publish".`,
+      `L'équipe HoroHouse a préparé « ${title} » pour vous. Il n'est pas encore visible des voyageurs : vérifiez les photos, le prix et les règles, modifiez ce que vous voulez, puis touchez « Publier ».`,
+    );
+    await this.safeSendMail({
+      to: recipientEmail,
+      subject: t(`Your home is ready to publish on ${this.brandName}`, `Votre logement est prêt à être publié sur ${this.brandName}`),
+      text: `${this.hi(t, displayName)}\n\n${intro}\n\n${howToSignIn}${setUrl ? `\n\n${setUrl}\n\n${t('Code for the app', "Code pour l'application")}: ${resetToken}` : ''}\n\n${this.signoff(t)}`,
+      html: this.layout(this.brandName, `
+        <h2 style="margin-top:0;">${t('Your home is ready to publish', 'Votre logement est prêt à être publié')}</h2>
+        <p style="line-height:1.6;">${esc(this.hi(t, displayName))}</p>
+        <p style="line-height:1.6;">${esc(intro)}</p>
+        <p style="line-height:1.6;">${esc(howToSignIn)}</p>
+        ${setUrl ? `<div style="margin-top:24px;">${this.btn(setUrl, t('Choose my password', 'Choisir mon mot de passe'))}</div>
+        <div style="margin-top:20px;padding:12px 16px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;">
+          <p style="margin:0 0 4px 0;font-size:12px;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:0.5px;">${t('Code for the app', "Code pour l'application")}</p>
+          <p style="margin:0;font-family:monospace;font-size:13px;color:#0f172a;word-break:break-all;">${resetToken}</p>
+        </div>` : ''}
+        <p style="margin-top:24px;">${this.signoff(t)}</p>
+      `),
+    });
+  }
+
   async sendPasswordResetConfirmation(
     recipientEmail: string,
     recipientName: string,

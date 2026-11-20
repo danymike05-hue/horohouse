@@ -17,6 +17,9 @@ import { UserInteractionsModule } from '../user-interactions/user-interactions.m
 import { UsersModule } from '../users/users.module';
 import { WatermarkService } from 'src/watermark/watermark.service';
 import { PropertyCalendarScheduler } from './property-calendar.scheduler';
+import { EmailModule } from '../email/email.module';
+import { HostOnboardingService } from './host-onboarding.service';
+import { HostOnboardingController } from './host-onboarding.controller';
 
 @Module({
   imports: [
@@ -33,9 +36,11 @@ import { PropertyCalendarScheduler } from './property-calendar.scheduler';
     // PropertiesController uses UsersService for the host ID check.
     // forwardRef keeps this safe if UsersModule ever imports PropertiesModule.
     forwardRef(() => UsersModule),
+    // Emails to hosts whose listing the team set up
+    EmailModule,
   ],
-  controllers: [PropertiesController, InquiryController, ComparisonController],
-  providers: [PropertiesService, InquiryService, ComparisonService, WatermarkService, PropertyCalendarScheduler],
+  controllers: [PropertiesController, InquiryController, ComparisonController, HostOnboardingController],
+  providers: [PropertiesService, InquiryService, ComparisonService, WatermarkService, PropertyCalendarScheduler, HostOnboardingService],
   exports: [PropertiesService, InquiryService, ComparisonService],
 })
 export class PropertiesModule {}

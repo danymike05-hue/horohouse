@@ -656,6 +656,18 @@ export class Property {
   @Prop()
   rejectionReason?: string;
 
+  // ── Set up by the HoroHouse team for a host ───────────────────────────────
+  /** The admin who filled in this listing for its owner (null: the owner did) */
+  @Prop({ type: Types.ObjectId, ref: 'User', default: null })
+  publishedBy?: Types.ObjectId | null;
+
+  /** Filled in by the team and hidden until the owner checks it and taps "Publish" */
+  @Prop({ default: false })
+  awaitingHostConfirmation: boolean;
+
+  @Prop({ type: Date, default: null })
+  hostConfirmedAt?: Date | null;
+
   @Prop({ default: false })
   isVerified: boolean;
 

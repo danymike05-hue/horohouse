@@ -15,6 +15,7 @@ import {
   IsIn,
   ArrayMaxSize,
   MaxLength,
+  IsMongoId,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional, PartialType } from '@nestjs/swagger';
@@ -472,6 +473,15 @@ export class CreatePropertyDto {
   @IsOptional()
   @IsArray()
   videos?: any[];
+
+  /**
+   * Admins only: the host this listing is set up for. It's saved as theirs (bookings, payouts,
+   * calendar all follow) and stays hidden until they confirm it. Ignored for everyone else.
+   */
+  @ApiPropertyOptional({ description: 'Admin only: user ID of the host this listing is for' })
+  @IsOptional()
+  @IsMongoId()
+  onBehalfOf?: string;
 }
 
 // ─── Update Property ──────────────────────────────────────────────────────────

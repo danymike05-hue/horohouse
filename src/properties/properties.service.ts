@@ -203,7 +203,7 @@ export class PropertiesService implements OnModuleInit {
 
   async create(createPropertyDto: CreatePropertyDto, user: User): Promise<Property> {
     try {
-      const { latitude, longitude, ...restDto } = createPropertyDto;
+      const { latitude, longitude, onBehalfOf, ...restDto } = createPropertyDto;
 
       if (latitude !== undefined && longitude !== undefined) {
         if (!this.isValidCoordinate(latitude, longitude)) {
@@ -228,17 +228,31 @@ export class PropertiesService implements OnModuleInit {
         this.validateShortTermFields(createPropertyDto);
       }
 
+      // An admin setting the listing up for a host: it's the host's from the start (bookings,
+      // payouts, calendar and inbox all follow ownerId), approved, and hidden until they confirm.
+      let owner: { _id: any; role: string } = { _id: user._id, role: user.role };
+      const forHost = isAdmin && !!onBehalfOf;
+      if (forHost) {
+        const host = await this.userModel.findById(onBehalfOf).select('_id role isActive').lean().exec();
+        if (!host || (host as any).isActive === false) throw new BadRequestException('Host account not found');
+        if (![UserRole.HOST, UserRole.AGENT, UserRole.LANDLORD].includes((host as any).role)) {
+          throw new BadRequestException('This account is not a host, landlord or agent account');
+        }
+        owner = { _id: (host as any)._id, role: (host as any).role };
+      }
+
       const property = new this.propertyModel({
         ...restDto,
         ...locationData,
         latitude,
         longitude,
-        ownerId: user._id,
-        agentId: user.role === UserRole.AGENT ? user._id : undefined,
+        ownerId: owner._id,
+        agentId: owner.role === UserRole.AGENT ? owner._id : undefined,
         slug: this.generateSlug(createPropertyDto.title),
         keywords: this.generateKeywords(createPropertyDto),
         approvalStatus: isAdmin ? ApprovalStatus.APPROVED : ApprovalStatus.PENDING,
-        isActive: isAdmin,
+        isActive: isAdmin && !forHost,
+        ...(forHost && { publishedBy: user._id, awaitingHostConfirmation: true }),
         pricingUnit: createPropertyDto.pricingUnit ?? PricingUnit.NIGHTLY,
         minNights: createPropertyDto.minNights ?? 1,
         maxNights: createPropertyDto.maxNights ?? 365,
@@ -457,18 +471,29 @@ export class PropertiesService implements OnModuleInit {
       // Fetch only the fields we need for the permission check — not the full document
       const property = await this.propertyModel
         .findById(id)
-        .select('ownerId agentId title description city type price originalPrice listingType images amenities shortTermAmenities houseRules studentDetails')
+        .select('ownerId agentId title description city type price originalPrice listingType images amenities shortTermAmenities houseRules studentDetails awaitingHostConfirmation')
         .lean()
         .exec();
 
       if (!property) throw new NotFoundException('Property not found');
 
-      if (
-        user.role !== UserRole.ADMIN &&
-        (property as any).ownerId.toString() !== user._id.toString() &&
-        (property as any).agentId?.toString() !== user._id.toString()
-      ) {
+      const isOwnerOrAgent =
+        (property as any).ownerId.toString() === user._id.toString() ||
+        (property as any).agentId?.toString() === user._id.toString();
+      if (user.role !== UserRole.ADMIN && !isOwnerOrAgent) {
         throw new ForbiddenException('You can only update your own properties');
+      }
+
+      // Only the create route may set who a listing is for
+      delete (updatePropertyDto as any).onBehalfOf;
+
+      // Set up by the team: only its owner can put it online, and doing so is their confirmation
+      if ((property as any).awaitingHostConfirmation && updatePropertyDto.isActive === true) {
+        if (!isOwnerOrAgent) {
+          throw new BadRequestException('This listing is waiting for its host to check it and publish it');
+        }
+        (updatePropertyDto as any).awaitingHostConfirmation = false;
+        (updatePropertyDto as any).hostConfirmedAt = new Date();
       }
 
       if (
@@ -1871,6 +1896,8 @@ export class PropertiesService implements OnModuleInit {
       cancellationPolicy: 1,
       isFeatured: 1,
       viewsCount: 1,
+      // Set up by the team and waiting for its host (the host's Homes tab shows a card)
+      awaitingHostConfirmation: 1,
       location: 1,
       latitude: 1,
       longitude: 1,
