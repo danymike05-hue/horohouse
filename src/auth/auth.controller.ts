@@ -1,3 +1,4 @@
+import { isIdentityVerified } from '../common/identity.util';
 import {
   Controller,
   Post,
@@ -461,6 +462,9 @@ export class AuthController {
           hasPassword: !!(req.user as any).hasPassword,
           onboardingCompleted: (req.user as any).onboardingCompleted ?? false,
           onboardingStatus: (req.user as any).onboardingStatus || 'completed',
+          // So the app knows the identity check is done (hosts verified through hostProfile count too)
+          identityVerification: { status: isIdentityVerified(req.user) ? 'verified' : ((req.user as any).identityVerification?.status ?? 'unverified') },
+          createdAt: (req.user as any).createdAt,
         },
       };
     } catch (error) {
