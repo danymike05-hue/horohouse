@@ -4,8 +4,8 @@ import {
     BadRequestException,
     ForbiddenException,
     Logger,
-    OnModuleInit,
-} from '@nestjs/common';
+    OnModuleInit, Optional } from '@nestjs/common';
+import { HostPlansService } from '../host-plans/host-plans.service';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 
@@ -40,6 +40,7 @@ export class ChatService implements OnModuleInit {
         @InjectModel(Message.name) private messageModel: Model<MessageDocument>,
         @InjectModel(Property.name) private propertyModel: Model<PropertyDocument>,
         @InjectModel(User.name) private userModel: Model<UserDocument>,
+        @Optional() private readonly hostPlans?: HostPlansService,
     ) { }
 
     async onModuleInit() {
@@ -294,6 +295,20 @@ export class ChatService implements OnModuleInit {
                     otherUser: otherParticipant?.userId,
                 };
             });
+
+            // The support account sees which hosts are on a plan with priority support
+            if (this.hostPlans && (await this.supportAccountId()) === String(userId)) {
+                const tiers = await this.hostPlans.supportTiers(
+                    formattedConversations.map((c: any) => resolveId(c.otherUser)).filter(Boolean),
+                );
+                for (const c of formattedConversations as any[]) {
+                    const tier = tiers[resolveId(c.otherUser)];
+                    if (tier && tier !== 'standard') c.supportTier = tier;
+                }
+                // Dedicated first, then priority, keeping the newest-first order inside each
+                const rank = (c: any) => (c.supportTier === 'dedicated' ? 0 : c.supportTier === 'priority' ? 1 : 2);
+                formattedConversations.sort((a: any, b: any) => (a.unreadCount > 0 && b.unreadCount > 0 ? rank(a) - rank(b) : 0));
+            }
 
             return {
                 conversations: formattedConversations,

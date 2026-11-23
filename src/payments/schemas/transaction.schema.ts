@@ -161,7 +161,7 @@ export const TransactionSchema = SchemaFactory.createForClass(Transaction);
 // Indexes
 TransactionSchema.index({ userId: 1, createdAt: -1 });
 TransactionSchema.index({ status: 1, createdAt: -1 });
-TransactionSchema.index({ flutterwaveTransactionId: 1 });
+// (the unique index on the field already covers this)
 TransactionSchema.index({ flutterwaveReference: 1 });
 TransactionSchema.index({ type: 1, status: 1 });
 TransactionSchema.index({ createdAt: -1 });

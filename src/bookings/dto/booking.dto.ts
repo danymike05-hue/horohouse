@@ -84,6 +84,12 @@ export class CreateBookingDto {
   @Length(0, 1000)
   guestNote?: string;
 
+  @ApiPropertyOptional({ example: 'WELCOME10', description: 'A promo code from the host' })
+  @IsOptional()
+  @IsString()
+  @Length(2, 20)
+  promoCode?: string;
+
   @ApiPropertyOptional({
     example: '507f1f77bcf86cd799439022',
     description: 'Specific room ID — required for hotels, hostels, motels with multiple rooms',

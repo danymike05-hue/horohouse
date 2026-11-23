@@ -95,5 +95,5 @@ export class Wallet {
 export const WalletSchema = SchemaFactory.createForClass(Wallet);
 
 // Indexes to speed up lookups
-WalletSchema.index({ userId: 1 });
+// (the unique index on the field already covers this)
 WalletSchema.index({ balance: -1 });

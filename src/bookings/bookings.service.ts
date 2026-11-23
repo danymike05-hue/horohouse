@@ -7,7 +7,9 @@ import {
   ConflictException,
   Inject,
   forwardRef,
+  Optional,
 } from '@nestjs/common';
+import { PromoCodesService } from '../host-plans/promo-codes.service';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 
@@ -119,7 +121,18 @@ export class BookingsService {
     @Inject(forwardRef(() => HostPayoutsService))
     private readonly hostPayouts: HostPayoutsService,
     private readonly coHosts: CoHostsService,
+    @Optional() private readonly promoCodes?: PromoCodesService,
   ) { }
+
+  /** The host's promo code on a stay: a percentage off the nights, after other discounts */
+  private applyPromo(priceBreakdown: any, percent: number, code: string) {
+    const base = Math.max(0, (priceBreakdown.subtotal ?? 0) - (priceBreakdown.discountAmount ?? 0));
+    const promoDiscount = Math.round((base * percent) / 100);
+    priceBreakdown.promoCode = code;
+    priceBreakdown.promoPercent = percent;
+    priceBreakdown.promoDiscount = promoDiscount;
+    priceBreakdown.totalAmount = Math.max(0, priceBreakdown.totalAmount - promoDiscount);
+  }
 
   // ════════════════════════════════════════════════════════════════════════════
   // PUBLIC — GUEST ACTIONS
@@ -260,6 +273,13 @@ export class BookingsService {
       priceBreakdown.breakfastFee = breakfastFee;
       priceBreakdown.totalAmount += breakfastFee;
     }
+    // The host's promo code (counted now; given back if the booking isn't saved)
+    let promoUsed: string | undefined;
+    if (dto.promoCode && this.promoCodes) {
+      const promo = await this.promoCodes.use(dto.promoCode, dto.propertyId, nights);
+      promoUsed = promo.code;
+      this.applyPromo(priceBreakdown, promo.percentOff, promo.code);
+    }
 
     // ── 6. Determine host ────────────────────────────────────────────────────
     const rawHostRef = property.ownerId ?? property.agentId;
@@ -321,7 +341,13 @@ export class BookingsService {
       withBreakfast,
     });
 
-    const saved = await booking.save();
+    let saved: BookingDocument;
+    try {
+      saved = await booking.save();
+    } catch (err) {
+      await this.promoCodes?.giveBack(promoUsed);
+      throw err;
+    }
 
     const fmt = (d: Date) => d.toISOString().split('T')[0];
     const propertyTitle = (property as any).title ?? 'your property';
@@ -420,6 +446,7 @@ export class BookingsService {
       .exec();
 
     this.logger.log(`Booking ${bookingId} cancelled by ${cancelledBy}`);
+    if ((booking as any).paymentStatus !== PaymentStatus.PAID) await this.promoCodes?.giveBack((booking as any).priceBreakdown?.promoCode);
 
     // ── Trigger refund if applicable ────────────────────────────────────────
     // Runs AFTER the booking is already CANCELLED in the DB, so the cancellation
@@ -957,7 +984,7 @@ export class BookingsService {
         paymentStatus: { $ne: PaymentStatus.PAID },
         expiresAt: { $lte: now },
       })
-      .select('_id status isInstantBook guestId hostId propertyId checkIn checkOut')
+      .select('_id status isInstantBook guestId hostId propertyId checkIn checkOut priceBreakdown.promoCode')
       .limit(batchSize)
       .lean()
       .exec();
@@ -987,6 +1014,7 @@ export class BookingsService {
       );
       if (!res.modifiedCount) continue;
       expired++;
+      await this.promoCodes?.giveBack(b.priceBreakdown?.promoCode).catch(() => undefined);
 
       try {
         const [property, guest, host] = await Promise.all([
@@ -1211,6 +1239,9 @@ export class BookingsService {
       priceBreakdown.breakfastFee = breakfastFee;
       priceBreakdown.totalAmount += breakfastFee;
     }
+    // A promo code used at booking keeps its percentage on the new dates
+    const pb: any = booking.priceBreakdown ?? {};
+    if (pb.promoCode && pb.promoPercent > 0) this.applyPromo(priceBreakdown, pb.promoPercent, pb.promoCode);
     return { nights, priceBreakdown };
   }
 

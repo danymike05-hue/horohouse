@@ -78,6 +78,6 @@ export class SubscriptionPlanModel {
 export const SubscriptionPlanSchema = SchemaFactory.createForClass(SubscriptionPlanModel);
 
 // Indexes
-SubscriptionPlanSchema.index({ name: 1 });
+// (the unique index on the field already covers this)
 SubscriptionPlanSchema.index({ isActive: 1, isPublic: 1 });
 SubscriptionPlanSchema.index({ displayOrder: 1 });

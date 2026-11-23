@@ -6,6 +6,7 @@ import {
   NotFoundException,
   Optional,
 } from '@nestjs/common';
+import { HostPlansService } from '../host-plans/host-plans.service';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { v2 as cloudinary } from 'cloudinary';
@@ -96,6 +97,7 @@ export class HostMessagesService {
     @InjectModel(Booking.name) private readonly bookingModel: Model<BookingDocument>,
     @InjectModel(User.name) private readonly userModel: Model<UserDocument>,
     private readonly moduleRef: ModuleRef,
+    @Optional() private readonly hostPlans?: HostPlansService,
     @Optional() private readonly notifications?: NotificationsService,
   ) {}
 
@@ -153,6 +155,8 @@ export class HostMessagesService {
     const count = await this.templateModel.countDocuments({ hostId: user._id });
     if (count >= MAX_TEMPLATES) throw new BadRequestException(`You can save up to ${MAX_TEMPLATES} messages`);
     this.checkScheduled(dto.kind, dto.trigger);
+    // Automatic messages: as many as the plan allows
+    if (dto.kind === TemplateKind.SCHEDULED) await this.hostPlans?.assertCanAddScheduled(String(user._id));
     await this.assertOwnListings(user, dto.propertyIds);
     const doc = await this.templateModel.create({
       ...dto,
@@ -169,6 +173,7 @@ export class HostMessagesService {
     if (!current) throw new NotFoundException('Message not found');
     const kind = dto.kind ?? current.kind;
     this.checkScheduled(kind, dto.trigger ?? current.trigger);
+    if (kind === TemplateKind.SCHEDULED && current.kind !== TemplateKind.SCHEDULED) await this.hostPlans?.assertCanAddScheduled(String(user._id));
     await this.assertOwnListings(user, dto.propertyIds);
     const set: any = { ...dto };
     if (dto.propertyIds) set.propertyIds = dto.propertyIds.map((i) => new Types.ObjectId(i));

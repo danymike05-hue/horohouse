@@ -56,6 +56,7 @@ import { BookingChangesModule } from './booking-changes/booking-changes.module';
 import { CoHostsModule } from './co-hosts/co-hosts.module';
 import { PriceSuggestionsModule } from './price-suggestions/price-suggestions.module';
 import { TranslationsModule } from './translations/translations.module';
+import { HostPlansModule } from './host-plans/host-plans.module';
 
 @Module({
   imports: [
@@ -148,6 +149,7 @@ import { TranslationsModule } from './translations/translations.module';
     CoHostsModule,
     PriceSuggestionsModule,
     TranslationsModule,
+    HostPlansModule,
   ],
 
   controllers: [AppController],

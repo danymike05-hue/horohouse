@@ -71,6 +71,10 @@ export interface BookingPriceBreakdown {
   extraGuestFee?: number;
   /** Hotels: breakfast × guests × nights, added to the total (not discounted) */
   breakfastFee?: number;
+  /** The host's promo code: its percentage, taken off the stay after other discounts */
+  promoCode?: string;
+  promoPercent?: number;
+  promoDiscount?: number;
 }
 
 export interface BookingPayout {
@@ -164,6 +168,9 @@ export class Booking {
       extraGuests: { type: Number, default: 0 },
       extraGuestFee: { type: Number, default: 0 },
       breakfastFee: { type: Number, default: 0 },
+      promoCode: { type: String },
+      promoPercent: { type: Number },
+      promoDiscount: { type: Number, default: 0 },
     },
     required: true,
   })

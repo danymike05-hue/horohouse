@@ -33,6 +33,8 @@ class WriterDto {
   @IsOptional() @IsString() @MaxLength(600) notes?: string;
   @IsOptional() @IsString() @MaxLength(120) currentTitle?: string;
   @IsOptional() @IsString() @MaxLength(3000) currentDescription?: string;
+  /** The app's description box limit */
+  @IsOptional() @Type(() => Number) @IsInt() @Min(200) @Max(3000) maxChars?: number;
 }
 class PromoDto {
   @IsOptional() @IsString() @Length(4, 16) code?: string;
