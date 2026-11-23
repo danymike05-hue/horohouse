@@ -376,8 +376,8 @@ export class SubscriptionsService implements OnModuleInit {
         description: 'For part-time hosts',
         highlights: ['Up to 3 properties', 'Short-term calendar support'],
         pricing: {
-          [BillingCycle.MONTHLY]: 10000,
-          [BillingCycle.YEARLY]: 100000,
+          [BillingCycle.MONTHLY]: 8000,
+          [BillingCycle.YEARLY]: 80000,
         },
         features: {
           role: 'host',
@@ -402,8 +402,8 @@ export class SubscriptionsService implements OnModuleInit {
         description: 'For scaling short-term operations',
         highlights: ['Up to 10 properties', 'Analytics dashboard', '2 boosts/month'],
         pricing: {
-          [BillingCycle.MONTHLY]: 20000,
-          [BillingCycle.YEARLY]: 200000,
+          [BillingCycle.MONTHLY]: 15000,
+          [BillingCycle.YEARLY]: 150000,
         },
         features: {
           role: 'host',
@@ -429,8 +429,8 @@ export class SubscriptionsService implements OnModuleInit {
         description: 'Advanced tools for superhosts',
         highlights: ['Up to 25 properties', 'AI smart pricing', '5 boosts/month'],
         pricing: {
-          [BillingCycle.MONTHLY]: 30000,
-          [BillingCycle.YEARLY]: 300000,
+          [BillingCycle.MONTHLY]: 23000,
+          [BillingCycle.YEARLY]: 230000,
         },
         features: {
           role: 'host',
@@ -457,8 +457,8 @@ export class SubscriptionsService implements OnModuleInit {
         description: 'For vacation rental management companies',
         highlights: ['Unlimited properties', 'Premium visibility', 'Dedicated support'],
         pricing: {
-          [BillingCycle.MONTHLY]: 40000,
-          [BillingCycle.YEARLY]: 400000,
+          [BillingCycle.MONTHLY]: 30000,
+          [BillingCycle.YEARLY]: 300000,
         },
         features: {
           role: 'host',
