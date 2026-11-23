@@ -9,6 +9,7 @@ import {
   Max,
   ValidateNested,
   IsBoolean,
+  MaxLength,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
@@ -90,6 +91,7 @@ export class EditMessageDto {
     description: 'New message content' 
   })
   @IsString()
+  @MaxLength(5000)
   content: string;
 }
 

@@ -9,6 +9,8 @@ export interface ParticipantInfo {
   lastReadAt?: Date;
   mutedUntil?: Date;
   joinedAt: Date;
+  /** Deleted on this person's side: older messages stay hidden for them */
+  clearedAt?: Date;
 }
 
 export interface LastMessage {
@@ -29,6 +31,7 @@ export class Conversation {
       lastReadAt: { type: Date },
       mutedUntil: { type: Date },
       joinedAt: { type: Date, default: Date.now },
+      clearedAt: { type: Date },
     }],
     required: true,
   })

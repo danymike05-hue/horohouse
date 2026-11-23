@@ -254,7 +254,10 @@ export class ChatController {
         @Param('id') messageId: string,
         @Body() dto: EditMessageDto,
     ) {
-        return this.chatService.editMessage(messageId, req.user.userId, dto);
+        const message: any = await this.chatService.editMessage(messageId, req.user.userId, dto);
+        // Live for everyone in the conversation
+        await this.chatGateway.broadcastMessageChange(String(message.conversationId), 'message:updated', { message });
+        return message;
     }
 
     /**
@@ -266,7 +269,8 @@ export class ChatController {
         @Request() req,
         @Param('id') messageId: string,
     ) {
-        await this.chatService.deleteMessage(messageId, req.user.userId);
+        const conversationId = await this.chatService.deleteMessage(messageId, req.user.userId);
+        await this.chatGateway.broadcastMessageChange(conversationId, 'message:deleted', { messageId, conversationId });
         return { message: 'Message deleted successfully' };
     }
 

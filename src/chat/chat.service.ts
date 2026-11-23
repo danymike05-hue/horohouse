@@ -226,12 +226,24 @@ export class ChatService implements OnModuleInit {
                 'participants.userId': new Types.ObjectId(userId),
             };
 
+            const me = new Types.ObjectId(userId);
             if (!includeArchived) {
-                matchQuery.$or = [
-                    { isArchived: false },
-                    { archivedBy: { $ne: new Types.ObjectId(userId) } },
-                ];
+                matchQuery.archivedBy = { $ne: me };
             }
+            // Deleted on my side: hidden until someone writes again
+            matchQuery.$expr = {
+                $not: {
+                    $let: {
+                        vars: { mine: { $first: { $filter: { input: '$participants', cond: { $eq: ['$$this.userId', me] } } } } },
+                        in: {
+                            $and: [
+                                { $gt: ['$$mine.clearedAt', null] },
+                                { $gte: ['$$mine.clearedAt', { $ifNull: ['$lastMessage.createdAt', new Date(0)] }] },
+                            ],
+                        },
+                    },
+                },
+            };
 
             // Filter unread conversations
             if (filter === 'unread') {
@@ -426,7 +438,8 @@ export class ChatService implements OnModuleInit {
     ) {
         try {
             // Validate user is participant
-            await this.getConversation(conversationId, userId);
+            const conv: any = await this.getConversation(conversationId, userId);
+            const mine = (conv?.participants ?? []).find((p: any) => String(p.userId?._id ?? p.userId) === String(userId));
 
             const { page = 1, limit = 50, before } = query;
             const skip = (page - 1) * limit;
@@ -442,6 +455,10 @@ export class ChatService implements OnModuleInit {
                 if (beforeMessage) {
                     matchQuery.createdAt = { $lt: beforeMessage.createdAt };
                 }
+            }
+            // Deleted on my side: nothing from before that
+            if (mine?.clearedAt) {
+                matchQuery.createdAt = { ...(matchQuery.createdAt ?? {}), $gt: new Date(mine.clearedAt) };
             }
 
             const [messages, total] = await Promise.all([
@@ -551,15 +568,27 @@ export class ChatService implements OnModuleInit {
         if (message.senderId.toString() !== userId) {
             throw new ForbiddenException('You can only edit your own messages');
         }
+        if ((message as any).isDeleted) {
+            throw new BadRequestException('This message was deleted');
+        }
+        const content = String(dto.content ?? '').trim();
+        if (!content) {
+            throw new BadRequestException('A message cannot be empty');
+        }
 
         const updatedMessage = await this.messageModel.findByIdAndUpdate(
             messageId,
             {
-                content: dto.content,
+                content,
                 isEdited: true,
                 editedAt: new Date(),
             },
             { new: true }
+        ).populate('senderId', 'name profilePicture');
+        // The conversation list shows the last message: keep it in step
+        await this.conversationModel.updateOne(
+            { _id: message.conversationId, 'lastMessage.createdAt': (message as any).createdAt, 'lastMessage.senderId': message.senderId },
+            { $set: { 'lastMessage.content': content } },
         );
 
         // Add null check after update
@@ -573,7 +602,7 @@ export class ChatService implements OnModuleInit {
     /**
      * Delete a message (soft delete)
      */
-    async deleteMessage(messageId: string, userId: string): Promise<void> {
+    async deleteMessage(messageId: string, userId: string): Promise<string> {
         const message = await this.messageModel.findById(messageId);
 
         if (!message) {
@@ -587,7 +616,31 @@ export class ChatService implements OnModuleInit {
         await this.messageModel.findByIdAndUpdate(messageId, {
             isDeleted: true,
             deletedAt: new Date(),
+            // Nothing of a deleted message is kept for anyone to read
+            content: '',
+            attachments: [],
         });
+        // If it was the last message, the list shows the one before it
+        const conv: any = await this.conversationModel.findById(message.conversationId).select('lastMessage').lean();
+        if (conv?.lastMessage && new Date(conv.lastMessage.createdAt).getTime() === new Date((message as any).createdAt).getTime()) {
+            const prev: any = await this.messageModel
+                .findOne({ conversationId: message.conversationId, isDeleted: false })
+                .sort({ createdAt: -1 })
+                .lean();
+            await this.conversationModel.updateOne(
+                { _id: message.conversationId },
+                prev
+                    ? { $set: { lastMessage: { content: prev.content || (prev.attachments?.length ? '📷' : ''), senderId: prev.senderId, createdAt: prev.createdAt, type: prev.type } } }
+                    : { $unset: { lastMessage: 1 } },
+            );
+        }
+        return String(message.conversationId);
+    }
+
+    /** Who's in a conversation (to tell their phones about edits and deletions) */
+    async participantIds(conversationId: string): Promise<string[]> {
+        const conv: any = await this.conversationModel.findById(conversationId).select('participants.userId').lean();
+        return (conv?.participants ?? []).map((p: any) => String(p.userId));
     }
 
     /**
@@ -634,8 +687,14 @@ export class ChatService implements OnModuleInit {
      * Delete conversation (for current user only)
      */
     async deleteConversation(conversationId: string, userId: string): Promise<void> {
-        // Just archive it for the user
-        await this.archiveConversation(conversationId, userId, true);
+        // Deleted on my side only: the other person keeps theirs. It comes back for me, empty,
+        // if someone writes again.
+        await this.getConversation(conversationId, userId);
+        const me = new Types.ObjectId(userId);
+        await this.conversationModel.updateOne(
+            { _id: conversationId, 'participants.userId': me },
+            { $set: { 'participants.$.clearedAt': new Date(), 'participants.$.unreadCount': 0 }, $pull: { archivedBy: me } },
+        );
     }
 
     /**

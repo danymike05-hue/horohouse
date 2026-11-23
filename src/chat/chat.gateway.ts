@@ -562,6 +562,16 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     }
   }
 
+  /** An edited or deleted message: to the open conversation and to each person's inbox */
+  async broadcastMessageChange(conversationId: string, event: 'message:updated' | 'message:deleted', data: any) {
+    this.server.to(`conversation:${conversationId}`).emit(event, data);
+    try {
+      for (const uid of await this.chatService.participantIds(conversationId)) this.emitToUser(uid, event, data);
+    } catch (err: any) {
+      this.logger.warn(`Could not tell participants about ${event}: ${err?.message}`);
+    }
+  }
+
   broadcastNewMessage(conversationId: string, message: any) {
     this.server.to(`conversation:${conversationId}`).emit('message:new', { message });
   }
