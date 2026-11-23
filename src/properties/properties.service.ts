@@ -6,7 +6,10 @@ import {
   ConflictException,
   Logger,
   OnModuleInit,
+  Optional,
 } from '@nestjs/common';
+import { HostPlansService } from '../host-plans/host-plans.service';
+import { HostInsightsService } from '../host-plans/host-insights.service';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import axios from 'axios';
@@ -117,6 +120,8 @@ export class PropertiesService implements OnModuleInit {
     private userInteractionsService: UserInteractionsService,
     private watermarkService: WatermarkService,
     private coHosts: CoHostsService,
+    @Optional() private readonly hostPlans?: HostPlansService,
+    @Optional() private readonly hostInsights?: HostInsightsService,
   ) { }
 
   // ── Ensure DB indexes exist on startup ────────────────────────────────────
@@ -427,6 +432,8 @@ export class PropertiesService implements OnModuleInit {
         .exec(),
       this.propertyModel.findByIdAndUpdate(id, { $inc: { viewsCount: 1 } }).exec(),
     ]);
+    // Views per day, for the host's insights
+    this.hostInsights?.recordView(id);
 
     if (!property) {
       throw new NotFoundException('Property not found');
@@ -665,6 +672,9 @@ export class PropertiesService implements OnModuleInit {
     this.cacheInvalidate('featured_');
     this.cacheInvalidate('recent_');
     this.logger.log(`Property ${id} approved by admin ${admin._id}`);
+    // A host someone invited published their first listing: reward who invited them
+    const ownerId = (updated as any)?.ownerId?._id ?? (updated as any)?.ownerId;
+    if (ownerId) void this.hostPlans?.onListingApproved(String(ownerId));
     return updated as unknown as Property;
   }
 

@@ -19,6 +19,7 @@ import {
   Header,
   NotFoundException,
 } from '@nestjs/common';
+import { HostPlansService } from '../host-plans/host-plans.service';
 import { readUploads } from '../common/upload.util';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiQuery, ApiParam } from '@nestjs/swagger';
 import { FastifyRequest } from 'fastify';
@@ -83,6 +84,7 @@ export class PropertiesController {
     private readonly propertiesService: PropertiesService,
     // Only for the host ID check (off unless HOST_ID_REQUIRED=true).
     @Inject(forwardRef(() => UsersService)) private readonly usersService: UsersService,
+    private readonly hostPlans: HostPlansService,
   ) { }
 
   private userIdOf(user: any): string {
@@ -101,6 +103,8 @@ export class PropertiesController {
     @Req() req: FastifyRequest & { user: User },
   ) {
     await this.usersService.assertHostCanPublish(this.userIdOf(req.user));
+    // Hosts: as many listings as their plan allows (those above it keep theirs)
+    if ((req.user as any)?.role === UserRole.HOST) await this.hostPlans.assertCanAddListing(this.userIdOf(req.user));
     return this.propertiesService.create(createPropertyDto, req.user);
   }
 

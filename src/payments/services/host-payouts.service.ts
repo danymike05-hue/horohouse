@@ -1,4 +1,5 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
+import { HostPlansService } from '../../host-plans/host-plans.service';
 import { ConfigService } from '@nestjs/config';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectModel } from '@nestjs/mongoose';
@@ -55,6 +56,7 @@ export class HostPayoutsService {
     private readonly walletService: WalletService,
     private readonly notificationsService: NotificationsService,
     config: ConfigService,
+    @Optional() private readonly hostPlans?: HostPlansService,
   ) {
     const configured = Number(config.get('PAYOUT_HOLD_HOURS'));
     this.holdHours = Number.isFinite(configured) && configured >= 0 && config.get('PAYOUT_HOLD_HOURS') !== undefined
@@ -70,7 +72,7 @@ export class HostPayoutsService {
     checkIn: Date;
     checkInTime?: string;
   }): Promise<Date | null> {
-    const releaseAt = payoutReleaseAt(params.checkIn, params.checkInTime, this.holdHours);
+    const releaseAt = payoutReleaseAt(params.checkIn, params.checkInTime, await this.holdFor(params.hostId));
     // A repeated payment callback finds payout already set and holds nothing more.
     const claimed = await this.bookingModel.findOneAndUpdate(
       { _id: params.bookingId, 'payout.status': { $exists: false } },
@@ -107,11 +109,18 @@ export class HostPayoutsService {
     await this.walletService.releaseHeldFunds(params.hostId, params.amount, 'Booking income: date change', `PAYOUT-${params.bookingId}-CHANGE`);
   }
 
+  /** Hours to wait for this host: the plan's (12h on Pro and Elite), never more than configured */
+  private async holdFor(hostId?: string): Promise<number> {
+    if (!hostId || !this.hostPlans) return this.holdHours;
+    return Math.min(this.holdHours, await this.hostPlans.payoutHoldHours(String(hostId)));
+  }
+
   /** The stay moved, so the wait moves with it. */
   async reschedule(bookingId: string, checkIn: Date, checkInTime?: string): Promise<void> {
+    const b: any = await this.bookingModel.findById(bookingId).select('hostId').lean();
     await this.bookingModel.updateOne(
       { _id: bookingId, 'payout.status': { $in: [PayoutStatus.HELD, PayoutStatus.FROZEN] } },
-      { $set: { 'payout.releaseAt': payoutReleaseAt(checkIn, checkInTime, this.holdHours) } },
+      { $set: { 'payout.releaseAt': payoutReleaseAt(checkIn, checkInTime, await this.holdFor(b?.hostId)) } },
     );
   }
 

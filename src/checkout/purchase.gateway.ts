@@ -23,6 +23,8 @@ import { BoostStatus, BoostType, ListingBoost, ListingBoostDocument } from '../p
 import { Wallet, WalletDocument } from '../payments/schemas/wallet.schema';
 import { Subscription, SubscriptionDocument } from '../payments/schemas/subscription.schema';
 import { SubscriptionsService } from '../payments/services/subscriptions.service';
+import { HostPlansService } from '../host-plans/host-plans.service';
+import { isHostPlanName, tierOf } from '../host-plans/host-plan-tiers';
 import { ListingBoostService } from '../payments/services/listing-boost.service';
 import { WalletService } from '../payments/services/wallet.service';
 import { Property, PropertyDocument } from '../properties/schemas/property.schema';
@@ -95,6 +97,7 @@ export class PurchaseGateway {
     @Inject(forwardRef(() => WalletService)) private readonly walletService: WalletService,
     @Inject(forwardRef(() => BookingChangesService)) private readonly dateChanges: BookingChangesService,
     private readonly essentials: EssentialsService,
+    private readonly hostPlans: HostPlansService,
   ) {}
 
   // ───────────────────────────────────────────────────────────────────────────
@@ -141,6 +144,25 @@ export class PurchaseGateway {
       const plan = plans.find((p) => p.name === req.planName);
       if (!plan) throw new NotFoundException({ code: 'PLAN_NOT_FOUND', message: 'Cette formule n’existe plus.' });
       const cycle = req.billingCycle ?? 'monthly';
+      // Hosting plans: an upgrade costs less by what's left of the current plan; the same
+      // plan adds time after it, a cheaper one starts when it ends
+      if (isHostPlanName(plan.name)) {
+        const change = await this.hostPlans.planChange(userId, plan.name, cycle);
+        return {
+          ...base,
+          amount: change.amount,
+          key: `sub:${userId}`,
+          purchase: {
+            label: `${plan.displayName} (${cycle})`,
+            planName: plan.name,
+            billingCycle: cycle,
+            change: change.kind,
+            credit: change.credit,
+            price: change.price,
+            startsAt: change.startsAt,
+          },
+        };
+      }
       const amount = Number(plan.pricing?.[cycle] ?? 0);
       if (!(amount > 0)) {
         throw new UnprocessableEntityException({ code: 'PLAN_NOT_PAYABLE', message: 'Cette formule n’est pas payante pour cette période.' });
@@ -211,9 +233,11 @@ export class PurchaseGateway {
     if (req.purpose === 'boost') {
       const sub = await this.subscriptions.getUserSubscription(userId);
       if (sub) {
-        const limit = sub.features?.boostsPerMonth ?? 0;
+        const limit = this.boostLimitOf(sub);
         planBoostsLeft = limit === -1 ? -1 : Math.max(0, limit - (sub.boostsUsed ?? 0));
       }
+      // Free plan: one welcome boost
+      if (planBoostsLeft === 0 && (await this.hostPlans.welcomeBoostLeft(userId))) planBoostsLeft = 1;
     }
     return {
       purpose: req.purpose,
@@ -252,12 +276,16 @@ export class PurchaseGateway {
     await this.wallets.updateOne({ userId: new Types.ObjectId(userId) }, { $inc: { totalEarned: -amount } });
   }
 
-  /** Reserves one of the plan's free boosts; false when none are left */
+  /** Host plans read today's numbers (the copy saved on the subscription can be older) */
+  private boostLimitOf(sub: any): number {
+    return isHostPlanName(sub?.plan) ? tierOf(sub.plan).boostsPerMonth : sub?.features?.boostsPerMonth ?? 0;
+  }
+
+  /** Reserves one of the plan's free boosts (or Free's welcome boost); false when none are left */
   async usePlanBoost(userId: string): Promise<boolean> {
     const sub = await this.subscriptions.getUserSubscription(userId);
-    if (!sub) return false;
-    const limit = sub.features?.boostsPerMonth ?? 0;
-    if (limit === 0) return false;
+    const limit = sub ? this.boostLimitOf(sub) : 0;
+    if (!sub || limit === 0) return this.hostPlans.takeWelcomeBoost(userId);
     // Atomic, so two taps can't both use the last free boost
     const filter: any = { _id: sub._id, status: sub.status };
     if (limit !== -1) filter.boostsUsed = { $lt: limit };
@@ -267,7 +295,8 @@ export class PurchaseGateway {
 
   async releasePlanBoost(userId: string): Promise<void> {
     const sub = await this.subscriptions.getUserSubscription(userId);
-    if (sub) await this.subscriptionDocs.updateOne({ _id: sub._id, boostsUsed: { $gt: 0 } }, { $inc: { boostsUsed: -1 } });
+    if (!sub || this.boostLimitOf(sub) === 0) return this.hostPlans.giveBackWelcomeBoost(userId);
+    await this.subscriptionDocs.updateOne({ _id: sub._id, boostsUsed: { $gt: 0 } }, { $inc: { boostsUsed: -1 } });
   }
 
   // ───────────────────────────────────────────────────────────────────────────
@@ -325,7 +354,7 @@ export class PurchaseGateway {
           paymentMethod: this.methodOf(payment),
           flutterwaveReference: payment.merchantInvoiceId,
           description: `Subscription: ${purchase.label ?? purchase.planName}`,
-          metadata: { planName: purchase.planName, billingCycle: purchase.billingCycle, checkoutPaymentId: String(payment._id) },
+          metadata: { planName: purchase.planName, billingCycle: purchase.billingCycle, credit: purchase.credit ?? 0, checkoutPaymentId: String(payment._id) },
           platformFee: payment.amount,
           paymentProcessingFee: 0,
           netAmount: payment.amount,

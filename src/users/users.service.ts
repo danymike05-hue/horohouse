@@ -33,6 +33,7 @@ export const GOVERNMENT_ID_MAX_BYTES = 10 * 1024 * 1024;
  */
 const PUBLIC_HOST_PROFILE_FIELDS = [
   'isSuperhost',
+  'planBadge',
   'superhostSince',
   'instantBookEnabled',
   'hostBio',

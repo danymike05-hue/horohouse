@@ -12,6 +12,11 @@ export interface CheckoutPurchase {
   label?: string;
   planName?: string;
   billingCycle?: 'monthly' | 'quarterly' | 'yearly';
+  /** Hosting plans: what paying does, the value of the current plan taken off, and when it starts */
+  change?: 'new' | 'upgrade' | 'renew' | 'downgrade';
+  credit?: number;
+  price?: number;
+  startsAt?: Date;
   propertyId?: string;
   propertyTitle?: string;
   boostType?: string;

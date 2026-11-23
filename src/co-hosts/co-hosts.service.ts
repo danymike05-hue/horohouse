@@ -5,7 +5,9 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
+import { HostPlansService } from '../host-plans/host-plans.service';
 import { InjectModel } from '@nestjs/mongoose';
 import { isValidObjectId, Model, Types } from 'mongoose';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -32,6 +34,7 @@ export class CoHostsService {
     @InjectModel(Property.name) private readonly propertyModel: Model<PropertyDocument>,
     @InjectModel(User.name) private readonly userModel: Model<UserDocument>,
     private readonly notifications: NotificationsService,
+    @Optional() private readonly hostPlans?: HostPlansService,
   ) {}
 
   // ── Access checks, used by bookings, calendars, reported problems ───────────
@@ -83,6 +86,9 @@ export class CoHostsService {
     const inviteeId = String(invitee._id);
     const ownerIds = [String((property as any).ownerId), String((property as any).agentId ?? '')];
     if (ownerIds.includes(inviteeId)) throw new BadRequestException('This person already manages this listing');
+
+    // The owner's plan says how many co-hosts they can have in all
+    await this.hostPlans?.assertCanAddCoHost(String((property as any).ownerId));
 
     const count = await this.coHostModel.countDocuments({ propertyId: property._id, open: true });
     if (count >= MAX_CO_HOSTS_PER_LISTING) {

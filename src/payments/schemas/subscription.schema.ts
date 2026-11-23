@@ -43,6 +43,8 @@ export enum SubscriptionStatus {
   EXPIRED = 'expired',
   CANCELLED = 'cancelled',
   SUSPENDED = 'suspended',
+  /** Paid, starts when the running plan ends (renewal or a cheaper plan) */
+  SCHEDULED = 'scheduled',
 }
 
 export type SubscriptionFeatures = {

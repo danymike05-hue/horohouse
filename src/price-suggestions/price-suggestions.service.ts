@@ -1,4 +1,5 @@
-import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { ForbiddenException, Injectable, NotFoundException, Optional } from '@nestjs/common';
+import { HostPlansService } from '../host-plans/host-plans.service';
 import { InjectModel } from '@nestjs/mongoose';
 import { isValidObjectId, Model, Types } from 'mongoose';
 import { CoHostsService } from '../co-hosts/co-hosts.service';
@@ -67,6 +68,7 @@ export class PriceSuggestionsService {
     @InjectModel(Room.name) private readonly roomModel: Model<RoomDocument>,
     private readonly subscriptions: SubscriptionsService,
     private readonly coHosts: CoHostsService,
+    @Optional() private readonly hostPlans?: HostPlansService,
   ) {}
 
   async forListing(user: { _id?: any; id?: any; role?: string }, propertyId: string): Promise<PriceSuggestion> {
@@ -83,8 +85,15 @@ export class PriceSuggestionsService {
     if (!manages) throw new ForbiddenException('You can only see suggestions for listings you manage');
 
     // The plan belongs to the listing's owner, so their co-hosts get what they pay for.
-    const plan: any = await this.subscriptions.getUserSubscription(String(property.ownerId));
-    if (!plan?.features?.smartPricing && user.role !== UserRole.ADMIN) return { available: false, reason: 'plan' };
+    if (user.role !== UserRole.ADMIN) {
+      if (this.hostPlans) {
+        const sp = await this.hostPlans.smartPricingFor(String(property.ownerId), propertyId);
+        if (!sp.allowed) return { available: false, reason: 'plan', limit: sp.limit, plan: sp.plan } as any;
+      } else {
+        const plan: any = await this.subscriptions.getUserSubscription(String(property.ownerId));
+        if (!plan?.features?.smartPricing) return { available: false, reason: 'plan' };
+      }
+    }
 
     // Hotels price each room type, which isn't comparable with whole listings.
     if (await this.roomModel.exists({ propertyId: new Types.ObjectId(propertyId) })) {

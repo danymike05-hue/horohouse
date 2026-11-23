@@ -131,6 +131,7 @@ export interface HostProfile {
    * Re-evaluated automatically every quarter.
    */
   isSuperhost: boolean;
+  planBadge?: 'pro' | 'elite';
   superhostSince?: Date;
 
   // ── Hosting preferences ──────────────────────────────────────────────────
@@ -575,6 +576,8 @@ export class User {
 
       // Superhost
       isSuperhost: { type: Boolean, default: false },
+      /** 'pro' | 'elite' while on those hosting plans */
+      planBadge: { type: String },
       superhostSince: { type: Date },
 
       // Hosting preferences

@@ -30,6 +30,50 @@ import {
   CreateSubscriptionDto,
   CancelSubscriptionDto,
 } from '../dto/payment.dto';
+import { HostPlansService } from '../../host-plans/host-plans.service';
+import { HOST_TIERS, HostPlanName, isHostPlanName } from '../../host-plans/host-plan-tiers';
+
+/** Short host plan blurbs; the app shows the full list from the tier numbers */
+const HOST_PLAN_TEXT: Record<HostPlanName, { displayName: string; description: string; highlights: string[]; monthly: number; popular?: boolean; order: number }> = {
+  host_free: { displayName: 'Free', description: 'Everything you need to start hosting', highlights: ['Up to 5 listings', '1 welcome boost', 'Basic insights'], monthly: 0, order: 30 },
+  host_starter: { displayName: 'Starter', description: 'For hosts growing past their first homes', highlights: ['Up to 12 listings', '2 boosts a month', 'Promo codes for your guests'], monthly: 8000, order: 31 },
+  host_growth: { displayName: 'Growth', description: 'Full insights and priority support', highlights: ['Up to 30 listings', '4 boosts a month', 'Full insights'], monthly: 15000, popular: true, order: 32 },
+  host_pro: { displayName: 'Pro', description: 'AI tools and faster payouts', highlights: ['Up to 75 listings', 'AI smart pricing on every listing', 'Payouts 12h after check-in'], monthly: 23000, order: 33 },
+  host_elite: { displayName: 'Elite', description: 'For property managers and big teams', highlights: ['Unlimited listings and boosts', 'Insights export', 'Dedicated support'], monthly: 30000, order: 34 },
+};
+
+function hostPlanSeeds() {
+  return (Object.keys(HOST_TIERS) as HostPlanName[]).map((name) => {
+    const t = HOST_TIERS[name];
+    const x = HOST_PLAN_TEXT[name];
+    return {
+      name: name as any,
+      displayName: x.displayName,
+      description: x.description,
+      highlights: x.highlights,
+      pricing: { [BillingCycle.MONTHLY]: x.monthly, [BillingCycle.YEARLY]: x.monthly * 10 },
+      features: {
+        role: 'host',
+        ...t,
+        // Older readers of these fields
+        maxProperties: t.maxListings,
+        maxActiveListings: t.maxListings,
+        canBoostListings: t.boostsPerMonth !== 0,
+        smartPricing: t.smartPricingListings !== 0,
+        analytics: t.insights === 'full',
+        prioritySupport: t.support !== 'standard',
+        dedicatedSupport: t.support === 'dedicated',
+        bookingCalendar: true,
+        shortTermRentalSupport: true,
+      } as SubscriptionFeatures,
+      displayOrder: x.order,
+      isActive: true,
+      isPublic: true,
+      isPopular: !!x.popular,
+      metadata: { role: 'host', ...(x.popular ? { badge: 'Most Popular' } : {}) },
+    };
+  });
+}
 
 @Injectable()
 export class SubscriptionsService implements OnModuleInit {
@@ -42,6 +86,7 @@ export class SubscriptionsService implements OnModuleInit {
     private subscriptionPlanModel: Model<SubscriptionPlanDocument>,
     @InjectModel(Transaction.name)
     private transactionModel: Model<TransactionDocument>,
+    private readonly hostPlans: HostPlansService,
   ) {}
 
   // ── Fix #4: use lifecycle hook instead of constructor async call ──────────
@@ -343,143 +388,8 @@ export class SubscriptionsService implements OnModuleInit {
         metadata: { role: 'landlord', badge: 'Most Popular', pricingSuffix: '/property' },
       },
 
-      // ── HOST plans (Short-term rentals) ──────────────────────────────────────
-      {
-        name: SubscriptionPlan.HOST_FREE,
-        displayName: 'Free',
-        description: 'Try out short-term hosting',
-        highlights: ['1 property', 'Basic booking calendar'],
-        pricing: {
-          [BillingCycle.MONTHLY]: 0,
-          [BillingCycle.YEARLY]: 0,
-        },
-        features: {
-          role: 'host',
-          maxProperties: 1,
-          maxListings: 1,
-          maxActiveListings: 1,
-          canBoostListings: false,
-          boostsPerMonth: 0,
-          bookingCalendar: true,
-          shortTermRentalSupport: true,
-          analytics: false,
-        } as SubscriptionFeatures,
-        displayOrder: 30,
-        isActive: true,
-        isPublic: true,
-        isPopular: false,
-        metadata: { role: 'host' },
-      },
-      {
-        name: SubscriptionPlan.HOST_STARTER,
-        displayName: 'Starter',
-        description: 'For part-time hosts',
-        highlights: ['Up to 3 properties', 'Short-term calendar support'],
-        pricing: {
-          [BillingCycle.MONTHLY]: 8000,
-          [BillingCycle.YEARLY]: 80000,
-        },
-        features: {
-          role: 'host',
-          maxProperties: 3,
-          maxListings: 3,
-          maxActiveListings: 3,
-          canBoostListings: true,
-          boostsPerMonth: 1,
-          bookingCalendar: true,
-          shortTermRentalSupport: true,
-          analytics: false,
-        } as SubscriptionFeatures,
-        displayOrder: 31,
-        isActive: true,
-        isPublic: true,
-        isPopular: false,
-        metadata: { role: 'host' },
-      },
-      {
-        name: SubscriptionPlan.HOST_GROWTH,
-        displayName: 'Growth',
-        description: 'For scaling short-term operations',
-        highlights: ['Up to 10 properties', 'Analytics dashboard', '2 boosts/month'],
-        pricing: {
-          [BillingCycle.MONTHLY]: 15000,
-          [BillingCycle.YEARLY]: 150000,
-        },
-        features: {
-          role: 'host',
-          maxProperties: 10,
-          maxListings: 10,
-          maxActiveListings: 10,
-          canBoostListings: true,
-          boostsPerMonth: 2,
-          bookingCalendar: true,
-          shortTermRentalSupport: true,
-          analytics: true,
-          prioritySupport: true,
-        } as SubscriptionFeatures,
-        displayOrder: 32,
-        isActive: true,
-        isPublic: true,
-        isPopular: true,
-        metadata: { role: 'host', badge: 'Most Popular' },
-      },
-      {
-        name: SubscriptionPlan.HOST_PRO,
-        displayName: 'Pro',
-        description: 'Advanced tools for superhosts',
-        highlights: ['Up to 25 properties', 'AI smart pricing', '5 boosts/month'],
-        pricing: {
-          [BillingCycle.MONTHLY]: 23000,
-          [BillingCycle.YEARLY]: 230000,
-        },
-        features: {
-          role: 'host',
-          maxProperties: 25,
-          maxListings: 25,
-          maxActiveListings: 25,
-          canBoostListings: true,
-          boostsPerMonth: 5,
-          bookingCalendar: true,
-          shortTermRentalSupport: true,
-          analytics: true,
-          smartPricing: true,
-          prioritySupport: true,
-        } as SubscriptionFeatures,
-        displayOrder: 33,
-        isActive: true,
-        isPublic: true,
-        isPopular: false,
-        metadata: { role: 'host' },
-      },
-      {
-        name: SubscriptionPlan.HOST_ELITE,
-        displayName: 'Elite',
-        description: 'For vacation rental management companies',
-        highlights: ['Unlimited properties', 'Premium visibility', 'Dedicated support'],
-        pricing: {
-          [BillingCycle.MONTHLY]: 30000,
-          [BillingCycle.YEARLY]: 300000,
-        },
-        features: {
-          role: 'host',
-          maxProperties: -1,
-          maxListings: -1,
-          maxActiveListings: -1,
-          canBoostListings: true,
-          boostsPerMonth: -1,
-          bookingCalendar: true,
-          shortTermRentalSupport: true,
-          analytics: true,
-          smartPricing: true,
-          premiumVisibility: true,
-          dedicatedSupport: true,
-        } as SubscriptionFeatures,
-        displayOrder: 34,
-        isActive: true,
-        isPublic: true,
-        isPopular: false,
-        metadata: { role: 'host' },
-      },
+      // ── HOST plans (Short-term rentals): limits live in host-plans/host-plan-tiers.ts ──
+      ...hostPlanSeeds(),
     ];
   }
 
@@ -499,15 +409,9 @@ export class SubscriptionsService implements OnModuleInit {
    * receive a subscription that isn't usable yet.
    */
   async getUserSubscription(userId: string): Promise<SubscriptionDocument | null> {
-    // ── Fix #5: only return ACTIVE subscriptions ──────────────────────────
-    return this.subscriptionModel
-      .findOne({
-        userId: new Types.ObjectId(userId),
-        status: SubscriptionStatus.ACTIVE,
-      })
-      .populate('lastPaymentTransactionId')
-      .sort({ createdAt: -1 })
-      .exec();
+    // Only a running plan: an ACTIVE row whose end date hasn't passed (the expiry job
+    // runs hourly, so this doesn't wait for it)
+    return this.hostPlans.activeSubscription(userId);
   }
 
   /**
@@ -561,6 +465,23 @@ export class SubscriptionsService implements OnModuleInit {
         throw new NotFoundException('Subscription plan not found');
       }
 
+      if (isHostPlanName(planName)) {
+        const sub = await this.hostPlans.applyPaidPlan({
+          userId: transaction.userId.toString(),
+          planName,
+          cycle: billingCycle,
+          amountPaid: transaction.amount,
+          creditClaimed: Number(transaction.metadata?.credit ?? 0) || 0,
+          transactionId: transaction._id as Types.ObjectId,
+          currency: transaction.currency,
+          features: plan.features,
+        });
+        transaction.subscriptionId = sub._id as Types.ObjectId;
+        await transaction.save();
+        this.logger.log(`Host plan ${planName} paid: ${sub._id} (${sub.status})`);
+        return sub;
+      }
+
       // /payments/initialize takes the amount from the app: never give a plan for less than its price
       const planPrice = Number((plan.pricing as any)?.[billingCycle] ?? 0);
       if (!(planPrice > 0) || transaction.amount < planPrice) {
@@ -594,7 +515,8 @@ export class SubscriptionsService implements OnModuleInit {
         endDate,
         // ── Fix #1: nextBillingDate equals endDate — inlined directly ────
         nextBillingDate: endDate,
-        autoRenew: true,
+        // Nothing charges a plan automatically: it ends, and the person renews
+        autoRenew: false,
         lastPaymentTransactionId: transaction._id,
         lastPaymentDate: new Date(),
         previousSubscriptionId: existingSubscription?._id,
@@ -774,20 +696,18 @@ export class SubscriptionsService implements OnModuleInit {
     try {
       this.logger.log('Running subscription expiration check');
 
+      // Host plans: HostPlansService.runPlanLifecycle (reminders, next plan, badge)
       const expiredSubscriptions = await this.subscriptionModel.find({
         status: SubscriptionStatus.ACTIVE,
         endDate: { $lte: new Date() },
+        plan: { $nin: Object.keys(HOST_TIERS) },
       });
 
+      // No payment is ever taken automatically, so every ended plan ends
       for (const subscription of expiredSubscriptions) {
-        if (subscription.autoRenew) {
-          // TODO: trigger payment for renewal
-          this.logger.log(`Auto-renewal needed for subscription: ${subscription._id}`);
-        } else {
-          subscription.status = SubscriptionStatus.EXPIRED;
-          await subscription.save();
-          this.logger.log(`Subscription expired: ${subscription._id}`);
-        }
+        subscription.status = SubscriptionStatus.EXPIRED;
+        await subscription.save();
+        this.logger.log(`Subscription expired: ${subscription._id}`);
       }
 
       this.logger.log(
