@@ -12,7 +12,7 @@ function build(opts: { property?: any; existing?: any } = {}) {
   const property = opts.property === undefined ? { _id: PROPERTY, ownerId: OWNER, title: 'Villa' } : opts.property;
   const propertyModel: any = { findById: jest.fn(() => ({ select: () => ({ lean: () => Promise.resolve(property) }) })) };
   const notifications: any = { notifyAdmins: jest.fn().mockResolvedValue(undefined) };
-  const service = new ReportsService(reportModel, propertyModel, {} as any, {} as any, notifications);
+  const service = new ReportsService(reportModel, propertyModel, {} as any, {} as any, notifications, {} as any, {} as any);
   return { service, save, notifications };
 }
 
@@ -29,7 +29,7 @@ describe('ReportsService.hideListing', () => {
       findByIdAndUpdate: jest.fn(() => ({ select: () => ({ lean: () => ({ exec: () => Promise.resolve(updated) }) }) })),
     };
     const notifications: any = { create: jest.fn().mockResolvedValue(undefined) };
-    const service = new ReportsService(reportModel, propertyModel, {} as any, {} as any, notifications);
+    const service = new ReportsService(reportModel, propertyModel, {} as any, {} as any, notifications, {} as any, {} as any);
     return { service, reportModel, propertyModel, notifications };
   }
   const REPORT = '507f1f77bcf86cd799439084';
@@ -98,7 +98,7 @@ describe('telling reporters the outcome', () => {
     const populated = { populate: () => ({ exec: () => Promise.resolve(after) }) };
     const reportModel: any = {
       findById: jest.fn(() => ({ select: () => ({ lean: () => ({ exec: () => Promise.resolve(opts.before ?? { status: 'pending', property: PROPERTY }) }) }) })),
-      findByIdAndUpdate: jest.fn(() => ({ populate: () => populated })),
+      findByIdAndUpdate: jest.fn(() => ({ populate: () => ({ populate: () => populated }) })),
       find: jest.fn(() => ({ select: () => ({ lean: () => ({ exec: () => Promise.resolve(opts.openReports ?? []) }) }) })),
       updateMany: jest.fn().mockResolvedValue(undefined),
     };
@@ -106,7 +106,7 @@ describe('telling reporters the outcome', () => {
       findByIdAndUpdate: jest.fn(() => ({ select: () => ({ lean: () => ({ exec: () => Promise.resolve({ _id: PROPERTY, ownerId: OWNER, title: 'Villa' }) }) }) })),
     };
     const notifications: any = { create: jest.fn().mockResolvedValue(undefined) };
-    const service = new ReportsService(reportModel, propertyModel, {} as any, {} as any, notifications);
+    const service = new ReportsService(reportModel, propertyModel, {} as any, {} as any, notifications, {} as any, {} as any);
     return { service, notifications };
   }
   const sentTo = (n: any) => n.create.mock.calls.map((c: any[]) => c[0].userId);

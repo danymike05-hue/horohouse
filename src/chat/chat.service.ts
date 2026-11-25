@@ -135,6 +135,8 @@ export class ChatService implements OnModuleInit {
                 return existingConversation;
             }
 
+            await this.assertCanContact(userId, participantId);
+
             // Create new conversation
             const participants: ParticipantInfo[] = [
                 {
@@ -175,6 +177,63 @@ export class ChatService implements OnModuleInit {
             this.logger.error('Error creating conversation:', error);
             throw error;
         }
+    }
+
+    // ── Blocking ────────────────────────────────────────────────────────────
+
+    /** Neither may write to or call the other once one of them blocked the other */
+    async assertCanContact(fromId: string, toId: string): Promise<void> {
+        if (String(fromId) === String(toId)) return;
+        const people: any[] = await this.userModel
+            .find({ _id: { $in: [fromId, toId] } })
+            .select('+blockedUsers deletedAt')
+            .lean()
+            .exec();
+        const blocks = (id: string, other: string) =>
+            (people.find((p) => String(p._id) === String(id))?.blockedUsers ?? []).some((b: any) => String(b) === String(other));
+
+        if (people.find((p) => String(p._id) === String(toId))?.deletedAt) {
+            throw new ForbiddenException({ message: 'This account no longer exists', code: 'ACCOUNT_DELETED' });
+        }
+        if (blocks(fromId, toId)) {
+            throw new ForbiddenException({ message: 'You blocked this person. Unblock them to write to them.', code: 'YOU_BLOCKED' });
+        }
+        if (blocks(toId, fromId)) {
+            // Says nothing about who blocked whom
+            throw new ForbiddenException({ message: 'You can’t contact this person', code: 'CANNOT_CONTACT' });
+        }
+    }
+
+    async blockUser(userId: string, otherId: string): Promise<{ blocked: boolean }> {
+        if (!Types.ObjectId.isValid(otherId)) throw new NotFoundException('User not found');
+        if (String(userId) === String(otherId)) throw new BadRequestException('You cannot block yourself');
+        const other: any = await this.userModel.findById(otherId).select('role deletedAt').lean().exec();
+        if (!other) throw new NotFoundException('User not found');
+        if (other.role === 'admin' || (await this.supportAccountId()) === String(otherId)) {
+            throw new BadRequestException({ message: 'HoroHouse support can’t be blocked', code: 'SUPPORT' });
+        }
+        await this.userModel.updateOne({ _id: userId }, { $addToSet: { blockedUsers: new Types.ObjectId(otherId) } });
+        return { blocked: true };
+    }
+
+    async unblockUser(userId: string, otherId: string): Promise<{ blocked: boolean }> {
+        if (!Types.ObjectId.isValid(otherId)) throw new NotFoundException('User not found');
+        await this.userModel.updateOne({ _id: userId }, { $pull: { blockedUsers: new Types.ObjectId(otherId) } });
+        return { blocked: false };
+    }
+
+    /** People I blocked, newest last */
+    async blockedUsers(userId: string): Promise<{ _id: string; name: string; profilePicture?: string }[]> {
+        const me: any = await this.userModel.findById(userId).select('+blockedUsers').lean().exec();
+        const ids = me?.blockedUsers ?? [];
+        if (!ids.length) return [];
+        const people: any[] = await this.userModel.find({ _id: { $in: ids }, deletedAt: { $exists: false } }).select('name profilePicture').lean().exec();
+        return people.map((p) => ({ _id: String(p._id), name: p.name, profilePicture: p.profilePicture ?? undefined }));
+    }
+
+    async hasBlocked(userId: string, otherId: string): Promise<boolean> {
+        if (!Types.ObjectId.isValid(otherId)) return false;
+        return !!(await this.userModel.exists({ _id: userId, blockedUsers: new Types.ObjectId(otherId) }));
     }
 
     /**
@@ -383,6 +442,8 @@ export class ChatService implements OnModuleInit {
             if (!recipient) {
                 throw new BadRequestException('Recipient not found');
             }
+
+            await this.assertCanContact(userId, String((recipient.userId as any)?._id ?? recipient.userId));
 
             // Build property reference if propertyId provided
             let propertyReference;

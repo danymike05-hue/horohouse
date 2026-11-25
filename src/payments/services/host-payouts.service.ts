@@ -16,11 +16,16 @@ import { WalletService } from './wallet.service';
 
 const DEFAULT_HOLD_HOURS = 24;
 const DEFAULT_CHECK_IN_MINUTES = 14 * 60;
+/** Cameroon (WAT) is UTC+1 all year */
+const WAT_OFFSET_MINUTES = 60;
+
+/** The check-in time hosts set on a listing ('HH:mm', Cameroon time) */
+export const checkInTimeOf = (property: any): string | undefined => property?.shortTermAmenities?.checkInTime;
 
 /**
- * When a booking's money can be withdrawn: `holdHours` after check-in time on the
- * check-in day. checkIn is a calendar day stored at UTC midnight, so counting from it
- * alone would release the money only hours after the guest arrives.
+ * When a booking's money can be withdrawn: `holdHours` after check-in time (Cameroon time)
+ * on the check-in day. checkIn is a calendar day stored at UTC midnight, so counting from
+ * it alone would release the money only hours after the guest arrives.
  */
 export function payoutReleaseAt(checkIn: Date, checkInTime: string | undefined, holdHours: number): Date {
   const day = new Date(checkIn);
@@ -30,7 +35,7 @@ export function payoutReleaseAt(checkIn: Date, checkInTime: string | undefined, 
   const minutes = match ? Number(match[2]) : NaN;
   const valid = hours >= 0 && hours <= 23 && minutes >= 0 && minutes <= 59;
   const checkInMinutes = valid ? hours * 60 + minutes : DEFAULT_CHECK_IN_MINUTES;
-  return new Date(day.getTime() + checkInMinutes * 60_000 + holdHours * 3_600_000);
+  return new Date(day.getTime() + (checkInMinutes - WAT_OFFSET_MINUTES) * 60_000 + holdHours * 3_600_000);
 }
 
 /**

@@ -1,11 +1,14 @@
 import { PayoutStatus } from '../../bookings/schema/booking.schema';
-import { HostPayoutsService, payoutReleaseAt } from './host-payouts.service';
+import { checkInTimeOf, HostPayoutsService, payoutReleaseAt } from './host-payouts.service';
 
 const ID = '507f1f77bcf86cd799439011';
 const HOST = '507f1f77bcf86cd799439012';
 
-function build(opts: { holdHours?: string } = {}) {
-  const bookingModel: any = { findOneAndUpdate: jest.fn(), updateOne: jest.fn(), find: jest.fn() };
+function build(opts: { holdHours?: string; planHours?: number } = {}) {
+  const bookingModel: any = {
+    findOneAndUpdate: jest.fn(), updateOne: jest.fn(), find: jest.fn(),
+    findById: jest.fn(() => ({ select: () => ({ lean: async () => ({ hostId: HOST }) }) })),
+  };
   const wallet: any = {
     holdFunds: jest.fn().mockResolvedValue(undefined),
     dropHeldFunds: jest.fn().mockResolvedValue(undefined),
@@ -13,7 +16,8 @@ function build(opts: { holdHours?: string } = {}) {
   };
   const notifications: any = { create: jest.fn().mockResolvedValue(undefined) };
   const config: any = { get: () => opts.holdHours };
-  const service = new HostPayoutsService(bookingModel, wallet, notifications, config);
+  const plans: any = opts.planHours !== undefined ? { payoutHoldHours: jest.fn().mockResolvedValue(opts.planHours) } : undefined;
+  const service = new HostPayoutsService(bookingModel, wallet, notifications, config, plans);
   return { service, bookingModel, wallet, notifications };
 }
 
@@ -22,13 +26,23 @@ const populated = (value: any) => ({ populate: jest.fn().mockResolvedValue(value
 describe('payoutReleaseAt', () => {
   const checkIn = new Date('2026-12-10T00:00:00.000Z');
 
-  it('counts from the check-in time, not from midnight', () => {
-    expect(payoutReleaseAt(checkIn, '15:30', 24).toISOString()).toBe('2026-12-11T15:30:00.000Z');
+  it('counts from the check-in time (Cameroon time), not from midnight', () => {
+    expect(payoutReleaseAt(checkIn, '15:30', 24).toISOString()).toBe('2026-12-11T14:30:00.000Z');
+  });
+
+  it('a check-in at midnight stays on its own day in Cameroon', () => {
+    expect(payoutReleaseAt(checkIn, '00:00', 24).toISOString()).toBe('2026-12-10T23:00:00.000Z');
+  });
+
+  it('reads the time where the listing keeps it', () => {
+    expect(checkInTimeOf({ shortTermAmenities: { checkInTime: '16:00' } })).toBe('16:00');
+    expect(checkInTimeOf({ checkInTime: '16:00' })).toBeUndefined();
+    expect(checkInTimeOf(null)).toBeUndefined();
   });
 
   it('uses 14:00 when the listing has no usable check-in time', () => {
     for (const time of [undefined, '', 'evening', '25:00']) {
-      expect(payoutReleaseAt(checkIn, time, 24).toISOString()).toBe('2026-12-11T14:00:00.000Z');
+      expect(payoutReleaseAt(checkIn, time, 24).toISOString()).toBe('2026-12-11T13:00:00.000Z');
     }
   });
 });
@@ -40,7 +54,7 @@ describe('HostPayoutsService', () => {
     it('puts the money in the pending balance', async () => {
       const { service, bookingModel, wallet } = build();
       bookingModel.findOneAndUpdate.mockResolvedValue({ _id: ID });
-      await expect(service.hold(params)).resolves.toEqual(new Date('2026-12-11T14:00:00.000Z'));
+      await expect(service.hold(params)).resolves.toEqual(new Date('2026-12-11T13:00:00.000Z'));
       expect(wallet.holdFunds).toHaveBeenCalledWith(HOST, 9000);
     });
 
@@ -54,7 +68,19 @@ describe('HostPayoutsService', () => {
     it('respects PAYOUT_HOLD_HOURS, including 0', async () => {
       const { service, bookingModel } = build({ holdHours: '0' });
       bookingModel.findOneAndUpdate.mockResolvedValue({ _id: ID });
-      await expect(service.hold(params)).resolves.toEqual(new Date('2026-12-10T14:00:00.000Z'));
+      await expect(service.hold(params)).resolves.toEqual(new Date('2026-12-10T13:00:00.000Z'));
+    });
+
+    it('pays Pro and Elite hosts 12h after their listing\'s check-in time', async () => {
+      const { service, bookingModel } = build({ planHours: 12 });
+      bookingModel.findOneAndUpdate.mockResolvedValue({ _id: ID });
+      await expect(service.hold({ ...params, checkInTime: '16:00' })).resolves.toEqual(new Date('2026-12-11T03:00:00.000Z'));
+    });
+
+    it('a new check-in date moves the wait with the same rules', async () => {
+      const { service, bookingModel } = build({ planHours: 12 });
+      await service.reschedule(ID, new Date('2026-12-20T00:00:00Z'), '16:00');
+      expect(bookingModel.updateOne.mock.calls[0][1]).toEqual({ $set: { 'payout.releaseAt': new Date('2026-12-21T03:00:00.000Z') } });
     });
   });
 

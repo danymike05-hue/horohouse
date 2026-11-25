@@ -5,7 +5,7 @@ import {
 import { Throttle } from '@nestjs/throttler';
 import { IsString, Length } from 'class-validator';
 import { ReportsService } from './reports.service';
-import { CreateReportDto } from './dto/create-report.dto';
+import { CreateReportDto, CreateUserReportDto } from './dto/create-report.dto';
 import { UpdateReportStatusDto } from './dto/update-report-status.dto';
 import { SendWarningDto } from './dto/send-warning.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt.auth.guard';
@@ -35,6 +35,15 @@ export class ReportsController {
         @Req() req: any,
     ) {
         return this.reportsService.create(createReportDto, req.user._id, propertyId);
+    }
+
+    @Post('user/:userId')
+    @Throttle({ default: { limit: 5, ttl: 60_000 } })
+    @UseGuards(JwtAuthGuard)
+    @ApiBearerAuth()
+    @ApiOperation({ summary: 'Report a person (from a chat or their profile)' })
+    createForUser(@Param('userId') userId: string, @Body() dto: CreateUserReportDto, @Req() req: any) {
+        return this.reportsService.createForUser(dto, String(req.user.userId), userId);
     }
 
     // ── Admin: list & stats ───────────────────────────────────────────────────
@@ -119,6 +128,17 @@ export class ReportsController {
     @ApiOperation({ summary: 'Take the reported listing off the platform and close its open reports (Admin only)' })
     hideListing(@Param('id') id: string, @Body() dto: HideListingDto, @Req() req: any) {
         return this.reportsService.hideListing(id, dto.reason, req.user);
+    }
+
+    // ── Admin: suspend the reported person ────────────────────────────────────
+
+    @Post(':id/suspend-user')
+    @UseGuards(JwtAuthGuard, RolesGuard)
+    @Roles(UserRole.ADMIN)
+    @ApiBearerAuth()
+    @ApiOperation({ summary: 'Suspend the reported person: signed out, listings hidden (Admin only)' })
+    suspendUser(@Param('id') id: string, @Body() dto: HideListingDto, @Req() req: any) {
+        return this.reportsService.suspendUser(id, dto.reason, req.user);
     }
 
     // ── Admin: send warning email to property owner ───────────────────────────

@@ -1,4 +1,4 @@
-import { IsString, IsNotEmpty, IsOptional, MaxLength } from 'class-validator';
+import { IsString, IsNotEmpty, IsOptional, MaxLength, IsMongoId } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class CreateReportDto {
@@ -18,4 +18,16 @@ export class CreateReportDto {
     @IsOptional()
     @MaxLength(1000)
     details?: string;
+}
+
+export class CreateUserReportDto extends CreateReportDto {
+    /** Reported from this chat: its last messages go with the report */
+    @IsOptional()
+    @IsMongoId()
+    conversationId?: string;
+
+    /** The message that was reported, if one was chosen */
+    @IsOptional()
+    @IsMongoId()
+    messageId?: string;
 }

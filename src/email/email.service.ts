@@ -4,7 +4,7 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { Resend } from 'resend';
 import { User, UserDocument } from '../users/schemas/user.schema';
-import { body as emailBody, frame } from './email-kit';
+import { body as emailBody, esc as escHtml, frame } from './email-kit';
 import { HostEmailData, HostEmailKind, hostEmail } from './host-emails';
 
 // ─── Brand (same as the app's opening screen) ────────────────────────────────
@@ -226,6 +226,35 @@ export class EmailService {
         `${this.hi(t, displayName)}\n\nVotre mot de passe ${this.brandName} a bien été réinitialisé.\n\nSi vous n'êtes pas à l'origine de ce changement, contactez immédiatement le support.\n\nConnexion : ${this.frontendUrl}/auth/signin\n\n${this.signoff(t)}`,
       ),
       html: this.buildPasswordResetConfirmationTemplate({ ...this.baseParams(t), recipientName: displayName }),
+    });
+  }
+
+  /** Sent once the account is gone, so the language comes from the caller */
+  async sendAccountDeletedEmail(recipientEmail: string, recipientName?: string, language?: string): Promise<void> {
+    const fr = language === 'fr';
+    const t: T = (en, frText) => (fr ? frText : en);
+    const displayName = this.display(recipientName, t);
+    const what = t(
+      `Your ${this.brandName} account and personal data have been deleted, as you asked.`,
+      `Votre compte ${this.brandName} et vos données personnelles ont été supprimés, comme vous l'avez demandé.`,
+    );
+    const kept = t(
+      'Past bookings, payments and contracts are kept without your details, because the law or the other person needs them.',
+      "Les réservations, paiements et contrats passés sont conservés sans vos coordonnées, car la loi ou l'autre personne en a besoin.",
+    );
+    const notYou = t('If you did not ask for this, reply to this email straight away.', "Si vous n'avez pas fait cette demande, répondez à cet e-mail sans attendre.");
+    await this.safeSendMail({
+      to: recipientEmail,
+      subject: t(`Your ${this.brandName} account has been deleted`, `Votre compte ${this.brandName} a été supprimé`),
+      text: `${this.hi(t, displayName)}\n\n${what}\n\n${kept}\n\n${notYou}\n\n${this.signoff(t)}`,
+      html: this.layout(this.brandName, `
+        <h2 style="margin-top:0;">${t('Your account is deleted', 'Votre compte est supprimé')}</h2>
+        <p style="line-height:1.6;">${escHtml(this.hi(t, displayName))}</p>
+        <p style="line-height:1.6;">${what}</p>
+        <p style="line-height:1.6;">${kept}</p>
+        <p style="line-height:1.6;">${notYou}</p>
+        <p style="margin-top:24px;">${this.signoff(t)}</p>
+      `),
     });
   }
 

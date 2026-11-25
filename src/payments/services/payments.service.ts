@@ -7,7 +7,7 @@ import { Model, Types } from 'mongoose';
 import { ConfigService } from '@nestjs/config';
 import { CamerPayService } from './camerpay.service';
 import { WalletService } from './wallet.service';
-import { HostPayoutsService } from './host-payouts.service';
+import { checkInTimeOf, HostPayoutsService } from './host-payouts.service';
 import { CoHostsService } from '../../co-hosts/co-hosts.service';
 
 import {
@@ -911,7 +911,7 @@ async reconcileTransaction(transaction: TransactionDocument): Promise<'success' 
 
     const booking = await this.bookingModel
       .findById(transaction.bookingId)
-      .populate('propertyId', 'isInstantBookable title checkInTime')
+      .populate('propertyId', 'isInstantBookable title shortTermAmenities.checkInTime')
       .exec();
 
     if (!booking) {
@@ -1007,7 +1007,7 @@ async reconcileTransaction(transaction: TransactionDocument): Promise<'success' 
       hostId: hostIdStr,
       amount: hostPayout,
       checkIn: booking.checkIn,
-      checkInTime: (booking.propertyId as any)?.checkInTime,
+      checkInTime: checkInTimeOf(booking.propertyId),
     });
 
     this.logger.log(

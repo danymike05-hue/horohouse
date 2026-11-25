@@ -6,7 +6,9 @@ import { Model, Types, isValidObjectId } from 'mongoose';
 import { Report, ReportDocument } from './schemas/report.schema';
 import { ApprovalStatus, Property, PropertyDocument } from '../properties/schemas/property.schema';
 import { User, UserDocument } from '../users/schemas/user.schema';
-import { CreateReportDto } from './dto/create-report.dto';
+import { Conversation, ConversationDocument } from '../chat/schemas/conversation.schema';
+import { Message, MessageDocument } from '../chat/schemas/message.schema';
+import { CreateReportDto, CreateUserReportDto } from './dto/create-report.dto';
 import { UpdateReportStatusDto } from './dto/update-report-status.dto';
 import { SendWarningDto, WarningSeverity } from './dto/send-warning.dto';
 import { EmailService } from '../email/email.service';
@@ -14,6 +16,8 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { NotificationType } from '../notifications/schemas/notification.schema';
 
 const OPEN_STATUSES = ['pending', 'reviewed'];
+/** How many of the last messages go with a report */
+const EVIDENCE = 15;
 
 @Injectable()
 export class ReportsService {
@@ -31,6 +35,12 @@ export class ReportsService {
 
         private readonly emailService: EmailService,
         private readonly notificationsService: NotificationsService,
+
+        @InjectModel(Conversation.name)
+        private readonly conversationModel: Model<ConversationDocument>,
+
+        @InjectModel(Message.name)
+        private readonly messageModel: Model<MessageDocument>,
     ) {}
 
     // ── Create ────────────────────────────────────────────────────────────────
@@ -70,6 +80,109 @@ export class ReportsService {
         return saved;
     }
 
+    /** Someone reports a person, usually from a chat */
+    async createForUser(dto: CreateUserReportDto, reporterId: string, userId: string): Promise<{ message: string }> {
+        if (!isValidObjectId(userId)) throw new NotFoundException('User not found');
+        if (String(userId) === String(reporterId)) throw new BadRequestException('You can’t report yourself');
+        const person: any = await this.userModel.findById(userId).select('name').lean();
+        if (!person) throw new NotFoundException('User not found');
+        const already = await this.reportModel.exists({ reporter: reporterId, reportedUser: userId, status: 'pending' });
+        if (already) throw new ConflictException('You already reported this person');
+
+        const evidence = dto.conversationId ? await this.evidenceFrom(dto.conversationId, reporterId, userId, dto.messageId) : undefined;
+        const saved: any = await new this.reportModel({
+            reason: dto.reason,
+            details: dto.details,
+            reporter: reporterId,
+            reportedUser: userId,
+            ...(evidence ? { conversation: dto.conversationId, evidence } : {}),
+        }).save();
+
+        try {
+            await this.notificationsService.notifyAdmins({
+                title: 'Person reported',
+                message: `${person.name ?? 'Someone'} was reported: ${dto.reason}.`,
+                link: '/admin/reports',
+                metadata: { reportId: String(saved._id) },
+            });
+        } catch (err: any) {
+            this.logger.warn(`Report ${saved._id}: admins not notified: ${err?.message}`);
+        }
+        return { message: 'Report sent' };
+    }
+
+    /** The last messages of their chat, as they were. Only from a chat between these two people. */
+    private async evidenceFrom(conversationId: string, reporterId: string, userId: string, messageId?: string) {
+        const oid = (v: string) => new Types.ObjectId(v);
+        const conversation = await this.conversationModel.exists({
+            _id: conversationId,
+            'participants.userId': { $all: [oid(reporterId), oid(userId)] },
+        });
+        if (!conversation) return undefined;
+
+        const recent: any[] = await this.messageModel
+            .find({ conversationId: oid(conversationId), isDeleted: { $ne: true } })
+            .sort({ createdAt: -1 }).limit(EVIDENCE).lean().exec();
+        if (messageId && !recent.some((m) => String(m._id) === messageId)) {
+            const one: any = await this.messageModel.findOne({ _id: messageId, conversationId: oid(conversationId) }).lean().exec();
+            if (one) recent.push(one);
+        }
+        return recent
+            .sort((a, b) => +new Date(a.createdAt) - +new Date(b.createdAt))
+            .map((m) => ({
+                byReported: String(m.senderId) === String(userId),
+                text: (m.content || m.attachments?.map((a: any) => a.url).join(' ') || `[${m.type}]`).slice(0, 1000),
+                at: m.createdAt,
+                ...(messageId && String(m._id) === messageId ? { reported: true } : {}),
+            }));
+    }
+
+    /**
+     * Closes the reported account: signed out everywhere, can't sign in, listings hidden.
+     * An admin can open it again from Users.
+     */
+    async suspendUser(reportId: string, reason: string, admin: User): Promise<{ message: string }> {
+        if (!isValidObjectId(reportId)) throw new NotFoundException('Report not found');
+        const report: any = await this.reportModel.findById(reportId).select('reportedUser').lean().exec();
+        if (!report?.reportedUser) throw new NotFoundException('Report not found');
+        const person: any = await this.userModel.findById(report.reportedUser).select('name role email').lean();
+        if (!person) throw new BadRequestException('This account no longer exists.');
+        if (person.role === 'admin') throw new BadRequestException('An admin account can’t be suspended from here.');
+
+        await this.userModel.updateOne({ _id: person._id }, { $set: { isActive: false, sessions: [], pushTokens: [] } });
+        await this.propertyModel.updateMany({ ownerId: person._id, isActive: true }, { $set: { isActive: false } });
+
+        const filter = { reportedUser: person._id, status: { $in: OPEN_STATUSES } };
+        const open = await this.reportModel.find(filter).select('reporter').lean().exec();
+        await this.reportModel.updateMany(filter, { status: 'resolved', adminNotes: `Account suspended: ${reason}` });
+        await this.notifyReporters(open.map((x: any) => x.reporter), person.name, 'removed', true);
+        this.logger.log(`User ${person._id} suspended by admin ${(admin as any)._id} via report ${reportId}`);
+        return { message: `${person.name ?? 'The account'} is suspended.` };
+    }
+
+    private async warnUser(report: any, dto: SendWarningDto, admin: User): Promise<{ message: string }> {
+        const person: any = await this.userModel.findById(report.reportedUser).select('name isActive').lean();
+        if (!person) throw new BadRequestException('This account no longer exists.');
+        await this.notificationsService.create(
+            {
+                userId: String(person._id),
+                type: NotificationType.SYSTEM,
+                title: 'A warning about your messages',
+                message: dto.message,
+                metadata: { reportId: String(report._id) },
+            },
+            { title: 'Un avertissement sur vos messages', message: dto.message },
+        );
+        if (report.status === 'pending') {
+            await this.reportModel.findByIdAndUpdate(report._id, {
+                status: 'reviewed',
+                adminNotes: `Warning sent on ${new Date().toLocaleDateString()}`,
+            });
+        }
+        this.logger.log(`User ${person._id} warned by admin ${(admin as any)._id} via report ${report._id}`);
+        return { message: `Warning sent to ${person.name ?? 'this person'}.` };
+    }
+
     // ── List ──────────────────────────────────────────────────────────────────
 
     async findAll(
@@ -95,6 +208,7 @@ export class ReportsService {
                     select: 'title city address images approvalStatus isActive ownerId',
                     populate: { path: 'ownerId', select: 'name email phoneNumber' },
                 })
+                .populate('reportedUser', 'name email phoneNumber profilePicture role isActive')
                 // The queue is worked oldest first; everything else reads newest first.
                 .sort({ createdAt: state === 'open' ? 1 : -1 })
                 .skip(skip)
@@ -151,6 +265,7 @@ export class ReportsService {
             .findByIdAndUpdate(id, updateDto, { new: true })
             .populate('reporter', 'name email profilePicture')
             .populate('property', 'title city')
+            .populate('reportedUser', 'name')
             .exec();
 
         if (!report) {
@@ -162,8 +277,9 @@ export class ReportsService {
             const reporterId = (report.reporter as any)?._id ?? report.reporter;
             await this.notifyReporters(
                 [reporterId],
-                (report.property as any)?.title,
+                report.reportedUser ? (report.reportedUser as any)?.name : (report.property as any)?.title,
                 report.status === 'dismissed' ? 'dismissed' : 'resolved',
+                !!report.reportedUser,
             );
         }
         return report;
@@ -177,11 +293,28 @@ export class ReportsService {
         reporterIds: any[],
         propertyTitle: string | undefined,
         outcome: 'removed' | 'resolved' | 'dismissed',
+        aboutPerson = false,
     ): Promise<void> {
         const ids = [...new Set(reporterIds.filter(Boolean).map(String))];
         const listing = propertyTitle ? `"${propertyTitle}"` : 'the listing';
         const annonce = propertyTitle ? `« ${propertyTitle} »` : "l'annonce";
-        const text = {
+        const who = propertyTitle || 'this person';
+        const qui = propertyTitle || 'cette personne';
+        const person = {
+            removed: {
+                en: { title: 'Thanks for your report', message: `We reviewed your report about ${who} and closed their account.` },
+                fr: { title: 'Merci pour votre signalement', message: `Nous avons examiné votre signalement concernant ${qui} et fermé son compte.` },
+            },
+            resolved: {
+                en: { title: 'Thanks for your report', message: `We reviewed your report about ${who} and dealt with it.` },
+                fr: { title: 'Merci pour votre signalement', message: `Nous avons examiné votre signalement concernant ${qui} et l'avons traité.` },
+            },
+            dismissed: {
+                en: { title: 'We reviewed your report', message: `We looked into your report about ${who} and found nothing against our rules. You can still block them.` },
+                fr: { title: 'Nous avons examiné votre signalement', message: `Nous avons vérifié votre signalement concernant ${qui} et n'avons rien trouvé de contraire à nos règles. Vous pouvez toujours bloquer cette personne.` },
+            },
+        };
+        const text = aboutPerson ? person[outcome] : {
             removed: {
                 en: { title: 'Thanks for your report', message: `We reviewed your report about ${listing} and took it off HoroHouse.` },
                 fr: { title: 'Merci pour votre signalement', message: `Nous avons examiné votre signalement concernant ${annonce} et l'avons retirée de HoroHouse.` },
@@ -324,6 +457,7 @@ export class ReportsService {
         if (!isValidObjectId(reportId)) throw new NotFoundException('Report not found');
         const report = await this.reportModel.findById(reportId).select('property').lean().exec();
         if (!report) throw new NotFoundException('Report not found');
+        if (!report.property) throw new BadRequestException('This report is not about a listing.');
 
         const property: any = await this.propertyModel
             .findByIdAndUpdate(
@@ -394,6 +528,8 @@ export class ReportsService {
         if (!report) {
             throw new NotFoundException(`Report with ID ${reportId} not found`);
         }
+
+        if (report.reportedUser) return this.warnUser(report, dto, admin);
 
         const property = report.property as any;
         if (!property || !property._id) {

@@ -33,6 +33,7 @@ import {
   ChangePasswordDto,
   CheckEmailDto,
   OAuthExchangeDto,
+  AppleSignInDto,
   VerifyEmailDto,
 } from './dto/auth.dto';
 import { Public } from './guards/roles.guard';
@@ -285,6 +286,41 @@ export class AuthController {
     return tokens;
   }
 
+  @Public()
+  @Throttle({ default: { limit: 10, ttl: 60000 } })
+  @Post('apple')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'iPhone: Sign in with Apple' })
+  async appleSignIn(
+    @Body() dto: AppleSignInDto,
+    @Req() req: FastifyRequest,
+    @Res({ passthrough: true }) res: FastifyReply,
+  ): Promise<AuthTokens> {
+    const tokens = await this.authService.appleSignIn(dto, req);
+    this.setAuthCookies(res, tokens);
+    return tokens;
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @AllowIncompleteOnboarding()
+  @Throttle({ default: { limit: 10, ttl: 60000 } })
+  @Post('apple/link')
+  @HttpCode(HttpStatus.OK)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Connect Apple to the signed-in account' })
+  async linkApple(@Body() dto: AppleSignInDto, @Req() req: FastifyRequest & { user: any }) {
+    return this.authService.linkApple(String((req.user as any).userId), dto);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('disconnect/apple')
+  @HttpCode(HttpStatus.OK)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Disconnect Apple (needs a password)' })
+  async disconnectApple(@Req() req: FastifyRequest & { user: any }) {
+    return this.authService.disconnectApple(String((req.user as any).userId));
+  }
+
   // 🔥 FIX: Manually handle redirect for Fastify compatibility
   // Remove @Res() injection and let NestJS handle the response
   @Public()
@@ -459,6 +495,7 @@ export class AuthController {
           emailVerified: req.user.emailVerified || false,
           phoneVerified: req.user.phoneVerified || false,
           googleId: (req.user as any).googleId,
+          appleId: (req.user as any).appleId,
           hasPassword: !!(req.user as any).hasPassword,
           onboardingCompleted: (req.user as any).onboardingCompleted ?? false,
           onboardingStatus: (req.user as any).onboardingStatus || 'completed',

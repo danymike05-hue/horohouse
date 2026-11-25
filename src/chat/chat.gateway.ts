@@ -265,7 +265,8 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
       return { success: true, message };
     } catch (error) {
       this.logger.error('❌ Error sending message:', error);
-      return { success: false, error: error.message };
+      // The code tells the app why (blocked, account deleted…)
+      return { success: false, error: error.message, code: error?.getResponse?.()?.code };
     }
   }
 
@@ -333,7 +334,6 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
         return { success: false, error: 'SDP offer is required to initiate a call' };
       }
 
-      const call = await this.callService.initiateCall(userId, dto);
       const conversation = await this.chatService.getConversation(dto.conversationId, userId);
 
       const recipientParticipant = conversation.participants.find(
@@ -343,6 +343,8 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
       if (!recipientParticipant) throw new Error('Recipient not found');
 
       const recipientId = recipientParticipant.userId._id.toString();
+      await this.chatService.assertCanContact(userId, recipientId);
+      const call = await this.callService.initiateCall(userId, dto);
 
       const initiatorUser = await this.userModel
         .findById(userId)

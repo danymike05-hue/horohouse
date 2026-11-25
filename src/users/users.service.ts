@@ -356,7 +356,7 @@ export class UsersService {
     }
 
     // Never through this route
-    for (const k of ['role', 'password', 'googleId', 'isActive', 'sessions', 'identityVerification']) delete data[k];
+    for (const k of ['role', 'password', 'googleId', 'appleId', 'appleRefreshToken', 'blockedUsers', 'deletedAt', 'isActive', 'sessions', 'identityVerification']) delete data[k];
     if (data.emailVerified === true) delete data.emailVerified;
     if (data.phoneVerified === true) delete data.phoneVerified;
 

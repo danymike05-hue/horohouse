@@ -55,7 +55,7 @@ function build(opts: { booking?: any; change?: any; newTotal?: number } = {}) {
     updateOne: jest.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 }),
   };
   const propertyModel: any = {
-    findById: jest.fn(() => ({ select: () => ({ lean: () => Promise.resolve({ title: 'Villa', checkInTime: '15:00' }) }) })),
+    findById: jest.fn(() => ({ select: () => ({ lean: () => Promise.resolve({ title: 'Villa', shortTermAmenities: { checkInTime: '15:00' } }) }) })),
   };
   const bookings: any = {
     quoteStayChange: jest.fn().mockResolvedValue({ nights: 4, priceBreakdown: { totalAmount: opts.newTotal ?? 40000 } }),
@@ -219,7 +219,7 @@ describe('BookingChangesService', () => {
       const { service, payments, payouts, bookingModel } = build({ change: waiting() });
       await expect(service.applyPaid(CHANGE, payment)).resolves.toMatchObject({ ok: true });
       expect(payments.recordDateChangePayment).toHaveBeenCalledTimes(1);
-      expect(payouts.addToHold).toHaveBeenCalledWith(expect.objectContaining({ amount: 9000, hostId: HOST }));
+      expect(payouts.addToHold).toHaveBeenCalledWith(expect.objectContaining({ amount: 9000, hostId: HOST, checkInTime: '15:00' }));
       expect(bookingModel.updateOne).toHaveBeenCalled();
     });
 

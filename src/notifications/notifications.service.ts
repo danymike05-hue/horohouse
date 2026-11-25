@@ -670,6 +670,71 @@ export class NotificationsService {
   }
 
   /**
+   * A booking closed by itself because a deadline passed. Nobody cancelled it, so it must not
+   * say the host (or the guest) did.
+   *
+   * Called from: BookingsService.expireOverdueBookings()
+   */
+  async notifyBookingExpired(params: {
+    guestId: string;
+    hostId?: string;
+    bookingId: string;
+    propertyId: string;
+    propertyTitle: string;
+    guestName: string;
+    checkIn: string;
+    checkOut: string;
+    reason: 'payment_timeout' | 'payment_not_received_after_acceptance' | 'host_did_not_respond';
+  }): Promise<void> {
+    const { propertyTitle: place, guestName, reason } = params;
+    const en = `${params.checkIn} → ${params.checkOut}`;
+    const metadata = {
+      bookingId: params.bookingId,
+      propertyId: params.propertyId,
+      propertyTitle: place,
+      checkIn: params.checkIn,
+      checkOut: params.checkOut,
+    };
+    const noAnswer = reason === 'host_did_not_respond';
+
+    await this.create({
+      userId: params.guestId,
+      type: NotificationType.BOOKING_CANCELLED,
+      title: noAnswer ? 'Request expired' : 'Booking expired',
+      message: noAnswer
+        ? `The host didn't reply in time to your request for ${place} (${en}). You weren't charged.`
+        : `Your booking for ${place} (${en}) wasn't paid in time, so the dates are free again.`,
+      fr: {
+        title: noAnswer ? 'Demande expirée' : 'Réservation expirée',
+        message: noAnswer
+          ? `L’hôte n’a pas répondu à temps à votre demande pour ${place} (${en}). Vous n’avez rien payé.`
+          : `Votre réservation pour ${place} (${en}) n’a pas été payée à temps : les dates sont de nouveau libres.`,
+      },
+      link: `/bookings/${params.bookingId}`,
+      metadata,
+    });
+
+    // The host never heard of an instant booking that wasn't paid
+    if (!params.hostId || reason === 'payment_timeout') return;
+    await this.create({
+      userId: params.hostId,
+      type: NotificationType.BOOKING_CANCELLED,
+      title: noAnswer ? 'Request expired' : 'Booking expired',
+      message: noAnswer
+        ? `${guestName}'s request for ${place} (${en}) expired because it wasn't answered in time.`
+        : `${guestName} didn't pay in time for ${place} (${en}). The dates are free again.`,
+      fr: {
+        title: noAnswer ? 'Demande expirée' : 'Réservation expirée',
+        message: noAnswer
+          ? `La demande de ${guestName} pour ${place} (${en}) a expiré, faute de réponse à temps.`
+          : `${guestName} n’a pas payé à temps pour ${place} (${en}). Les dates sont de nouveau libres.`,
+      },
+      link: `/hosting/bookings/${params.bookingId}`,
+      metadata,
+    });
+  }
+
+  /**
    * BOTH PARTIES ← A booking was cancelled.
    * Sends two separate notifications — one to each party.
    *
@@ -1005,7 +1070,8 @@ export class NotificationsService {
       availableOn?: Date;
     },
   ): Promise<void> {
-    const day = params.availableOn?.toISOString().split('T')[0];
+    // The day in Cameroon (UTC+1): just after midnight there is still the day before in UTC
+    const day = params.availableOn && new Date(params.availableOn.getTime() + 3_600_000).toISOString().split('T')[0];
     const when = day ? ` You can withdraw it from ${day}, about a day after check-in.` : '';
     const quand = day ? ` Vous pourrez le retirer à partir du ${day}, environ un jour après l'arrivée.` : '';
     await this.create({

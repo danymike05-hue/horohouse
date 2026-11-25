@@ -499,7 +499,8 @@ export class BookingsService {
         propertyId: booking.propertyId.toString(),
         propertyTitle: (property as any)?.title ?? 'the property',
         guestName: (guest as any)?.name ?? 'Guest',
-        hostName: (host as any)?.name ?? 'Host',
+        // Who the guest is told cancelled: not the host when an admin did it
+        hostName: cancelledBy === CancelledBy.ADMIN ? 'HoroHouse' : (host as any)?.name ?? 'Host',
         checkIn: fmt(booking.checkIn),
         checkOut: fmt(booking.checkOut),
         cancelledByGuest: cancelledBy === CancelledBy.GUEST,
@@ -609,22 +610,27 @@ export class BookingsService {
       throw new BadRequestException('Only PENDING bookings can be rejected');
     }
 
+    // Conditional: the deadline or a payment that lands meanwhile wins, and the host is told
     const updated = await this.bookingModel
-      .findByIdAndUpdate(
-        bookingId,
+      .findOneAndUpdate(
+        { _id: booking._id, status: BookingStatus.PENDING, paymentStatus: { $ne: PaymentStatus.PAID } },
         {
           status: BookingStatus.REJECTED,
           hostNote: dto.hostNote,
           cancellation: {
             cancelledBy: CancelledBy.HOST,
             cancelledAt: new Date(),
-            reason: dto.reason,
+            reason: dto.reason?.trim() || undefined,
             refundAmount: 0,
           },
         },
         { new: true },
       )
       .exec();
+    if (!updated) {
+      throw new ConflictException('This booking has just been paid or has closed. Refresh to see it.');
+    }
+    await this.promoCodes?.giveBack((booking as any).priceBreakdown?.promoCode).catch(() => undefined);
     const property = await this.propertyModel.findById(booking.propertyId).select('title').lean();
     const fmt = (d: Date) => d.toISOString().split('T')[0];
 
@@ -638,7 +644,7 @@ export class BookingsService {
     });
 
     this.logger.log(`Booking ${bookingId} rejected by host ${host._id}`);
-    return updated!;
+    return updated;
   }
 
   /**
@@ -991,7 +997,7 @@ export class BookingsService {
 
     let expired = 0;
     for (const b of overdue as any[]) {
-      const reason =
+      const reason: 'payment_timeout' | 'payment_not_received_after_acceptance' | 'host_did_not_respond' =
         b.status === BookingStatus.CONFIRMED
           ? 'payment_not_received_after_acceptance'
           : b.isInstantBook
@@ -1017,23 +1023,22 @@ export class BookingsService {
       await this.promoCodes?.giveBack(b.priceBreakdown?.promoCode).catch(() => undefined);
 
       try {
-        const [property, guest, host] = await Promise.all([
+        const [property, guest] = await Promise.all([
           this.propertyModel.findById(b.propertyId).select('title').lean(),
           this.userModel.findById(b.guestId).select('name').lean(),
-          this.userModel.findById(b.hostId).select('name').lean(),
         ]);
         const fmt = (d: Date) => new Date(d).toISOString().split('T')[0];
-        await this.notificationsService.notifyBookingCancelled({
+        // Not notifyBookingCancelled: it told guests "<host> cancelled your booking"
+        await this.notificationsService.notifyBookingExpired({
           guestId: b.guestId.toString(),
-          hostId: b.hostId.toString(),
+          hostId: b.hostId?.toString(),
           bookingId: b._id.toString(),
           propertyId: b.propertyId.toString(),
           propertyTitle: (property as any)?.title ?? 'the property',
           guestName: (guest as any)?.name ?? 'Guest',
-          hostName: (host as any)?.name ?? 'Host',
           checkIn: fmt(b.checkIn),
           checkOut: fmt(b.checkOut),
-          cancelledByGuest: false,
+          reason,
         });
       } catch (err: any) {
         this.logger.warn(`expireOverdueBookings: notification failed for ${b._id}: ${err?.message}`);
@@ -1489,7 +1494,7 @@ export class BookingsService {
     const [bookings, total] = await Promise.all([
       this.bookingModel
         .find(filter)
-        .populate('propertyId', 'title address city images price')
+        .populate('propertyId', 'title address city images price shortTermAmenities.checkInTime shortTermAmenities.checkOutTime')
         .populate('guestId', 'name email phoneNumber profilePicture')
         .populate('hostId', 'name email phoneNumber profilePicture')
         .sort({ createdAt: sortOrder === 'asc' ? 1 : -1 })

@@ -125,6 +125,26 @@ export class OAuthExchangeDto {
   deviceInfo?: any;
 }
 
+export class AppleSignInDto {
+  /** The signed token the iPhone gets from Apple */
+  @ApiProperty() @IsString() @Length(100, 4096)
+  identityToken: string;
+
+  /** The app's secret whose SHA-256 was put in the request to Apple */
+  @ApiProperty() @IsString() @Length(32, 128)
+  nonce: string;
+
+  /** Apple gives the name once only, on the first sign-in, to the app */
+  @ApiPropertyOptional() @IsOptional() @IsString() @Length(0, 80)
+  name?: string;
+
+  @ApiPropertyOptional() @IsOptional() @IsString() @Length(0, 1024)
+  authorizationCode?: string;
+
+  @ApiPropertyOptional() @IsOptional() @IsObject()
+  deviceInfo?: any;
+}
+
 export class VerifyEmailDto {
   @ApiProperty() @IsString() @Length(16, 128)
   token: string;

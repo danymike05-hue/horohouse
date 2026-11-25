@@ -14,7 +14,7 @@ import { Booking, BookingDocument, BookingStatus, PaymentStatus } from '../booki
 import { BookingsService } from '../bookings/bookings.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { NotificationType } from '../notifications/schemas/notification.schema';
-import { HostPayoutsService } from '../payments/services/host-payouts.service';
+import { checkInTimeOf, HostPayoutsService } from '../payments/services/host-payouts.service';
 import { CoHostsService } from '../co-hosts/co-hosts.service';
 import { PaymentsService } from '../payments/services/payments.service';
 import { Property, PropertyDocument } from '../properties/schemas/property.schema';
@@ -318,13 +318,13 @@ export class BookingChangesService {
       { $set: { holdAdded: true } },
     );
     if (firstTime) {
-      const property: any = await this.propertyModel.findById(booking.propertyId).select('checkInTime').lean();
+      const property: any = await this.propertyModel.findById(booking.propertyId).select('shortTermAmenities.checkInTime').lean();
       await this.payouts.addToHold({
         bookingId: String(booking._id),
         hostId: String(booking.hostId),
         amount: this.payments.hostShareOf(payment.amount),
         checkIn: change.checkIn,
-        checkInTime: property?.checkInTime,
+        checkInTime: checkInTimeOf(property),
       });
     }
 
@@ -410,8 +410,8 @@ export class BookingChangesService {
       });
     }
 
-    const property: any = await this.propertyModel.findById(booking.propertyId).select('checkInTime').lean();
-    await this.payouts.reschedule(String(booking._id), change.checkIn, property?.checkInTime);
+    const property: any = await this.propertyModel.findById(booking.propertyId).select('shortTermAmenities.checkInTime').lean();
+    await this.payouts.reschedule(String(booking._id), change.checkIn, checkInTimeOf(property));
 
     const done = await this.changeModel.findByIdAndUpdate(
       change._id,

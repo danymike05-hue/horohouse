@@ -76,6 +76,30 @@ export class ChatController {
         return this.chatService.getConversations(req.user.userId, query);
     }
 
+    @Get('blocks')
+    @ApiOperation({ summary: 'People I blocked' })
+    async getBlocked(@Request() req) {
+        return this.chatService.blockedUsers(req.user.userId);
+    }
+
+    @Get('blocks/:userId')
+    @ApiOperation({ summary: 'Did I block this person?' })
+    async isBlocked(@Request() req, @Param('userId') userId: string) {
+        return { blocked: await this.chatService.hasBlocked(req.user.userId, userId) };
+    }
+
+    @Post('blocks/:userId')
+    @ApiOperation({ summary: 'Block someone: neither can write to or call the other' })
+    async block(@Request() req, @Param('userId') userId: string) {
+        return this.chatService.blockUser(req.user.userId, userId);
+    }
+
+    @Delete('blocks/:userId')
+    @ApiOperation({ summary: 'Unblock someone' })
+    async unblock(@Request() req, @Param('userId') userId: string) {
+        return this.chatService.unblockUser(req.user.userId, userId);
+    }
+
     /**
      * Get single conversation
      */

@@ -13,6 +13,7 @@ import { Model } from 'mongoose';
 import * as bcrypt from 'bcrypt';
 import * as crypto from 'crypto';
 
+import { AppleAuth } from './apple-auth';
 import { SmsService } from './sms.service';
 import { EmailService } from '../email/email.service';
 import { User, UserDocument, UserRole, UserSession, OnboardingStatus } from '../users/schemas/user.schema';
@@ -150,6 +151,7 @@ export class AuthService {
     private emailService: EmailService,
     private jwtService: JwtService,
     private configService: ConfigService,
+    private appleAuth: AppleAuth,
   ) { }
 
 
@@ -408,6 +410,7 @@ async registerWithEmail(dto: RegisterWithEmailDto, req?: any): Promise<AuthToken
           message: 'Incorrect email or password',
           // Google-only account: tell the app to offer "Continue with Google"
           ...(user && !user.password && user.googleId ? { code: 'USE_GOOGLE' } : {}),
+          ...(user && !user.password && !user.googleId && user.appleId ? { code: 'USE_APPLE' } : {}),
         });
       }
 
@@ -502,6 +505,15 @@ async registerWithEmail(dto: RegisterWithEmailDto, req?: any): Promise<AuthToken
     if (!user.profilePicture && picture) user.profilePicture = picture;
     user.emailVerified = true;
 
+    if (this.settleOnboarding(user)) isNewUser = true;
+
+    await user.save();
+    this.logger.log(`Existing user signed in via Google: ${user._id}, onboardingStatus: ${user.onboardingStatus}`);
+    return { user, isNewUser };
+  }
+
+  /** Google and Apple: does this account still have to pick a role and give a phone number? */
+  private settleOnboarding(user: UserDocument): boolean {
     // IMPORTANT: only flag onboarding-required if the user has NOT already completed it.
     // Never downgrade a COMPLETED onboarding status.
     const explicitlyCompleted =
@@ -526,12 +538,92 @@ async registerWithEmail(dto: RegisterWithEmailDto, req?: any): Promise<AuthToken
         user.onboardingStatus = OnboardingStatus.NOT_STARTED;
       }
       user.onboardingCompleted = false;
-      isNewUser = true; // Signal to clients that onboarding is required
+      return true; // Signal to clients that onboarding is required
+    }
+    return false;
+  }
+
+  /**
+   * Sign in with Apple (iPhone): find or create the account, and issue tokens.
+   * Same rules as Google: Apple's id wins, otherwise a verified email links.
+   */
+  async appleSignIn(
+    dto: { identityToken: string; nonce: string; name?: string; authorizationCode?: string },
+    req?: any,
+  ): Promise<AuthTokens> {
+    const apple = await this.appleAuth.verify(dto.identityToken, dto.nonce);
+    const email = apple.emailVerified ? apple.email : undefined;
+
+    let user: UserDocument | null = (await this.userModel.findOne({ appleId: apple.appleId }).select('+password').exec()) as any;
+    if (!user && email) user = (await this.userModel.findOne({ email: emailQuery(email) }).select('+password').exec()) as any;
+
+    if (user && !user.isActive) {
+      throw new UnauthorizedException({ message: 'This account is deactivated', code: 'ACCOUNT_DEACTIVATED' });
     }
 
-    await user.save();
-    this.logger.log(`Existing user signed in via Google: ${user._id}, onboardingStatus: ${user.onboardingStatus}`);
-    return { user, isNewUser };
+    let isNewUser = false;
+    if (!user) {
+      isNewUser = true;
+      user = (await this.userModel.create({
+        appleId: apple.appleId,
+        name: (dto.name || '').trim() || 'HoroHouse user',
+        ...(email ? { email } : {}),
+        // "google_" marks a placeholder until the sign-up steps ask for the real number
+        phoneNumber: `google_${Date.now()}_${crypto.randomBytes(3).toString('hex')}`,
+        role: UserRole.REGISTERED_USER,
+        emailVerified: !!email,
+        phoneVerified: false,
+        onboardingCompleted: false,
+        onboardingStatus: OnboardingStatus.NOT_STARTED,
+      })) as any as UserDocument;
+      this.logger.log(`New user created via Apple: ${user._id}`);
+      if (email) void this.emailService.sendWelcomeEmail(email, user.name).catch(() => undefined);
+    } else {
+      if (!user.appleId) {
+        // Linked by email: drop a password nobody proved they own (see googleSignIn)
+        if (!user.emailVerified && user.password) {
+          this.logger.warn(`Apple sign-in for unverified email account ${user._id}: removing unverified password and sessions`);
+          user.password = undefined;
+          user.sessions = [];
+        }
+        user.appleId = apple.appleId;
+        user.emailVerified = true;
+      }
+      if (this.settleOnboarding(user)) isNewUser = true;
+      await user.save();
+    }
+
+    const refresh = await this.appleAuth.refreshTokenFor(dto.authorizationCode);
+    if (refresh) await this.userModel.updateOne({ _id: user._id }, { $set: { appleRefreshToken: refresh } });
+
+    const tokens = await this.generateTokens(user, req);
+    return { ...tokens, user: user.toJSON() as any, isNewUser, onboardingStatus: user.onboardingStatus };
+  }
+
+  /** "Connect Apple" from Login & security */
+  async linkApple(userId: string, dto: { identityToken: string; nonce: string; authorizationCode?: string }): Promise<{ message: string }> {
+    const apple = await this.appleAuth.verify(dto.identityToken, dto.nonce);
+    const owner = await this.userModel.findOne({ appleId: apple.appleId }).select('_id').lean().exec();
+    if (owner && String((owner as any)._id) !== String(userId)) {
+      throw new ConflictException({ message: 'This Apple account is already used by another HoroHouse account', code: 'APPLE_IN_USE' });
+    }
+    const refresh = await this.appleAuth.refreshTokenFor(dto.authorizationCode);
+    await this.userModel.updateOne(
+      { _id: userId },
+      { $set: { appleId: apple.appleId, ...(refresh ? { appleRefreshToken: refresh } : {}) } },
+    );
+    return { message: 'Apple connected' };
+  }
+
+  async disconnectApple(userId: string): Promise<{ message: string }> {
+    const user = await this.userModel.findById(userId).select('+password +appleRefreshToken');
+    if (!user) throw new NotFoundException('User not found');
+    if (!user.password) {
+      throw new BadRequestException('Set a password before disconnecting Apple, so you can still sign in.');
+    }
+    if (user.appleRefreshToken) await this.appleAuth.revoke(user.appleRefreshToken);
+    await this.userModel.updateOne({ _id: userId }, { $unset: { appleId: 1, appleRefreshToken: 1 } });
+    return { message: 'Apple disconnected' };
   }
 
   /**
@@ -711,7 +803,7 @@ async registerWithEmail(dto: RegisterWithEmailDto, req?: any): Promise<AuthToken
    * Does an account exist for this email? Lets the app send people to "Log in"
    * instead of failing at the end of sign-up (registration reveals this anyway).
    */
-  async checkEmail(email: string): Promise<{ exists: boolean; hasPassword: boolean; hasGoogle: boolean }> {
+  async checkEmail(email: string): Promise<{ exists: boolean; hasPassword: boolean; hasGoogle: boolean; hasApple: boolean }> {
     const user = await this.userModel
       .findOne({ email: emailQuery(email) })
       .select('+password')
@@ -720,6 +812,7 @@ async registerWithEmail(dto: RegisterWithEmailDto, req?: any): Promise<AuthToken
       exists: !!user,
       hasPassword: !!(user as any)?.password,
       hasGoogle: !!(user as any)?.googleId,
+      hasApple: !!(user as any)?.appleId,
     };
   }
 

@@ -58,6 +58,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
         licenseNumber: user.licenseNumber,
         agency: user.agency,
         googleId: user.googleId,            // Social connection status
+        appleId: user.appleId,
         hasPassword: !!(user as any).password, // password is select:false; validateUser asks for it
       };
     } catch {

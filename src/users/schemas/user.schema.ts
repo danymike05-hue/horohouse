@@ -421,6 +421,22 @@ export class User {
   @Prop({ unique: true, sparse: true })
   googleId?: string;
 
+  /** "Sign in with Apple": Apple's id for this person in our app */
+  @Prop({ unique: true, sparse: true })
+  appleId?: string;
+
+  /** Only used to tell Apple when the account is deleted */
+  @Prop({ select: false })
+  appleRefreshToken?: string;
+
+  /** People this user blocked: neither can write to or call the other */
+  @Prop({ type: [{ type: Types.ObjectId, ref: 'User' }], default: [], select: false })
+  blockedUsers?: Types.ObjectId[];
+
+  /** The person deleted their account: personal data is gone, the row stays for past bookings */
+  @Prop({ type: Date })
+  deletedAt?: Date;
+
   // Never returned by queries unless asked for with .select('+password')
   @Prop({ select: false })
   password?: string;
@@ -853,6 +869,8 @@ UserSchema.set('toJSON', {
     delete ret.oauthCodeNewUser;
     delete ret.oauthLinkHash;
     delete ret.oauthLinkExpires;
+    delete ret.appleRefreshToken;
+    delete ret.blockedUsers;
     // Strip the identity document id (admins get a signed link through TrustService)
     if (ret.identityVerification?.documentPublicId) {
       delete ret.identityVerification.documentPublicId;

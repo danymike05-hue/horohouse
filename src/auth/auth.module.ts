@@ -7,6 +7,7 @@ import { MongooseModule } from '@nestjs/mongoose';
 import { AuthService } from './auth.service';
 import { AuthController } from './auth.controller';
 import { SmsService } from './sms.service';
+import { AppleAuth } from './apple-auth';
 
 // Strategies
 import { JwtStrategy } from './strategies/jwt.strategy';
@@ -60,12 +61,13 @@ import { EmailModule } from '../email/email.module';
   providers: [
     AuthService,
     SmsService,
+    AppleAuth,
     JwtStrategy,
     GoogleStrategy,
     RolesGuard,
     JwtAuthGuard,
     OnboardingGuard,
   ],
-  exports: [AuthService, SmsService, JwtAuthGuard, RolesGuard, OnboardingGuard],
+  exports: [AuthService, AppleAuth, SmsService, JwtAuthGuard, RolesGuard, OnboardingGuard],
 })
 export class AuthModule {}
