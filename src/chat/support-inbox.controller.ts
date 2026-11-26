@@ -1,4 +1,14 @@
-import { Body, Controller, Get, NotFoundException, Param, Post, Query, Req, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  NotFoundException,
+  Param,
+  Post,
+  Query,
+  Req,
+  UseGuards,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { IsString, Length } from 'class-validator';
 import { JwtAuthGuard } from '../auth/guards/jwt.auth.guard';
@@ -23,9 +33,13 @@ class SupportReplyDto {
 @ApiBearerAuth()
 @Controller('chat/support-inbox')
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles(UserRole.ADMIN) @Area('support')
+@Roles(UserRole.ADMIN)
+@Area('support')
 export class SupportInboxController {
-  constructor(private readonly chat: ChatService, private readonly gateway: ChatGateway) {}
+  constructor(
+    private readonly chat: ChatService,
+    private readonly gateway: ChatGateway,
+  ) {}
 
   private async supportId(): Promise<string> {
     const id = await this.chat.supportAccount();
@@ -37,12 +51,19 @@ export class SupportInboxController {
   @ApiOperation({ summary: 'Support chats, newest first' })
   async list(@Query('page') page?: string) {
     const id = await this.supportId();
-    return this.chat.getConversations(id, { page: Math.max(1, Number(page) || 1), limit: 30, onlySupport: true } as any);
+    return this.chat.getConversations(id, {
+      page: Math.max(1, Number(page) || 1),
+      limit: 30,
+      onlySupport: true,
+    } as any);
   }
 
   @Get(':id/messages')
   @ApiOperation({ summary: 'Messages of one support chat' })
-  async messages(@Param('id') conversationId: string, @Query() query: GetMessagesQueryDto) {
+  async messages(
+    @Param('id') conversationId: string,
+    @Query() query: GetMessagesQueryDto,
+  ) {
     const id = await this.supportId();
     await this.chat.assertSupportConversation(conversationId);
     const page = await this.chat.getMessages(conversationId, id, query);
@@ -52,10 +73,18 @@ export class SupportInboxController {
 
   @Post(':id/messages')
   @ApiOperation({ summary: 'Answer as HoroHouse support' })
-  async reply(@Param('id') conversationId: string, @Body() dto: SupportReplyDto, @Req() req: any) {
+  async reply(
+    @Param('id') conversationId: string,
+    @Body() dto: SupportReplyDto,
+    @Req() req: any,
+  ) {
     const id = await this.supportId();
     await this.chat.assertSupportConversation(conversationId);
-    const message = await this.chat.sendMessage(id, { conversationId, content: dto.content.trim(), type: MessageType.TEXT } as any);
+    const message = await this.chat.sendMessage(id, {
+      conversationId,
+      content: dto.content.trim(),
+      type: MessageType.TEXT,
+    } as any);
     await this.gateway.announce(conversationId, message, id);
     await this.chat.clearUnread(conversationId, id);
     return { message, answeredBy: String(req.user?.userId ?? '') };
