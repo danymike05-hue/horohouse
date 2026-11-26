@@ -945,6 +945,7 @@ export class BookingsService {
     const bookedRanges = bookings.map((b: any) => {
       const guestCount = (b.guests?.adults ?? 0) + (b.guests?.children ?? 0);
       return {
+        bookingId: String(b._id),
         checkIn: b.checkIn,
         checkOut: b.checkOut,
         roomId,

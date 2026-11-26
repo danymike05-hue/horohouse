@@ -1503,13 +1503,26 @@ export class PropertiesService implements OnModuleInit {
       if (to < from) {
         throw new BadRequestException(`"to" must be after or equal to "from" in range: ${r.from} → ${r.to}`);
       }
-      return { from, to, reason: r.reason };
+      // The end is exclusive (the morning after the last blocked night). Older apps sent the
+      // same day twice for one night, which covered nothing: that night stayed bookable.
+      return { from, to: to.getTime() === from.getTime() ? new Date(from.getTime() + 86_400_000) : to, reason: r.reason };
     });
 
-    const existingFromSet = new Set(
-      ((property as any).unavailableDates ?? []).map((r: any) => r.from.toISOString()),
+    // A block made here that starts the same day is made longer. It used to be skipped without
+    // a word, so a host who blocked more nights was told it worked and they stayed bookable.
+    const own = new Set<string>(
+      ((property as any).unavailableDates ?? []).filter((r: any) => r.source !== 'ical').map((r: any) => r.from.toISOString()),
     );
-    const toAdd = newRanges.filter((r) => !existingFromSet.has(r.from.toISOString()));
+    const toAdd = newRanges.filter((r) => !own.has(r.from.toISOString()));
+    for (const r of newRanges.filter((x) => own.has(x.from.toISOString()))) {
+      await this.propertyModel
+        .updateOne(
+          { _id: propertyId },
+          { $max: { 'unavailableDates.$[block].to': r.to } },
+          { arrayFilters: [{ 'block.from': r.from, 'block.source': { $ne: 'ical' } }] },
+        )
+        .exec();
+    }
 
     const updated = await this.propertyModel
       .findByIdAndUpdate(propertyId, { $push: { unavailableDates: { $each: toAdd } } }, { new: true })
@@ -1534,7 +1547,8 @@ export class PropertiesService implements OnModuleInit {
     const updated = await this.propertyModel
       .findByIdAndUpdate(
         propertyId,
-        { $pull: { unavailableDates: { from: { $in: fromDatesToRemove } } } },
+        // Nights imported from another platform are changed there
+        { $pull: { unavailableDates: { from: { $in: fromDatesToRemove }, source: { $ne: 'ical' } } } },
         { new: true },
       )
       .lean()
