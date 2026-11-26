@@ -10,6 +10,7 @@ import { Subscription, SubscriptionSchema } from '../payments/schemas/subscripti
 import { Wallet, WalletSchema } from '../payments/schemas/wallet.schema';
 import { Property, PropertySchema } from '../properties/schemas/property.schema';
 import { EssentialsModule } from '../essentials/essentials.module';
+import { BookingsModule } from '../bookings/bookings.module';
 import { PurchaseGateway } from './purchase.gateway';
 import { BookingPaymentGateway } from './booking-payment.gateway';
 import { CamerPayClient } from './camerpay.client';
@@ -35,6 +36,8 @@ import { CheckoutPayment, CheckoutPaymentSchema } from './schemas/checkout-payme
     forwardRef(() => BookingChangesModule),
     EssentialsModule,
     forwardRef(() => PaymentsModule), // must export PaymentsService (BookingsModule already relies on it)
+    // Calendar holds: hold the dates while paying, free them when a payment fails
+    forwardRef(() => BookingsModule),
   ],
   controllers: [CheckoutController],
   providers: [CheckoutService, CamerPayClient, BookingPaymentGateway, PurchaseGateway, CheckoutExpiryJob],

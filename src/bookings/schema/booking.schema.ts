@@ -231,6 +231,18 @@ export class Booking {
 
   @Prop()
   expiresAt?: Date;
+
+  /**
+   * Instant Book whose payment failed, was cancelled or timed out: the dates are free again
+   * (see calendar-hold.ts). The guest can still pay (if the dates are still free) or send
+   * the host a request instead until `expiresAt`.
+   */
+  @Prop()
+  holdReleasedAt?: Date;
+
+  /** Was an Instant Book, became a request to the host after the payment didn't go through */
+  @Prop()
+  requestedAfterPaymentFailedAt?: Date;
   // ── Cancellation ─────────────────────────────────────────────────────────
 
   @Prop({

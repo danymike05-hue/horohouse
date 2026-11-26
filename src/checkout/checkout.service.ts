@@ -156,6 +156,21 @@ export class CheckoutService implements OnModuleInit {
     }
   }
 
+  /**
+   * A booking payment failed, was cancelled or timed out. Unless another attempt for the same
+   * booking is still going, free its dates for other guests (calendar-hold.ts).
+   */
+  private async releaseBookingHold(payment: { bookingId?: any; purpose?: string }): Promise<void> {
+    if (!payment?.bookingId || (payment.purpose && payment.purpose !== 'booking')) return;
+    try {
+      const stillPaying = await this.payments.exists({ bookingId: payment.bookingId, status: 'pending' });
+      if (stillPaying) return;
+      await this.bookings.releaseHold(String(payment.bookingId));
+    } catch (e: any) {
+      this.logger.warn(`Could not release the hold of booking ${payment.bookingId}: ${e?.message}`);
+    }
+  }
+
   async createPayment(userId: string, dto: CreateCheckoutPaymentDto): Promise<CheckoutPaymentView> {
     const purpose: CheckoutPurpose = dto.purpose ?? 'booking';
     if (purpose !== 'booking') return this.createPurchasePayment(userId, dto, purpose);
@@ -163,7 +178,10 @@ export class CheckoutService implements OnModuleInit {
       throw new BadRequestException({ code: 'METHOD_NOT_ALLOWED', message: 'Ce moyen de paiement n’est pas disponible pour une réservation.' });
     }
     if (!dto.bookingId) throw new BadRequestException('bookingId requis');
-    const booking = await this.bookings.getPayableBooking(dto.bookingId, userId);
+    let booking = await this.bookings.getPayableBooking(dto.bookingId, userId);
+    // Instant Book after a failed payment: hold the dates again (409 if someone took them)
+    await this.bookings.holdForPayment(booking.id);
+    booking = await this.bookings.getPayableBooking(dto.bookingId, userId);
 
     const { phone, operator } = this.resolveMomo(dto);
 
@@ -252,6 +270,7 @@ export class CheckoutService implements OnModuleInit {
         { _id: payment._id, status: 'pending' },
         { $set: { status: 'failed', failedAt: new Date(), failureReason: reason } },
       );
+      await this.releaseBookingHold(payment);
       throw this.toHttpError(err, dto.method === 'mobile_money' ? operator : undefined);
     }
   }
@@ -437,6 +456,7 @@ export class CheckoutService implements OnModuleInit {
       { $set: { status: 'failed', failedAt: new Date(), failureReason: 'cancelled_by_user' } },
       { new: true },
     );
+    await this.releaseBookingHold(p);
     // If the customer still approves the push afterwards, the webhook will mark it paid.
     return this.toView(updated ?? p);
   }
@@ -517,6 +537,7 @@ export class CheckoutService implements OnModuleInit {
           { _id: payment._id, status: 'pending' },
           { $set: { status: 'failed', failedAt: now, failureReason: `provider_${tx.status}`, providerStatus: tx.status } },
         );
+        await this.releaseBookingHold(payment);
         return;
       case 'refunded':
         await this.payments.updateOne(
@@ -679,6 +700,7 @@ export class CheckoutService implements OnModuleInit {
         { $set: { status: 'expired', expiredAt: new Date(), failureReason: 'expired' } },
       );
       expired += res.modifiedCount;
+      if (res.modifiedCount) await this.releaseBookingHold(p);
     }
     if (expired) this.logger.log(`Expired ${expired} unconfirmed payment(s)`);
     return expired;

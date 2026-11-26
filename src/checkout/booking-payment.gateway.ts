@@ -7,6 +7,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { isValidObjectId, Model, Types } from 'mongoose';
@@ -20,6 +21,7 @@ import {
   TransactionType,
 } from '../payments/schemas/transaction.schema';
 import { PaymentsService } from '../payments/services/payments.service';
+import { BookingsService } from '../bookings/bookings.service';
 import { User, UserDocument } from '../users/schemas/user.schema';
 import { normalizeCmPhone } from './momo.util';
 import type { CheckoutPaymentDocument } from './schemas/checkout-payment.schema';
@@ -55,7 +57,19 @@ export class BookingPaymentGateway {
     @InjectModel(Transaction.name) private readonly transactions: Model<TransactionDocument>,
     @InjectModel(User.name) private readonly users: Model<UserDocument>,
     @Inject(forwardRef(() => PaymentsService)) private readonly paymentsService: PaymentsService,
+    // Calendar holds (calendar-hold.ts): hold while paying, free on failure
+    @Optional() @Inject(forwardRef(() => BookingsService)) private readonly bookingsService?: BookingsService,
   ) {}
+
+  /** A payment is starting: make sure an Instant Book holds its dates (again, after a failure) */
+  async holdForPayment(bookingId: string): Promise<void> {
+    await this.bookingsService?.holdForPayment(bookingId);
+  }
+
+  /** The payment didn't go through: the dates are free for other guests again */
+  async releaseHold(bookingId: string): Promise<void> {
+    await this.bookingsService?.releaseHoldAfterFailedPayment(bookingId);
+  }
 
   async getPayableBooking(bookingId: string, userId: string): Promise<PayableBooking> {
     if (!isValidObjectId(bookingId)) throw new NotFoundException('Réservation introuvable.');
@@ -158,6 +172,9 @@ export class BookingPaymentGateway {
     await this.bookings.updateOne({ _id: booking._id, paymentStatus: PaymentStatus.PAID }, { $unset: { expiresAt: 1 } });
 
     this.logger.log(`Booking ${booking._id} paid via checkout ${payment.id} (tx ${tx._id})`);
+    // Requests for the same dates can't happen any more: decline them now
+    await this.bookingsService?.declineOverlappingRequests(String(booking._id)).catch((e) =>
+      this.logger.warn(`Could not decline overlapping requests for ${booking._id}: ${e?.message}`));
     return 'confirmed';
   }
 }

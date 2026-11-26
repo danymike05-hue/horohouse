@@ -107,6 +107,20 @@ export class BookingsController {
     return this.bookingsService.cancelBooking(id, dto, req.user);
   }
 
+  @Post(':id/request-instead')
+  @Roles(UserRole.REGISTERED_USER, UserRole.STUDENT, UserRole.GUEST, UserRole.HOST, UserRole.AGENT, UserRole.LANDLORD, UserRole.ADMIN)
+  @ApiBearerAuth()
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'The payment didn’t go through: send this Instant Book to the host as a request instead' })
+  @ApiParam({ name: 'id', description: 'Booking ID' })
+  async requestInstead(
+    @Param('id') id: string,
+    @Body() body: { note?: string },
+    @Req() req: FastifyRequest & { user: User },
+  ) {
+    return this.bookingsService.requestInstead(id, req.user, typeof body?.note === 'string' ? body.note : undefined);
+  }
+
   // ════════════════════════════════════════════════════════════════════════════
   // HOST — MANAGE INCOMING RESERVATIONS
   // ════════════════════════════════════════════════════════════════════════════

@@ -50,6 +50,7 @@ import {
 } from './dto/property.dto';
 import { escapeRegex } from '../common/regex.util';
 import { NearbyService, NearbyPlace, NEARBY_RADIUS } from '../geocoding/nearby.service';
+import { calendarHoldFilter } from '../bookings/calendar-hold';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -2172,14 +2173,14 @@ export class PropertiesService implements OnModuleInit {
       return await bookingModel
         .find({
           ...(propertyIds ? { propertyId: { $in: propertyIds } } : {}),
-          status: { $in: ['confirmed', 'pending'] },
+          status: { $in: ['confirmed', 'pending', 'completed'] },
           checkIn: { $lt: latest },
           checkOut: { $gt: earliest },
           $and: [
             // Hotel room bookings: one booked room doesn't make the whole hotel unavailable.
             { $or: [{ roomId: { $exists: false } }, { roomId: null }] },
-            // Same rule as BookingsService.activeHoldFilter: an expired unpaid hold frees the dates.
-            { $or: [{ paymentStatus: 'paid' }, { expiresAt: { $exists: false } }, { expiresAt: null }, { expiresAt: { $gt: now } }] },
+            // The one rule (calendar-hold.ts): requests and failed payments don't hold dates.
+            calendarHoldFilter(now),
           ],
         })
         .select('propertyId checkIn checkOut')

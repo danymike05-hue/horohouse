@@ -34,14 +34,7 @@ const ICAL_MAX_BYTES = 5 * 1024 * 1024;
  * deadline, or its deadline hasn't passed. Expired unpaid holds stop blocking the room.
  */
 function activeHoldFilter(now = new Date()) {
-    return {
-        $or: [
-            { paymentStatus: PaymentStatus.PAID },
-            { expiresAt: { $exists: false } },
-            { expiresAt: null },
-            { expiresAt: { $gt: now } },
-        ],
-    };
+    return calendarHoldFilter(now);
 }
 
 /** Units of this room type (e.g. 10 "Standard" rooms). Older rooms without the field = 1. */
@@ -69,6 +62,7 @@ export interface RoomAvailabilityResult {
 
 import { CoHostsService } from '../co-hosts/co-hosts.service';
 import { parseLegacyRooms } from './legacy-rooms.util';
+import { calendarHoldFilter } from '../bookings/calendar-hold';
 
 @Injectable()
 export class RoomsService {

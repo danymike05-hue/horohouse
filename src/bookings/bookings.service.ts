@@ -31,6 +31,7 @@ import {
   BookingQueryDto,
 } from './dto/booking.dto';
 import { HostStatsDto } from './dto/host-stats.dto';
+import { calendarHoldFilter, INSTANT_HOLD_MINUTES, RETRY_WINDOW_MINUTES } from './calendar-hold';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -48,7 +49,7 @@ const SERVICE_FEE_RATE = 0;
 const MAX_OPEN_HOLDS_PER_GUEST = 3;
 
 /** Instant-book: the guest must pay within this window or the dates are released. */
-const INSTANT_BOOK_PAYMENT_MINUTES = 30;
+const INSTANT_BOOK_PAYMENT_MINUTES = INSTANT_HOLD_MINUTES;
 
 /** Request-to-book: the host must answer within this window or the request expires. */
 const REQUEST_RESPONSE_HOURS = 48;
@@ -62,14 +63,8 @@ const PAYMENT_AFTER_ACCEPT_HOURS = 24;
  * even before the expiry job cancels them.
  */
 function activeHoldFilter(now = new Date()) {
-  return {
-    $or: [
-      { paymentStatus: PaymentStatus.PAID },
-      { expiresAt: { $exists: false } },
-      { expiresAt: null },
-      { expiresAt: { $gt: now } },
-    ],
-  };
+  // Requests the host hasn't answered no longer block; a failed payment releases its hold.
+  return calendarHoldFilter(now);
 }
 
 // ─── Interfaces ───────────────────────────────────────────────────────────────
@@ -362,21 +357,9 @@ export class BookingsService {
         // booking and notifies the host. (Telling the guest "confirmed" here was premature.)
       } else {
         // Host & Guest: booking request submitted (non-instant)
-        await this.notificationsService.notifyBookingRequest(hostIdStr ?? '', {
-          guestId: guestIdStr,
-          bookingId: bookingIdStr,
-          propertyId: dto.propertyId,
-          propertyTitle,
-          guestName: guest.name,
-          checkIn: fmt(checkIn),
-          checkOut: fmt(checkOut),
-        });
-        await this.coHosts.notifyCoHosts(dto.propertyId, {
-          title: 'New booking request',
-          message: `${guest.name} asked to stay at ${propertyTitle} from ${fmt(checkIn)} to ${fmt(checkOut)}.`,
-          fr: { title: 'Nouvelle demande de réservation', message: `${guest.name} souhaite séjourner à ${propertyTitle} du ${fmt(checkIn)} au ${fmt(checkOut)}.` },
-          link: `/host/booking/${bookingIdStr}`,
-          metadata: { bookingId: bookingIdStr, propertyId: dto.propertyId },
+        await this.notifyNewRequest({
+          hostId: hostIdStr ?? '', guestId: guestIdStr, guestName: guest.name, bookingId: bookingIdStr,
+          propertyId: dto.propertyId, propertyTitle, checkIn, checkOut,
         });
       }
     } catch (notifErr: any) {
@@ -387,6 +370,160 @@ export class BookingsService {
     }
 
     return saved;
+  }
+
+  /** Tell the host (and co-hosts) about a new request */
+  private async notifyNewRequest(p: {
+    hostId: string; guestId: string; guestName?: string; bookingId: string; propertyId: string;
+    propertyTitle: string; checkIn: Date; checkOut: Date;
+  }): Promise<void> {
+    const fmt = (d: Date) => new Date(d).toISOString().split('T')[0];
+    await this.notificationsService.notifyBookingRequest(p.hostId, {
+      guestId: p.guestId,
+      bookingId: p.bookingId,
+      propertyId: p.propertyId,
+      propertyTitle: p.propertyTitle,
+      guestName: p.guestName ?? 'A guest',
+      checkIn: fmt(p.checkIn),
+      checkOut: fmt(p.checkOut),
+    });
+    await this.coHosts.notifyCoHosts(p.propertyId, {
+      title: 'New booking request',
+      message: `${p.guestName ?? 'A guest'} asked to stay at ${p.propertyTitle} from ${fmt(p.checkIn)} to ${fmt(p.checkOut)}.`,
+      fr: { title: 'Nouvelle demande de réservation', message: `${p.guestName ?? 'Un voyageur'} souhaite séjourner à ${p.propertyTitle} du ${fmt(p.checkIn)} au ${fmt(p.checkOut)}.` },
+      link: `/host/booking/${p.bookingId}`,
+      metadata: { bookingId: p.bookingId, propertyId: p.propertyId },
+    });
+  }
+
+  /** Is anything else holding these dates (a paid stay, an accepted request, a live Instant Book hold)? */
+  private async assertStillFree(booking: any): Promise<void> {
+    const id = String(booking._id);
+    if (booking.roomId) {
+      await this.roomsService.assertRoomDatesAvailable(String(booking.roomId), booking.checkIn, booking.checkOut, id);
+    } else {
+      await this.assertDatesAvailable(String(booking.propertyId), booking.checkIn, booking.checkOut, id);
+    }
+  }
+
+  /**
+   * A payment attempt for an Instant Book is starting. If its hold was released (a payment
+   * failed) or is about to end, check the dates are still free and hold them again.
+   * Called by checkout before asking CamerPay for the money.
+   */
+  async holdForPayment(bookingId: string): Promise<void> {
+    const b: any = await this.bookingModel.findById(bookingId).lean();
+    if (!b || b.status !== BookingStatus.PENDING || !b.isInstantBook || b.paymentStatus === PaymentStatus.PAID) return;
+    const soon = Date.now() + 5 * 60_000;
+    if (!b.holdReleasedAt && b.expiresAt && new Date(b.expiresAt).getTime() > soon) return;
+    await this.assertStillFree(b);
+    await this.bookingModel.updateOne(
+      { _id: b._id, status: BookingStatus.PENDING, paymentStatus: { $ne: PaymentStatus.PAID } },
+      { $unset: { holdReleasedAt: 1 }, $set: { expiresAt: new Date(Date.now() + INSTANT_HOLD_MINUTES * 60_000) } },
+    );
+  }
+
+  /**
+   * The payment didn't go through (failed, cancelled or timed out): free the dates at once.
+   * The booking stays open a little longer so the guest can try again or send a request.
+   */
+  async releaseHoldAfterFailedPayment(bookingId: string): Promise<void> {
+    const until = new Date(Date.now() + RETRY_WINDOW_MINUTES * 60_000);
+    const b: any = await this.bookingModel.findById(bookingId).select('expiresAt').lean();
+    if (!b) return;
+    const expiresAt = b.expiresAt && new Date(b.expiresAt) > until ? b.expiresAt : until;
+    await this.bookingModel.updateOne(
+      { _id: bookingId, status: BookingStatus.PENDING, isInstantBook: true, paymentStatus: { $ne: PaymentStatus.PAID } },
+      { $set: { holdReleasedAt: new Date(), expiresAt } },
+    );
+  }
+
+  /**
+   * The guest couldn't pay for an Instant Book: send it to the host as a request instead.
+   * The host accepts or declines; once accepted, the guest pays within 24 hours (as for any
+   * request). Like any request, it doesn't block the dates until the host accepts.
+   */
+  async requestInstead(bookingId: string, user: User, note?: string): Promise<Booking> {
+    const booking: any = await this.findBookingOrThrow(bookingId);
+    if (String(booking.guestId?._id ?? booking.guestId) !== String((user as any)._id ?? (user as any).userId)) {
+      throw new ForbiddenException('Only the guest of this booking can do this');
+    }
+    if (booking.paymentStatus === PaymentStatus.PAID) throw new BadRequestException('This booking is already paid.');
+    if (booking.status !== BookingStatus.PENDING || !booking.isInstantBook) {
+      throw new BadRequestException('Only an unpaid Instant Book can be sent to the host as a request.');
+    }
+    if (booking.expiresAt && new Date(booking.expiresAt).getTime() <= Date.now()) {
+      throw new BadRequestException('This booking has expired. Start a new one.');
+    }
+    const now = new Date();
+    const guestNote = typeof note === 'string' && note.trim() ? note.trim().slice(0, 1000) : booking.guestNote;
+    const updated = await this.bookingModel.findOneAndUpdate(
+      { _id: booking._id, status: BookingStatus.PENDING, isInstantBook: true, paymentStatus: { $ne: PaymentStatus.PAID } },
+      {
+        $set: {
+          isInstantBook: false,
+          holdReleasedAt: booking.holdReleasedAt ?? now,
+          requestedAfterPaymentFailedAt: now,
+          expiresAt: new Date(now.getTime() + REQUEST_RESPONSE_HOURS * 60 * 60 * 1000),
+          ...(guestNote ? { guestNote } : {}),
+        },
+      },
+      { new: true },
+    ).exec();
+    if (!updated) throw new ConflictException('This booking has just changed. Refresh to see it.');
+
+    try {
+      const property: any = await this.propertyModel.findById(booking.propertyId).select('title ownerId agentId').lean();
+      const hostId = String(booking.hostId?._id ?? booking.hostId ?? property?.ownerId ?? property?.agentId ?? '');
+      await this.notifyNewRequest({
+        hostId, guestId: String((user as any)._id ?? (user as any).userId), guestName: (user as any).name,
+        bookingId: String(booking._id), propertyId: String(booking.propertyId?._id ?? booking.propertyId),
+        propertyTitle: property?.title ?? 'your property', checkIn: booking.checkIn, checkOut: booking.checkOut,
+      });
+    } catch (e: any) {
+      this.logger.warn(`requestInstead: could not notify the host for ${bookingId}: ${e?.message}`);
+    }
+    this.logger.log(`Booking ${bookingId}: payment didn't go through, sent to the host as a request`);
+    return updated!;
+  }
+
+  /**
+   * A stay was just paid: requests for the same dates can't happen any more. Decline them
+   * now (as Airbnb does) so those guests can look elsewhere instead of waiting 48 hours.
+   * Hotel rooms are left alone: a room type can have several units.
+   */
+  async declineOverlappingRequests(paidBookingId: string): Promise<number> {
+    const paid: any = await this.bookingModel.findById(paidBookingId).select('propertyId roomId checkIn checkOut').lean();
+    if (!paid || paid.roomId) return 0;
+    const others: any[] = await this.bookingModel.find({
+      _id: { $ne: paid._id },
+      propertyId: paid.propertyId,
+      $or: [{ roomId: { $exists: false } }, { roomId: null }],
+      status: BookingStatus.PENDING,
+      isInstantBook: { $ne: true },
+      paymentStatus: { $ne: PaymentStatus.PAID },
+      checkIn: { $lt: paid.checkOut },
+      checkOut: { $gt: paid.checkIn },
+    }).select('_id guestId propertyId checkIn checkOut priceBreakdown.promoCode').lean().exec();
+    if (!others.length) return 0;
+    const property: any = await this.propertyModel.findById(paid.propertyId).select('title').lean();
+    const fmt = (d: Date) => new Date(d).toISOString().split('T')[0];
+    let declined = 0;
+    for (const o of others) {
+      const res = await this.bookingModel.updateOne(
+        { _id: o._id, status: BookingStatus.PENDING, paymentStatus: { $ne: PaymentStatus.PAID } },
+        { $set: { status: BookingStatus.REJECTED, cancellation: { cancelledBy: CancelledBy.SYSTEM, cancelledAt: new Date(), reason: 'dates_no_longer_available', refundAmount: 0 } } },
+      );
+      if (!res.modifiedCount) continue;
+      declined++;
+      await this.promoCodes?.giveBack(o.priceBreakdown?.promoCode).catch(() => undefined);
+      await this.notificationsService.notifyBookingRejected(String(o.guestId), {
+        bookingId: String(o._id), propertyId: String(o.propertyId), propertyTitle: property?.title ?? 'the listing',
+        hostName: 'HoroHouse', checkIn: fmt(o.checkIn), checkOut: fmt(o.checkOut),
+      }).catch(() => undefined);
+    }
+    if (declined) this.logger.log(`Declined ${declined} request(s) for dates now paid (booking ${paidBookingId})`);
+    return declined;
   }
 
   /**
