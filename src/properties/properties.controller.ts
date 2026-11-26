@@ -208,6 +208,9 @@ export class PropertiesController {
     @Req() req: FastifyRequest & { user?: User },
     @Query('radius') radius?: string,
     @Query('limit') limit?: string,
+    @Query('listingType') listingType?: string,
+    @Query('propertyType') propertyType?: string,
+    @Query('isStudentFriendly') isStudentFriendly?: string,
   ) {
     const lat = parseFloat(latitude);
     const lng = parseFloat(longitude);
@@ -218,7 +221,9 @@ export class PropertiesController {
       throw new BadRequestException('Valid latitude and longitude are required');
     }
 
-    return this.propertiesService.findNearby(lat, lng, radiusKm, maxResults, req?.user);
+    return this.propertiesService.findNearby(lat, lng, radiusKm, maxResults, req?.user, {
+      listingType, propertyType, isStudentFriendly: isStudentFriendly === 'true',
+    });
   }
 
   @Get('search')
@@ -261,9 +266,16 @@ export class PropertiesController {
   @ApiOperation({ summary: 'Get most viewed properties' })
   @ApiQuery({ name: 'limit', required: false, type: Number, description: 'Maximum results (default: 10)' })
   @ApiResponse({ status: 200, description: 'Most viewed properties' })
-  async getMostViewed(@Query('limit') limit?: string) {
+  async getMostViewed(
+    @Query('limit') limit?: string,
+    @Query('listingType') listingType?: string,
+    @Query('propertyType') propertyType?: string,
+    @Query('isStudentFriendly') isStudentFriendly?: string,
+  ) {
     const maxResults = limit ? parseInt(limit) : 10;
-    return this.propertiesService.getMostViewed(maxResults);
+    return this.propertiesService.getMostViewed(maxResults, {
+      listingType, propertyType, isStudentFriendly: isStudentFriendly === 'true',
+    });
   }
 
   @Get('recent')
@@ -420,6 +432,16 @@ export class PropertiesController {
   @ApiResponse({ status: 404, description: 'Not found or not a short-term listing' })
   async getShortTermById(@Param('id') id: string) {
     return this.propertiesService.getShortTermById(id);
+  }
+
+  // ══ Places near a listing (PUBLIC) ═══════════════════════════════════════════
+
+  @Get(':id/nearby')
+  @Public()
+  @ApiOperation({ summary: 'Churches, hospitals, restaurants, schools… near a listing (from OpenStreetMap)' })
+  @ApiParam({ name: 'id', description: 'Property ID' })
+  async getNearby(@Param('id') id: string) {
+    return this.propertiesService.getNearby(id);
   }
 
   // ══ 3. Get blocked dates for a property (PUBLIC) ══════════════════════════════

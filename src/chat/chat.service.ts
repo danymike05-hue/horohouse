@@ -83,7 +83,34 @@ export class ChatService implements OnModuleInit {
         const supportId = await this.supportAccountId();
         if (!supportId) throw new NotFoundException('Support chat is not available right now');
         if (supportId === String(userId)) throw new BadRequestException('You are the support account');
-        return this.createConversation(userId, { participantId: supportId } as CreateConversationDto);
+
+        const me = new Types.ObjectId(userId);
+        const them = new Types.ObjectId(supportId);
+        const populate = (q: any) => q
+            .populate('participants.userId', 'name profilePicture email phoneNumber')
+            .populate('propertyId', 'title images price address city');
+
+        const existing = await populate(this.conversationModel.findOne({ 'participants.userId': { $all: [me, them] }, isSupport: true })).exec();
+        if (existing) return existing;
+
+        // A support chat from before support chats were marked: the one with no listing
+        const older = await this.conversationModel.findOneAndUpdate(
+            { 'participants.userId': { $all: [me, them] }, propertyId: { $exists: false }, isSupport: { $ne: true } },
+            { $set: { isSupport: true } },
+            { new: true },
+        );
+        if (older) return populate(this.conversationModel.findById(older._id)).exec();
+
+        const conversation = await this.conversationModel.create({
+            participants: [
+                { userId: me, unreadCount: 0, joinedAt: new Date() },
+                { userId: them, unreadCount: 0, joinedAt: new Date() },
+            ],
+            isSupport: true,
+            messagesCount: 0,
+        });
+        this.logger.log(`Created support conversation: ${conversation._id}`);
+        return conversation;
     }
 
     async createConversation(
@@ -253,6 +280,7 @@ export class ChatService implements OnModuleInit {
                 .findOne({
                     'participants.userId': { $all: [u1, u2] },
                     propertyId: new Types.ObjectId(propertyId),
+                    isSupport: { $ne: true },
                 })
                 .populate('participants.userId', 'name profilePicture email phoneNumber')
                 .populate('propertyId', 'title images price address city')
@@ -262,9 +290,11 @@ export class ChatService implements OnModuleInit {
         }
 
         // 2. Fall back to finding any existing direct conversation between these 2 users
+        //    (not the support chat: that one is only for help from HoroHouse)
         return this.conversationModel
             .findOne({
                 'participants.userId': { $all: [u1, u2] },
+                isSupport: { $ne: true },
             })
             .populate('participants.userId', 'name profilePicture email phoneNumber')
             .populate('propertyId', 'title images price address city')

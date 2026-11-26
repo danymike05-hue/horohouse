@@ -135,6 +135,7 @@ export class ChatController {
         @Param('id') id: string,
     ) {
         await this.chatService.deleteConversation(id, req.user.userId);
+        this.chatGateway.conversationDeleted(String(req.user.userId), id);
         return { message: 'Conversation deleted successfully' };
     }
 

@@ -73,6 +73,10 @@ export class Conversation {
   @Prop({ type: Object })
   metadata?: Record<string, any>;
 
+  /** A chat with HoroHouse support: kept apart from chats about listings */
+  @Prop({ default: false })
+  isSupport: boolean;
+
   createdAt: Date;
   updatedAt: Date;
 }
@@ -84,6 +88,8 @@ ConversationSchema.index({ 'participants.userId': 1 });
 ConversationSchema.index({ propertyId: 1 });
 ConversationSchema.index({ 'lastMessage.createdAt': -1 });
 ConversationSchema.index({ isArchived: 1, 'lastMessage.createdAt': -1 });
+
+ConversationSchema.index({ 'participants.userId': 1, isSupport: 1 });
 
 // Compound index for finding conversations between two users
 ConversationSchema.index({ 

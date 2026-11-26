@@ -49,6 +49,7 @@ import {
   AddExternalCalendarDto,
 } from './dto/property.dto';
 import { escapeRegex } from '../common/regex.util';
+import { NearbyService, NearbyPlace, NEARBY_RADIUS } from '../geocoding/nearby.service';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -103,6 +104,18 @@ interface CacheEntry<T> {
 
 // ─── Service ──────────────────────────────────────────────────────────────────
 
+/** Which listings a short list (nearby, most viewed) is made of */
+export interface ListingKindFilter { listingType?: string; propertyType?: string; isStudentFriendly?: boolean }
+
+/** Only known values reach the query: anything else leaves the list unfiltered */
+export function listingKindQuery(kind: ListingKindFilter): Record<string, unknown> {
+  return {
+    ...(Object.values(ListingType).includes(kind.listingType as ListingType) ? { listingType: kind.listingType } : {}),
+    ...(Object.values(PropertyType).includes(kind.propertyType as PropertyType) ? { type: kind.propertyType } : {}),
+    ...(kind.isStudentFriendly ? { isStudentFriendly: true } : {}),
+  };
+}
+
 @Injectable()
 export class PropertiesService implements OnModuleInit {
   private readonly logger = new Logger(PropertiesService.name);
@@ -122,7 +135,37 @@ export class PropertiesService implements OnModuleInit {
     private coHosts: CoHostsService,
     @Optional() private readonly hostPlans?: HostPlansService,
     @Optional() private readonly hostInsights?: HostInsightsService,
+    @Optional() private readonly nearby?: NearbyService,
   ) { }
+
+  /**
+   * Churches, mosques, hospitals, restaurants, schools… near a listing.
+   * Kept on the listing for a month (or until it moves), so OpenStreetMap is asked rarely.
+   */
+  async getNearby(id: string): Promise<{ radius: number; places: NearbyPlace[] }> {
+    if (!Types.ObjectId.isValid(id)) throw new NotFoundException('Property not found');
+    const p: any = await this.propertyModel.findById(id).select('+nearbyPlaces latitude longitude location isActive').lean().exec();
+    if (!p) throw new NotFoundException('Property not found');
+    const lat = Number(p.latitude ?? p.location?.coordinates?.[1]);
+    const lon = Number(p.longitude ?? p.location?.coordinates?.[0]);
+    if (!Number.isFinite(lat) || !Number.isFinite(lon) || (lat === 0 && lon === 0)) return { radius: NEARBY_RADIUS, places: [] };
+
+    const cached = p.nearbyPlaces;
+    const fresh = cached?.fetchedAt && Date.now() - new Date(cached.fetchedAt).getTime() < 30 * 24 * 60 * 60 * 1000;
+    const samePlace = cached && Math.abs(cached.lat - lat) < 0.0005 && Math.abs(cached.lon - lon) < 0.0005;
+    if (fresh && samePlace) return { radius: NEARBY_RADIUS, places: cached.places ?? [] };
+    if (!this.nearby) return { radius: NEARBY_RADIUS, places: cached?.places ?? [] };
+
+    try {
+      const places = await this.nearby.around(lat, lon);
+      await this.propertyModel.updateOne({ _id: id }, { $set: { nearbyPlaces: { fetchedAt: new Date(), lat, lon, places } } }).exec();
+      return { radius: NEARBY_RADIUS, places };
+    } catch (err) {
+      // OpenStreetMap busy: an older list is better than none
+      if (cached?.places?.length && samePlace) return { radius: NEARBY_RADIUS, places: cached.places };
+      throw err;
+    }
+  }
 
   // ── Ensure DB indexes exist on startup ────────────────────────────────────
 
@@ -358,6 +401,7 @@ export class PropertiesService implements OnModuleInit {
     radiusKm = 5,
     limit = 10,
     user?: User,
+    kind: ListingKindFilter = {},
   ): Promise<Property[]> {
     try {
       if (!this.isValidCoordinate(latitude, longitude)) {
@@ -375,6 +419,7 @@ export class PropertiesService implements OnModuleInit {
           isActive: true,
           approvalStatus: ApprovalStatus.APPROVED,
           availability: PropertyStatus.ACTIVE,
+          ...listingKindQuery(kind),
         })
         .select(this.listingProjection())
         .populate('ownerId', 'name email phoneNumber')
@@ -841,13 +886,14 @@ export class PropertiesService implements OnModuleInit {
   // AGGREGATES / CONVENIENCE ENDPOINTS  (all cached)
   // ════════════════════════════════════════════════════════════════════════════
 
-  async getMostViewed(limit = 10): Promise<Property[]> {
-    const key = `most_viewed_${limit}`;
+  async getMostViewed(limit = 10, kind: ListingKindFilter = {}): Promise<Property[]> {
+    const byKind = listingKindQuery(kind);
+    const key = `most_viewed_${limit}_${JSON.stringify(byKind)}`;
     const cached = this.cacheGet<Property[]>(key);
     if (cached) return cached;
 
     const result = await this.propertyModel
-      .find({ isActive: true, approvalStatus: ApprovalStatus.APPROVED, availability: PropertyStatus.ACTIVE })
+      .find({ isActive: true, approvalStatus: ApprovalStatus.APPROVED, availability: PropertyStatus.ACTIVE, ...byKind })
       .select(this.listingProjection())
       .sort({ viewsCount: -1 })
       .limit(limit)
@@ -1920,6 +1966,8 @@ export class PropertiesService implements OnModuleInit {
       isInstantBookable: 1,
       cancellationPolicy: 1,
       isFeatured: 1,
+      isVerified: 1,
+      isStudentFriendly: 1,
       viewsCount: 1,
       // Set up by the team and waiting for its host (the host's Homes tab shows a card)
       awaitingHostConfirmation: 1,

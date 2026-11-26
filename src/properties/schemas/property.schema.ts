@@ -677,6 +677,10 @@ export class Property {
   @Prop({ default: false })
   isActive: boolean;
 
+  /** Places near the listing, from OpenStreetMap (refreshed now and then; not sent with the listing) */
+  @Prop({ type: Object, select: false })
+  nearbyPlaces?: { fetchedAt: Date; lat: number; lon: number; places: any[] };
+
   // ── Ratings ───────────────────────────────────────────────────────────────
 
   @Prop({ default: 0 })

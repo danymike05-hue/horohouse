@@ -20,6 +20,7 @@ import { PropertyCalendarScheduler } from './property-calendar.scheduler';
 import { EmailModule } from '../email/email.module';
 import { HostOnboardingService } from './host-onboarding.service';
 import { HostOnboardingController } from './host-onboarding.controller';
+import { GeocodingModule } from '../geocoding/geocoding.module';
 
 @Module({
   imports: [
@@ -38,6 +39,8 @@ import { HostOnboardingController } from './host-onboarding.controller';
     forwardRef(() => UsersModule),
     // Emails to hosts whose listing the team set up
     EmailModule,
+    // Places near a listing (churches, hospitals, restaurants…)
+    GeocodingModule,
   ],
   controllers: [PropertiesController, InquiryController, ComparisonController, HostOnboardingController],
   providers: [PropertiesService, InquiryService, ComparisonService, WatermarkService, PropertyCalendarScheduler, HostOnboardingService],

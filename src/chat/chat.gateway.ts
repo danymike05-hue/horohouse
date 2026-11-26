@@ -534,6 +534,11 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     }
   }
 
+  /** A chat deleted on one device: drop it from the inbox on the person's other devices too */
+  conversationDeleted(userId: string, conversationId: string) {
+    this.emitToUser(String(userId), 'conversation:deleted', { conversationId });
+  }
+
   /** An edited or deleted message: to the open conversation and to each person's inbox */
   async broadcastMessageChange(conversationId: string, event: 'message:updated' | 'message:deleted', data: any) {
     this.server.to(`conversation:${conversationId}`).emit(event, data);
