@@ -199,6 +199,13 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     }
   }
 
+  /** Left the screen of this conversation: its messages are announced like any other again */
+  @SubscribeMessage('conversation:leave')
+  handleLeaveConversation(@ConnectedSocket() client: Socket, @MessageBody() data: { conversationId: string }) {
+    client.leave(`conversation:${String(data?.conversationId ?? '')}`);
+    return { success: true };
+  }
+
   @SubscribeMessage('message:send')
   async handleSendMessage(
     @ConnectedSocket() client: Socket,
@@ -214,11 +221,6 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
         type: data.type || 'text',
       });
 
-      // Broadcast to everyone in the room (including sender via message:new)
-      this.server.to(`conversation:${data.conversationId}`).emit('message:new', {
-        message,
-      });
-
       // FIX: Echo tempId back to sender so the optimistic message can be replaced
       // by the real server message. Without tempId the frontend can't match them.
       client.emit('message:sent', {
@@ -228,39 +230,7 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
         },
       });
 
-      // ── Push notification for offline / backgrounded recipient ────────────────
-      // Only send if the recipient has no active WebSocket connections, so we
-      // don't double-notify users who are already in the conversation.
-      const recipientId = (message as any).recipientId?.toString?.();
-      if (recipientId && !this.userSockets.has(recipientId)) {
-        const sender = await this.userModel
-          .findById(userId)
-          .select('name')
-          .lean()
-          .catch(() => null);
-
-        const senderName: string = (sender as any)?.name ?? 'Someone';
-        const messageContent: string =
-          data.type === 'image'
-            ? `${senderName} sent you a photo`
-            : data.type === 'audio'
-            ? `${senderName} sent you a voice message`
-            : `${senderName}: ${String(data.content ?? '').slice(0, 100)}`;
-
-        this.pushNotificationsService
-          .sendToUser(recipientId, {
-            title: '💬 New message',
-            body: messageContent,
-            data: {
-              type: 'new_message',
-              conversationId: data.conversationId,
-              route: `/messages/${data.conversationId}`,
-            },
-          })
-          .catch((err: any) =>
-            this.logger.warn(`⚠️ Push notification failed for user ${recipientId}: ${err?.message}`),
-          );
-      }
+      await this.announce(String(data.conversationId), message, String(userId));
 
       return { success: true, message };
     } catch (error) {
@@ -574,7 +544,49 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     }
   }
 
-  broadcastNewMessage(conversationId: string, message: any) {
-    this.server.to(`conversation:${conversationId}`).emit('message:new', { message });
+  /**
+   * A new message: to the people who have this conversation on screen, to the inbox of the other
+   * participants, and as a push to whoever isn't looking at it.
+   *
+   * The push used to go only to people with no connection at all, and the live event only to the
+   * open conversation. The app is always connected while it is open, so someone elsewhere in the
+   * app got neither. Photos (sent over REST) never sent a push to anyone.
+   */
+  async announce(conversationId: string, message: any, senderId: string, { push = true } = {}): Promise<void> {
+    const room = `conversation:${conversationId}`;
+    this.server.to(room).emit('message:new', { message });
+    try {
+      const others = (await this.chatService.participantIds(conversationId)).filter((id) => id !== senderId);
+      const looking = new Set(
+        (await this.server.in(room).fetchSockets()).map((s: any) => String(s.data?.user?.userId ?? s.data?.user?.sub ?? '')),
+      );
+      const away = others.filter((id) => !looking.has(id));
+      for (const id of others) this.emitToUser(id, 'inbox:message', { conversationId, message });
+      if (!away.length || !push) return;
+
+      const sender: any = await this.userModel.findById(senderId).select('name').lean().catch(() => null);
+      for (const id of away) {
+        const to: any = await this.userModel.findById(id).select('appLanguage').lean().catch(() => null);
+        const fr = to?.appLanguage === 'fr';
+        const name: string = sender?.name ?? (fr ? 'Quelqu’un' : 'Someone');
+        const type = String(message?.type ?? 'text');
+        const body =
+          type === 'image' ? (fr ? 'vous a envoyé une photo' : 'sent you a photo')
+          : type === 'audio' ? (fr ? 'vous a envoyé un message vocal' : 'sent you a voice message')
+          : type === 'video' ? (fr ? 'vous a envoyé une vidéo' : 'sent you a video')
+          : type === 'document' ? (fr ? 'vous a envoyé un fichier' : 'sent you a file')
+          : null;
+        this.pushNotificationsService
+          .sendToUser(id, {
+            title: fr ? '💬 Nouveau message' : '💬 New message',
+            body: body ? `${name} ${body}` : `${name}: ${String(message?.content ?? '').slice(0, 100)}`,
+            data: { type: 'new_message', conversationId, route: `/messages/${conversationId}` },
+          })
+          .catch((err: any) => this.logger.warn(`⚠️ Push notification failed for user ${id}: ${err?.message}`));
+      }
+    } catch (err: any) {
+      // The message itself is saved and shown: being told about it is extra
+      this.logger.warn(`announce: ${conversationId}: ${err?.message}`);
+    }
   }
 }

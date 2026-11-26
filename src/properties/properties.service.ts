@@ -1164,7 +1164,8 @@ export class PropertiesService implements OnModuleInit {
       const [properties, total] = await Promise.all([
         this.propertyModel
           .find(query)
-          .select(this.listingProjection())
+          // The owner also sees why it was not approved
+          .select({ ...this.listingProjection(), rejectionReason: 1 })
           .populate('ownerId', 'name email phoneNumber profilePicture')
           .populate('agentId', 'name email phoneNumber profilePicture agency')
           .sort(sort)

@@ -147,7 +147,10 @@ export class ChatController {
         @Request() req,
         @Body() dto: SendMessageDto,
     ) {
-        return this.chatService.sendMessage(req.user.userId, dto);
+        const message = await this.chatService.sendMessage(req.user.userId, dto);
+        // Sent without the live connection: the others still hear of it
+        await this.chatGateway.announce(String(dto.conversationId), message, String(req.user.userId));
+        return message;
     }
 
     /**
@@ -233,7 +236,7 @@ export class ChatController {
         const messageDto = { ...dto, type: messageType, attachments };
         const message = await this.chatService.sendMessage(req.user.userId, messageDto as any);
 
-        this.chatGateway.broadcastNewMessage(dto.conversationId, message);
+        await this.chatGateway.announce(String(dto.conversationId), message, String(req.user.userId));
 
         return message;
     }

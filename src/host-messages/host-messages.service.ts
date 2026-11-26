@@ -119,7 +119,8 @@ export class HostMessagesService {
       const message = await chat.sendMessage(hostId, { conversationId, content: body } as any);
       try {
         const gateway = this.moduleRef.get(ChatGateway, { strict: false });
-        gateway?.broadcastNewMessage(conversationId, message);
+        // Their notification is sent separately
+        await gateway?.announce(conversationId, message, hostId, { push: false });
       } catch { /* realtime is a bonus; the message is saved */ }
       return true;
     } catch (err: any) {
