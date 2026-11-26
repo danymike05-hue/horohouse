@@ -28,6 +28,7 @@ import { PostCategory } from './schemas/community-post.schema';
 import { JwtAuthGuard } from '../auth/guards/jwt.auth.guard';
 import { RolesGuard, Roles, Public } from '../auth/guards/roles.guard';
 import { UserRole } from '../users/schemas/user.schema';
+import { Area } from '../auth/team-areas';
 
 @ApiTags('Community')
 @Controller('community')
@@ -165,7 +166,7 @@ export class CommunityController {
   // ══════════════════════════════════════════════════════════════════════════
 
   @Patch('posts/:id/pin')
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN) @Area('reports')
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Pin or unpin a post (admin only)' })
   @ApiParam({ name: 'id' })
@@ -175,7 +176,7 @@ export class CommunityController {
   }
 
   @Delete('posts/:id/hard')
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN) @Area('reports')
   @ApiBearerAuth()
   @HttpCode(HttpStatus.NO_CONTENT)
   @ApiOperation({ summary: 'Hard-delete a post (admin only)' })
@@ -196,7 +197,7 @@ export class CommunityController {
   }
 
   @Get('admin/flagged-posts')
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN) @Area('reports')
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Admin: Get flagged posts' })
   @ApiQuery({ name: 'page', required: false, type: Number })
@@ -214,7 +215,7 @@ export class CommunityController {
   }
 
   @Patch('posts/:id/unflag')
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN) @Area('reports')
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Admin: Unflag a post (dismiss reports)' })
   @ApiParam({ name: 'id' })

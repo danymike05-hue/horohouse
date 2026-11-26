@@ -16,6 +16,7 @@ import {
   InitiateBookingPaymentDto,
   AdminRefundBookingDto,
 } from '../dto/payment.dto';
+import { Area, assertCanRefund } from '../../auth/team-areas';
 
 @ApiTags('Payments')
 @ApiBearerAuth('JWT-auth')
@@ -141,7 +142,7 @@ export class PaymentsController {
 
   @Get('admin/transactions')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN) @Area('finance_view')
   @ApiOperation({ summary: 'Get all transactions (Admin)' })
   async getAllTransactions(@Query() query: TransactionQueryDto) {
     return this.paymentsService.getAllTransactions(query);
@@ -149,7 +150,7 @@ export class PaymentsController {
 
   @Get('admin/analytics')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN) @Area('finance_view')
   @ApiOperation({ summary: 'Get payment analytics (Admin)' })
   async getPaymentAnalytics() {
     return { message: 'Payment analytics endpoint' };
@@ -157,7 +158,7 @@ export class PaymentsController {
 
   @Post('admin/bookings/:bookingId/refund')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN) @Area('finance_refunds')
   @ApiOperation({
     summary: 'Process or retry refund for a booking (Admin)',
     description:
@@ -168,7 +169,9 @@ export class PaymentsController {
   async adminRefundBooking(
     @Param('bookingId') bookingId: string,
     @Body() dto: AdminRefundBookingDto,
+    @Req() req: any,
   ) {
+    assertCanRefund(req.user, dto.amount);
     return this.paymentsService.adminRefundBooking(bookingId, dto.amount, dto.reason);
   }
 }

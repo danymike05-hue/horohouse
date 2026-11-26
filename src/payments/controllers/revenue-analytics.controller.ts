@@ -18,6 +18,7 @@ import { JwtAuthGuard } from '../../auth/guards/jwt.auth.guard';
 import { RolesGuard } from '../../auth/guards/roles.guard';
 import { Roles } from '../../auth/guards/roles.guard';
 import { UserRole } from '../../users/schemas/user.schema';
+import { Area } from '../../auth/team-areas';
 
 @ApiTags('Revenue Analytics')
 @Controller('analytics/revenue')
@@ -33,7 +34,7 @@ export class RevenueAnalyticsController {
   // ==========================================
 
   @Get('overview')
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN) @Area('finance_view')
   @ApiOperation({ 
     summary: 'Get comprehensive revenue analytics overview',
     description: 'Returns detailed revenue metrics including MRR, ARR, ARPU, conversion rates, and revenue breakdown by type and payment method. Admin only.',
@@ -124,7 +125,7 @@ export class RevenueAnalyticsController {
   }
 
   @Get('subscriptions')
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN) @Area('finance_view')
   @ApiOperation({ 
     summary: 'Get subscription analytics',
     description: 'Returns subscription metrics including active/expired/cancelled counts, distribution by plan, and churn rate. Admin only.',
@@ -158,7 +159,7 @@ export class RevenueAnalyticsController {
   }
 
   @Get('boosts')
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN) @Area('finance_view')
   @ApiOperation({ 
     summary: 'Get listing boost analytics',
     description: 'Returns boost metrics including total/active boosts, revenue, impressions, clicks, and CTR. Admin only.',
@@ -194,7 +195,7 @@ export class RevenueAnalyticsController {
   }
 
   @Get('top-users')
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN) @Area('finance_view')
   @ApiOperation({ 
     summary: 'Get top revenue generating users',
     description: 'Returns the top users by total revenue generated. Admin only.',
@@ -231,7 +232,7 @@ export class RevenueAnalyticsController {
   }
 
   @Get('summary')
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN) @Area('finance_view')
   @ApiOperation({ 
     summary: 'Get consolidated analytics summary',
     description: 'Returns a consolidated view of revenue, subscriptions, and boost analytics. Admin only.',

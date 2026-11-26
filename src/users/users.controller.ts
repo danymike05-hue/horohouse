@@ -38,6 +38,7 @@ import { User, UserRole } from './schemas/user.schema';
 import { Roles, RolesGuard } from '../auth/guards/roles.guard';
 import { Public } from '../auth/guards/roles.guard';
 import { JwtAuthGuard } from '../auth/guards/jwt.auth.guard';
+import { Area } from '../auth/team-areas';
 
 @ApiTags('Users')
 @ApiBearerAuth('JWT-auth')
@@ -399,7 +400,7 @@ export class UsersController {
   }
 
   @Get()
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN) @Area('users')
   @ApiOperation({ summary: 'Get all users with pagination (Admin only)' })
   @ApiQuery({ name: 'page', required: false, type: Number, description: 'Page number' })
   @ApiQuery({ name: 'limit', required: false, type: Number, description: 'Items per page' })
@@ -424,7 +425,7 @@ export class UsersController {
   }
 
   @Get('stats')
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN) @Area('users')
   @ApiOperation({ summary: 'Get user statistics (Admin only)' })
   @ApiResponse({ status: 200, description: 'User statistics' })
   async getStats() {
@@ -563,7 +564,7 @@ export class UsersController {
   // ==========================================
 
   @Get('hosts/verifications/pending')
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN) @Area('verification')
   @ApiOperation({ summary: 'Hosts waiting for an ID review, oldest first (Admin only)' })
   @ApiQuery({ name: 'page', required: false, type: Number })
   @ApiQuery({ name: 'limit', required: false, type: Number })
@@ -635,14 +636,14 @@ export class UsersController {
   // ==========================================
 
   @Get('hosts/:id/government-id')
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN) @Area('verification')
   @ApiOperation({ summary: 'Signed link to view a host ID document (Admin only)' })
   async getHostGovernmentId(@Param('id') id: string) {
     return this.usersService.getGovernmentIdViewUrl(id);
   }
 
   @Patch('hosts/:id/verify')
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN) @Area('verification')
   @ApiOperation({ summary: 'Approve or reject a host identity verification (Admin only)' })
   @ApiResponse({ status: 200, description: 'Verification decision applied' })
   async verifyHost(
@@ -685,7 +686,7 @@ export class UsersController {
   }
 
   @Get(':id/full')
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN) @Area('users')
   @ApiOperation({ summary: 'Get full user profile by ID (Admin only)' })
   @ApiResponse({ status: 200, description: 'Full user profile' })
   async findOneFull(@Param('id') id: string): Promise<User> {

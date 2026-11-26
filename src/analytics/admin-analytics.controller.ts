@@ -25,6 +25,7 @@ import {
 import { JwtAuthGuard } from '../auth/guards/jwt.auth.guard';
 import { RolesGuard, Roles } from '../auth/guards/roles.guard';
 import { UserRole } from '../users/schemas/user.schema';
+import { Area } from '../auth/team-areas';
 
 // ─── Helper ───────────────────────────────────────────────────────────────────
 
@@ -50,7 +51,7 @@ function parseDateRange(startDate?: string, endDate?: string): DateRange {
 @ApiBearerAuth()
 @Controller('analytics/admin')
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles(UserRole.ADMIN)
+@Roles(UserRole.ADMIN) @Area('finance_view')
 export class AdminAnalyticsController {
   constructor(private readonly adminAnalyticsService: AdminAnalyticsService) {}
 

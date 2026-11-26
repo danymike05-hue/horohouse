@@ -30,6 +30,7 @@ import {
 import { JwtAuthGuard } from '../auth/guards/jwt.auth.guard';
 import { Roles, RolesGuard, Public } from '../auth/guards/roles.guard';
 import { User, UserRole } from '../users/schemas/user.schema';
+import { Area } from '../auth/team-areas';
 
 @ApiTags('Student Properties')
 @Controller('student-properties')
@@ -154,7 +155,7 @@ export class StudentPropertiesController {
    */
   @Patch('admin/:propertyId/approve')
   @ApiBearerAuth('JWT-auth')
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN) @Area('students')
   @ApiOperation({ summary: 'Admin: grant Student-Approved badge to a property' })
   @ApiParam({ name: 'propertyId', description: 'Property ID' })
   @ApiResponse({ status: 200, description: 'Badge granted — property now ranks first in student search' })
@@ -175,7 +176,7 @@ export class StudentPropertiesController {
    */
   @Patch('admin/:propertyId/revoke')
   @ApiBearerAuth('JWT-auth')
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN) @Area('students')
   @ApiOperation({ summary: 'Admin: revoke Student-Approved badge' })
   @ApiParam({ name: 'propertyId', description: 'Property ID' })
   @ApiResponse({ status: 200, description: 'Badge revoked' })

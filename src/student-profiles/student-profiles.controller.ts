@@ -37,6 +37,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt.auth.guard';
 import { Roles, RolesGuard } from '../auth/guards/roles.guard';
 import { IsVerifiedStudentGuard } from './guards/is-verified-student.guard';
 import { User, UserRole } from '../users/schemas/user.schema';
+import { Area } from '../auth/team-areas';
 
 @ApiTags('Student Profiles')
 @ApiBearerAuth('JWT-auth')
@@ -247,7 +248,7 @@ export class StudentProfilesController {
    * Default: returns PENDING profiles first for the review queue.
    */
   @Get('admin/all')
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN) @Area('students')
   @ApiOperation({ summary: 'Admin: list all student profiles with filters' })
   @ApiResponse({ status: 200, description: 'Paginated list of student profiles' })
   async adminFindAll(@Query() query: GetStudentProfilesQueryDto) {
@@ -259,7 +260,7 @@ export class StudentProfilesController {
    * Dashboard stats: totals by verification status, city, ambassador count.
    */
   @Get('admin/stats')
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN) @Area('students')
   @ApiOperation({ summary: 'Admin: student profile stats for the dashboard' })
   @ApiResponse({ status: 200, description: 'Stats returned' })
   async adminGetStats() {
@@ -271,7 +272,7 @@ export class StudentProfilesController {
    * Full details of a single student profile for the review UI.
    */
   @Get('admin/:id')
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN) @Area('students')
   @ApiOperation({ summary: 'Admin: get a student profile by ID' })
   @ApiParam({ name: 'id', description: 'StudentProfile document ID' })
   @ApiResponse({ status: 200, description: 'Profile returned' })
@@ -286,7 +287,7 @@ export class StudentProfilesController {
    * Triggers a notification to the student automatically.
    */
   @Patch('admin/:id/review')
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN) @Area('students')
   @ApiOperation({ summary: 'Admin: approve or reject a student ID' })
   @ApiParam({ name: 'id', description: 'StudentProfile document ID' })
   @ApiResponse({ status: 200, description: 'Review decision saved and student notified' })
@@ -309,7 +310,7 @@ export class StudentProfilesController {
    * Only verified students can be appointed.
    */
   @Patch('admin/:id/ambassador')
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN) @Area('students')
   @ApiOperation({ summary: 'Admin: grant campus ambassador status' })
   @ApiParam({ name: 'id', description: 'StudentProfile document ID' })
   @ApiResponse({ status: 200, description: 'Ambassador status granted' })

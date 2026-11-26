@@ -12,10 +12,11 @@ import {
   CreatePostDto, UpdatePostDto, SchedulePostDto, ReviewPostDto,
   QueryPostsDto, CreateCategoryDto, CreateAuthorProfileDto,
 } from './dto/insights.dto';
+import { Area } from '../auth/team-areas';
 
 @Controller('insights/admin')
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles(UserRole.ADMIN) // reuse your existing role system
+@Roles(UserRole.ADMIN) @Area('content') // reuse your existing role system
 export class InsightsAdminController {
   constructor(private readonly adminService: InsightsAdminService) {}
 
@@ -94,7 +95,7 @@ export class InsightsAdminController {
   }
 
   @PostDecorator('backfill-slugs')
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN) @Area('content')
   backfillSlugs() {
     return this.adminService.backfillSlugs();
   }
@@ -108,19 +109,19 @@ export class InsightsAdminController {
   }
 
   @PostDecorator('categories')
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN) @Area('content')
   createCategory(@Body() dto: CreateCategoryDto) {
     return this.adminService.createCategory(dto);
   }
 
   @Patch('categories/:id')
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN) @Area('content')
   updateCategory(@Param('id') id: string, @Body() dto: Partial<CreateCategoryDto>) {
     return this.adminService.updateCategory(id, dto);
   }
 
   @Delete('categories/:id')
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN) @Area('content')
   deleteCategory(@Param('id') id: string) {
     return this.adminService.deleteCategory(id);
   }
@@ -138,7 +139,7 @@ export class InsightsAdminController {
   }
 
   @Delete('tags/:id')
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN) @Area('content')
   deleteTag(@Param('id') id: string) {
     return this.adminService.deleteTag(id);
   }

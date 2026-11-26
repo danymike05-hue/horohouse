@@ -1,6 +1,7 @@
 import { Injectable, CanActivate, ExecutionContext, ForbiddenException } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { UserRole } from '../../users/schemas/user.schema';
+import { AREA_KEY, TeamArea } from '../team-areas';
 
 export const ROLES_KEY = 'roles';
 
@@ -36,7 +37,14 @@ export class RolesGuard implements CanActivate {
     }
 
     const hasRole = requiredRoles.some((role) => user.role === role);
-    
+
+    // A team member with the route's area(s) may use an admin route (see team-areas.ts)
+    if (!hasRole && requiredRoles.includes(UserRole.ADMIN)) {
+      const areas = this.reflector.getAllAndOverride<TeamArea[]>(AREA_KEY, [context.getHandler(), context.getClass()]);
+      const mine: string[] = Array.isArray(user.staffPermissions) ? user.staffPermissions : [];
+      if (areas?.length && areas.every((a) => mine.includes(a))) return true;
+    }
+
     if (!hasRole) {
       throw new ForbiddenException(`Access denied. Required roles: ${requiredRoles.join(', ')}`);
     }

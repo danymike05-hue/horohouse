@@ -42,6 +42,7 @@ import { RolesGuard, Roles, Public } from '../auth/guards/roles.guard';
 import { User, UserRole } from '../users/schemas/user.schema';
 import { PropertyType, ListingType, ApprovalStatus, PricingUnit, CancellationPolicy } from './schemas/property.schema';
 import { parseFlexDays } from './flexible-dates.util';
+import { Area } from '../auth/team-areas';
 
 // DTOs for API documentation
 class CreatePropertyRequestDto {
@@ -312,7 +313,7 @@ export class PropertiesController {
   // ─── Admin approval endpoints ───────────────────────────────────────────────
 
   @Get('admin/all')
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN) @Area('listings')
   @ApiOperation({ summary: 'Admin: Get all properties with any approval status' })
   @ApiBearerAuth()
   @ApiQuery({ name: 'approvalStatus', required: false, enum: ApprovalStatus })
@@ -347,7 +348,7 @@ export class PropertiesController {
   }
 
   @Patch(':id/approve')
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN) @Area('listings')
   @ApiOperation({ summary: 'Admin: Approve a property listing' })
   @ApiBearerAuth()
   @ApiParam({ name: 'id', description: 'Property ID' })
@@ -360,7 +361,7 @@ export class PropertiesController {
   }
 
   @Patch(':id/reject')
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN) @Area('listings')
   @ApiOperation({ summary: 'Admin: Reject a property listing' })
   @ApiBearerAuth()
   @ApiParam({ name: 'id', description: 'Property ID' })
@@ -719,7 +720,7 @@ export class PropertiesController {
   }
 
   @Patch(':id/feature')
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN) @Area('listings')
   @ApiOperation({ summary: 'Toggle property featured status (Admin only)' })
   @ApiBearerAuth()
   @ApiParam({ name: 'id', description: 'Property ID' })
@@ -733,7 +734,7 @@ export class PropertiesController {
   }
 
   @Patch(':id/verify')
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN) @Area('listings')
   @ApiOperation({ summary: 'Toggle property verification status (Admin only)' })
   @ApiBearerAuth()
   @ApiParam({ name: 'id', description: 'Property ID' })

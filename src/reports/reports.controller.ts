@@ -12,6 +12,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt.auth.guard';
 import { RolesGuard, Roles } from '../auth/guards/roles.guard';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiParam } from '@nestjs/swagger';
 import { UserRole } from '../users/schemas/user.schema';
+import { Area } from '../auth/team-areas';
 
 class HideListingDto {
     @IsString() @Length(3, 500) reason: string;
@@ -50,7 +51,7 @@ export class ReportsController {
 
     @Get()
     @UseGuards(JwtAuthGuard, RolesGuard)
-    @Roles(UserRole.ADMIN)
+    @Roles(UserRole.ADMIN) @Area('reports')
     @ApiBearerAuth()
     @ApiOperation({ summary: 'Get all reports (Admin only)' })
     findAll(@Query() query: any) {
@@ -59,7 +60,7 @@ export class ReportsController {
 
     @Get('stats')
     @UseGuards(JwtAuthGuard, RolesGuard)
-    @Roles(UserRole.ADMIN)
+    @Roles(UserRole.ADMIN) @Area('reports')
     @ApiBearerAuth()
     @ApiOperation({ summary: 'Get report statistics (Admin only)' })
     getStats() {
@@ -68,7 +69,7 @@ export class ReportsController {
 
     @Get(':id')
     @UseGuards(JwtAuthGuard, RolesGuard)
-    @Roles(UserRole.ADMIN)
+    @Roles(UserRole.ADMIN) @Area('reports')
     @ApiBearerAuth()
     @ApiOperation({ summary: 'Get a specific report by ID (Admin only)' })
     findOne(@Param('id') id: string) {
@@ -79,7 +80,7 @@ export class ReportsController {
 
     @Patch(':id/status')
     @UseGuards(JwtAuthGuard, RolesGuard)
-    @Roles(UserRole.ADMIN)
+    @Roles(UserRole.ADMIN) @Area('reports')
     @ApiBearerAuth()
     @ApiOperation({ summary: 'Update report status (Admin only)' })
     updateStatus(
@@ -93,7 +94,7 @@ export class ReportsController {
 
     @Delete(':id')
     @UseGuards(JwtAuthGuard, RolesGuard)
-    @Roles(UserRole.ADMIN)
+    @Roles(UserRole.ADMIN) @Area('reports')
     @ApiBearerAuth()
     @ApiOperation({ summary: 'Delete a report record (Admin only)' })
     remove(@Param('id') id: string) {
@@ -104,7 +105,7 @@ export class ReportsController {
 
     @Delete(':id/property')
     @UseGuards(JwtAuthGuard, RolesGuard)
-    @Roles(UserRole.ADMIN)
+    @Roles(UserRole.ADMIN) @Area('reports')
     @ApiBearerAuth()
     @ApiOperation({
         summary: 'Delete the property associated with a report (Admin only)',
@@ -123,7 +124,7 @@ export class ReportsController {
 
     @Post(':id/hide-listing')
     @UseGuards(JwtAuthGuard, RolesGuard)
-    @Roles(UserRole.ADMIN)
+    @Roles(UserRole.ADMIN) @Area('reports')
     @ApiBearerAuth()
     @ApiOperation({ summary: 'Take the reported listing off the platform and close its open reports (Admin only)' })
     hideListing(@Param('id') id: string, @Body() dto: HideListingDto, @Req() req: any) {
@@ -134,7 +135,7 @@ export class ReportsController {
 
     @Post(':id/suspend-user')
     @UseGuards(JwtAuthGuard, RolesGuard)
-    @Roles(UserRole.ADMIN)
+    @Roles(UserRole.ADMIN) @Area('reports')
     @ApiBearerAuth()
     @ApiOperation({ summary: 'Suspend the reported person: signed out, listings hidden (Admin only)' })
     suspendUser(@Param('id') id: string, @Body() dto: HideListingDto, @Req() req: any) {
@@ -145,7 +146,7 @@ export class ReportsController {
 
     @Post(':id/warn-owner')
     @UseGuards(JwtAuthGuard, RolesGuard)
-    @Roles(UserRole.ADMIN)
+    @Roles(UserRole.ADMIN) @Area('reports')
     @ApiBearerAuth()
     @ApiOperation({
         summary: 'Send a warning email/notification to the property owner (Admin only)',

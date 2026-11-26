@@ -11,6 +11,7 @@ import { UserRole } from '../users/schemas/user.schema';
 import { uploadBufferToCloudinary } from '../utils/cloudinary';
 import { BookingIssuesService } from './booking-issues.service';
 import { ISSUE_CATEGORIES, IssueCategory, IssueOutcome } from './schemas/booking-issue.schema';
+import { Area, assertCanRefund } from '../auth/team-areas';
 
 const PHOTO_MIME_TYPES = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/heic', 'image/heif'];
 const PHOTO_MAX_BYTES = 10 * 1024 * 1024;
@@ -82,16 +83,18 @@ export class BookingIssuesController {
   }
 
   @Get('admin/list')
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN) @Area('issues')
   @ApiOperation({ summary: 'Problem reports to decide (Admin)' })
   adminList(@Query('state') state?: string) {
     return this.issues.adminList(state === 'resolved' ? 'resolved' : 'open');
   }
 
   @Post('admin/:id/resolve')
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN) @Area('issues')
   @ApiOperation({ summary: 'Decide a report: refund the guest and/or release the payout (Admin)' })
   resolve(@Param('id') id: string, @Body() dto: ResolveIssueDto, @Req() req: any) {
+    // Sending money back also needs refund access (and, for the team, stays under the limit)
+    if (dto.outcome === IssueOutcome.REFUND) assertCanRefund(req.user, dto.amount);
     return this.issues.resolve(req.user, id, dto);
   }
 }

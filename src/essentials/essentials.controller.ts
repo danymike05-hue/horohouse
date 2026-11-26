@@ -31,6 +31,7 @@ import {
 import { EssentialsAdminService } from './essentials-admin.service';
 import { EssentialsService } from './essentials.service';
 import { PartnerService } from './partner.service';
+import { Area } from '../auth/team-areas';
 
 const uid = (req: any): string => String(req.user?._id ?? req.user?.id ?? req.user?.userId ?? req.user?.sub);
 const PHOTO_MIME_TYPES = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/heic', 'image/heif'];
@@ -71,58 +72,58 @@ export class EssentialsController {
 
   // ════════════════ Admin (before the ":id" routes) ════════════════
 
-  @Get('admin/overview') @Roles(UserRole.ADMIN)
+  @Get('admin/overview') @Roles(UserRole.ADMIN) @Area('essentials')
   adminOverview() { return this.admin.overview(); }
 
-  @Get('admin/shops') @Roles(UserRole.ADMIN)
+  @Get('admin/shops') @Roles(UserRole.ADMIN) @Area('essentials')
   adminShops(@Query() q: AdminShopsQueryDto) { return this.admin.shops(q); }
 
-  @Post('admin/shops/invite') @Roles(UserRole.ADMIN)
+  @Post('admin/shops/invite') @Roles(UserRole.ADMIN) @Area('essentials')
   adminInvite(@Body() dto: InviteShopDto) { return this.admin.invite(dto); }
 
-  @Post('admin/shops/:id/:action') @Roles(UserRole.ADMIN) @HttpCode(200)
+  @Post('admin/shops/:id/:action') @Roles(UserRole.ADMIN) @Area('essentials') @HttpCode(200)
   adminShopStatus(@Param('id') id: string, @Param('action') action: string, @Body() dto: ReasonDto) {
     if (!['approve', 'reject', 'suspend', 'reinstate'].includes(action)) throw new BadRequestException('Unknown action');
     return this.admin.setStatus(id, action as any, dto.reason);
   }
 
-  @Get('admin/catalogue') @Roles(UserRole.ADMIN)
+  @Get('admin/catalogue') @Roles(UserRole.ADMIN) @Area('essentials')
   adminCatalogue() { return this.admin.catalogue(); }
 
-  @Patch('admin/market') @Roles(UserRole.ADMIN)
+  @Patch('admin/market') @Roles(UserRole.ADMIN) @Area('essentials')
   adminMarket(@Body() dto: MarketDto) { return this.admin.updateMarket(dto); }
 
-  @Post('admin/templates') @Roles(UserRole.ADMIN)
+  @Post('admin/templates') @Roles(UserRole.ADMIN) @Area('essentials')
   adminNewTemplate(@Body() dto: TemplateDto) { return this.admin.saveTemplate(null, dto); }
 
-  @Patch('admin/templates/:id') @Roles(UserRole.ADMIN)
+  @Patch('admin/templates/:id') @Roles(UserRole.ADMIN) @Area('essentials')
   adminEditTemplate(@Param('id') id: string, @Body() dto: TemplateDto) { return this.admin.saveTemplate(id, dto); }
 
-  @Post('admin/item-types') @Roles(UserRole.ADMIN)
+  @Post('admin/item-types') @Roles(UserRole.ADMIN) @Area('essentials')
   adminNewItemType(@Body() dto: ItemTypeDto) { return this.admin.saveItemType(null, dto); }
 
-  @Patch('admin/item-types/:key') @Roles(UserRole.ADMIN)
+  @Patch('admin/item-types/:key') @Roles(UserRole.ADMIN) @Area('essentials')
   adminEditItemType(@Param('key') key: string, @Body() dto: ItemTypeDto) { return this.admin.saveItemType(key, dto); }
 
-  @Get('admin/orders') @Roles(UserRole.ADMIN)
+  @Get('admin/orders') @Roles(UserRole.ADMIN) @Area('essentials')
   adminOrders(@Query() q: AdminOrdersQueryDto) { return this.admin.orders(q); }
 
-  @Post('admin/parts/:partId/resolve') @Roles(UserRole.ADMIN) @HttpCode(200)
+  @Post('admin/parts/:partId/resolve') @Roles(UserRole.ADMIN) @Area('essentials', 'finance_refunds') @HttpCode(200)
   adminResolve(@Param('partId') partId: string, @Body() dto: ResolveDisputeDto) { return this.admin.resolveDispute(partId, dto); }
 
-  @Post('admin/parts/:partId/refund-retry') @Roles(UserRole.ADMIN) @HttpCode(200)
+  @Post('admin/parts/:partId/refund-retry') @Roles(UserRole.ADMIN) @Area('essentials', 'finance_refunds') @HttpCode(200)
   adminRetryRefund(@Param('partId') partId: string) { return this.admin.retryRefund(partId); }
 
-  @Post('admin/parts/:partId/refund-done') @Roles(UserRole.ADMIN) @HttpCode(200)
+  @Post('admin/parts/:partId/refund-done') @Roles(UserRole.ADMIN) @Area('essentials', 'finance_refunds') @HttpCode(200)
   adminRefundDone(@Param('partId') partId: string) { return this.admin.markRefunded(partId); }
 
-  @Get('admin/payouts') @Roles(UserRole.ADMIN)
+  @Get('admin/payouts') @Roles(UserRole.ADMIN) @Area('essentials')
   adminPayouts() { return this.admin.payoutsView(); }
 
-  @Post('admin/payouts') @Roles(UserRole.ADMIN)
+  @Post('admin/payouts') @Roles(UserRole.ADMIN) @Area('essentials', 'finance_refunds')
   adminSendPayout(@Req() req: any, @Body() dto: SendPayoutDto) { return this.admin.sendPayout(uid(req), dto); }
 
-  @Get('admin/insights') @Roles(UserRole.ADMIN)
+  @Get('admin/insights') @Roles(UserRole.ADMIN) @Area('essentials')
   adminInsights() { return this.admin.insights(); }
 
   // ════════════════ Partner shops ════════════════

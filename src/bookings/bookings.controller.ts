@@ -34,6 +34,7 @@ import {
 import { JwtAuthGuard } from '../auth/guards/jwt.auth.guard';
 import { RolesGuard, Roles, Public } from '../auth/guards/roles.guard';
 import { User, UserRole } from '../users/schemas/user.schema';
+import { Area } from '../auth/team-areas';
 
 @ApiTags('Bookings')
 @Controller('bookings')
@@ -259,7 +260,7 @@ export class BookingsController {
   // ════════════════════════════════════════════════════════════════════════════
 
   @Get('admin/all')
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN) @Area('finance_view')
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Admin: Get all bookings across the platform' })
   @ApiQuery({ name: 'page', required: false, type: Number })
@@ -273,7 +274,7 @@ export class BookingsController {
   }
 
   @Get('admin/stats')
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN) @Area('finance_view')
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Admin: Get booking statistics and revenue' })
   @ApiResponse({ status: 200, description: 'Booking statistics' })

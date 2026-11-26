@@ -15,6 +15,7 @@ import { Property, PropertySchema } from '../properties/schemas/property.schema'
 import { User, UserSchema } from '../users/schemas/user.schema';
 
 import { NotificationsModule } from '../notifications/notifications.module';
+import { SupportInboxController } from './support-inbox.controller';
 
 @Module({
   imports: [
@@ -37,7 +38,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
     }),
     NotificationsModule,
   ],
-  controllers: [ChatController],
+  controllers: [ChatController, SupportInboxController],
   providers: [ChatService, CallService, ChatGateway],
   exports: [ChatService],
 })

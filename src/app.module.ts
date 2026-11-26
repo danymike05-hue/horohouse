@@ -58,6 +58,7 @@ import { PriceSuggestionsModule } from './price-suggestions/price-suggestions.mo
 import { TranslationsModule } from './translations/translations.module';
 import { AccountDeletionModule } from './account-deletion/account-deletion.module';
 import { HostPlansModule } from './host-plans/host-plans.module';
+import { TeamModule } from './team/team.module';
 
 @Module({
   imports: [
@@ -152,6 +153,8 @@ import { HostPlansModule } from './host-plans/host-plans.module';
     PriceSuggestionsModule,
     TranslationsModule,
     HostPlansModule,
+    // Team access: who may use which part of the admin side, and what they did
+    TeamModule,
   ],
 
   controllers: [AppController],

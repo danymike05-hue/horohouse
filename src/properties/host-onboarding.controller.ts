@@ -5,6 +5,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt.auth.guard';
 import { RolesGuard, Roles } from '../auth/guards/roles.guard';
 import { UserRole } from '../users/schemas/user.schema';
 import { HostOnboardingService } from './host-onboarding.service';
+import { Area } from '../auth/team-areas';
 
 class FindOrCreateHostDto {
   @IsString()
@@ -34,7 +35,7 @@ class FindOrCreateHostDto {
 @ApiBearerAuth()
 @Controller('admin/hosts')
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles(UserRole.ADMIN)
+@Roles(UserRole.ADMIN) @Area('publish_for_host')
 export class HostOnboardingController {
   constructor(private readonly hostOnboarding: HostOnboardingService) {}
 

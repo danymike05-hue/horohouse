@@ -30,6 +30,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt.auth.guard';
 import { RolesGuard, Roles } from '../auth/guards/roles.guard';
 import { UserRole } from '../users/schemas/user.schema';
 import { NotificationType } from './schemas/notification.schema';
+import { Area } from '../auth/team-areas';
 
 // ─── Helper ───────────────────────────────────────────────────────────────────
 
@@ -212,7 +213,7 @@ export class NotificationsController {
    */
   @Post('admin/send')
   @UseGuards(RolesGuard)
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN) @Area('notifications')
   @ApiOperation({ summary: '[Admin] Send notification to users' })
   @ApiResponse({ status: 201, description: 'Notification sent successfully' })
   @ApiResponse({ status: 403, description: 'Forbidden — admin role required' })
@@ -230,7 +231,7 @@ export class NotificationsController {
    */
   @Get('admin/stats')
   @UseGuards(RolesGuard)
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN) @Area('notifications')
   @ApiOperation({ summary: '[Admin] Get notification gateway statistics' })
   @ApiResponse({ status: 200, description: 'Gateway stats' })
   async adminGetStats() {

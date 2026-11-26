@@ -348,6 +348,14 @@ export class User {
   @Prop({ type: String, enum: Object.values(UserRole), default: UserRole.REGISTERED_USER })
   role: UserRole;
 
+  /** Team access: parts of the admin side this person may use (see auth/team-areas.ts) */
+  @Prop({ type: [String], default: [] })
+  staffPermissions: string[];
+
+  /** When team access was last changed, and by whom */
+  @Prop({ type: Object })
+  staffAccessMeta?: { updatedAt: Date; updatedBy: string };
+
   @Prop({ default: null })
   profilePicture?: string;
 

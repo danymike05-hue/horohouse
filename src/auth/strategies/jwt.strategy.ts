@@ -47,6 +47,8 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
         phoneNumber: user.phoneNumber,
         name: user.name,
         role: user.role,
+        // Team access (read on every request, so removing it takes effect at once)
+        staffPermissions: Array.isArray((user as any).staffPermissions) ? (user as any).staffPermissions : [],
         emailVerified: user.emailVerified,
         phoneVerified: user.phoneVerified,
         profilePicture: user.profilePicture,

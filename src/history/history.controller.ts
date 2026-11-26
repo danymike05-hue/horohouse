@@ -22,6 +22,7 @@ import { UserRole } from '../users/schemas/user.schema';
 import { Roles, RolesGuard } from '../auth/guards/roles.guard';
 import { Public } from '../auth/guards/roles.guard';
 import { JwtAuthGuard } from '../auth/guards/jwt.auth.guard';
+import { Area } from '../auth/team-areas';
 
 @ApiTags('History')
 @ApiBearerAuth('JWT-auth')
@@ -93,7 +94,7 @@ export class HistoryController {
   }
 
   @Get('user/:userId/activity')
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN) @Area('users')
   @ApiOperation({ summary: 'Get user activity summary (Admin only)' })
   @ApiQuery({ name: 'timeframe', required: false, type: Number })
   @ApiResponse({ status: 200, description: 'User activity retrieved successfully' })

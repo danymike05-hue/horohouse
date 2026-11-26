@@ -10,6 +10,7 @@ import {
   BuyDto, CompleteLessonDto, CourseDto, DraftDto, ExplainDto, LessonDto, ResultsDto, SpendLivesDto, StoryCompleteDto, UnitDto,
   UpdateCourseDto, UpdateLanguageProfileDto, UpdateLessonDto,
 } from './dto/languages.dto';
+import { Area } from '../auth/team-areas';
 
 class MoveDto { @IsIn(['up', 'down']) dir: 'up' | 'down'; }
 
@@ -27,55 +28,55 @@ export class LanguagesController {
   // ── Admins (first, so "admin" isn't read as a course id) ──
 
   @Get('admin/courses')
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN) @Area('content')
   adminCourses() { return this.service.adminCourses(); }
 
   @Post('admin/courses')
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN) @Area('content')
   createCourse(@Body() dto: CourseDto) { return this.service.createCourse(dto); }
 
   @Patch('admin/courses/:id')
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN) @Area('content')
   updateCourse(@Param('id') id: string, @Body() dto: UpdateCourseDto) { return this.service.updateCourse(id, dto); }
 
   @Delete('admin/courses/:id')
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN) @Area('content')
   deleteCourse(@Param('id') id: string) { return this.service.deleteCourse(id); }
 
   @Post('admin/courses/:id/units')
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN) @Area('content')
   addUnit(@Param('id') id: string, @Body() dto: UnitDto) { return this.service.addUnit(id, dto); }
 
   @Patch('admin/courses/:id/units/:unitId')
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN) @Area('content')
   updateUnit(@Param('id') id: string, @Param('unitId') unitId: string, @Body() dto: UnitDto) { return this.service.updateUnit(id, unitId, dto); }
 
   @Post('admin/courses/:id/units/:unitId/move')
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN) @Area('content')
   moveUnit(@Param('id') id: string, @Param('unitId') unitId: string, @Body() dto: MoveDto) { return this.service.moveUnit(id, unitId, dto.dir); }
 
   @Delete('admin/courses/:id/units/:unitId')
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN) @Area('content')
   deleteUnit(@Param('id') id: string, @Param('unitId') unitId: string) { return this.service.deleteUnit(id, unitId); }
 
   @Post('admin/courses/:id/units/:unitId/lessons')
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN) @Area('content')
   addLesson(@Param('id') id: string, @Param('unitId') unitId: string, @Body() dto: LessonDto) { return this.service.addLesson(id, unitId, dto); }
 
   @Patch('admin/courses/:id/units/:unitId/lessons/:lessonId')
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN) @Area('content')
   updateLesson(@Param('id') id: string, @Param('unitId') unitId: string, @Param('lessonId') lessonId: string, @Body() dto: UpdateLessonDto) {
     return this.service.updateLesson(id, unitId, lessonId, dto);
   }
 
   @Delete('admin/courses/:id/units/:unitId/lessons/:lessonId')
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN) @Area('content')
   deleteLesson(@Param('id') id: string, @Param('unitId') unitId: string, @Param('lessonId') lessonId: string) {
     return this.service.deleteLesson(id, unitId, lessonId);
   }
 
   @Post('admin/draft')
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN) @Area('content')
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @ApiOperation({ summary: 'AI first draft of a lesson (admin reviews before saving)' })
   draft(@Body() dto: DraftDto) { return this.service.draft(dto); }

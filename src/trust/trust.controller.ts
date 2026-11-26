@@ -5,6 +5,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt.auth.guard';
 import { Roles, RolesGuard } from '../auth/guards/roles.guard';
 import { UserRole } from '../users/schemas/user.schema';
 import { TrustService, ID_DOCUMENT_TYPES, ID_MAX_BYTES, ID_MIME_TYPES, IdDocumentType } from './trust.service';
+import { Area } from '../auth/team-areas';
 
 class ReviewIdentityDto {
   @IsBoolean() approve: boolean;
@@ -40,21 +41,21 @@ export class TrustController {
   }
 
   @Get('identity/pending')
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN) @Area('verification')
   @ApiOperation({ summary: 'IDs waiting for review, oldest first (Admin)' })
   pending(@Query('page') page?: string, @Query('limit') limit?: string) {
     return this.trust.listPending(Number(page) || 1, Number(limit) || 20);
   }
 
   @Get('identity/:userId/document')
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN) @Area('verification')
   @ApiOperation({ summary: 'Signed 10-minute link to a user ID photo (Admin)' })
   document(@Param('userId') userId: string) {
     return this.trust.documentUrl(userId);
   }
 
   @Patch('identity/:userId')
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN) @Area('verification')
   @ApiOperation({ summary: 'Approve or reject an ID (Admin)' })
   review(@Param('userId') userId: string, @Body() body: ReviewIdentityDto, @Req() req: any) {
     return this.trust.review(userId, body.approve, body.reason, req.user);

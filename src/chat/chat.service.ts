@@ -78,6 +78,26 @@ export class ChatService implements OnModuleInit {
         return admin ? String(admin._id) : null;
     }
 
+    /** The account that answers support (for the support inbox) */
+    supportAccount(): Promise<string | null> {
+        return this.supportAccountId();
+    }
+
+    /** Only support chats can be opened from the support inbox */
+    async assertSupportConversation(conversationId: string): Promise<void> {
+        if (!Types.ObjectId.isValid(conversationId)) throw new NotFoundException('Conversation not found');
+        const found = await this.conversationModel.exists({ _id: conversationId, isSupport: true });
+        if (!found) throw new NotFoundException('Support conversation not found');
+    }
+
+    /** Read on the support side: nothing waiting any more */
+    async clearUnread(conversationId: string, userId: string): Promise<void> {
+        await this.conversationModel.updateOne(
+            { _id: conversationId, 'participants.userId': new Types.ObjectId(userId) },
+            { $set: { 'participants.$.unreadCount': 0, 'participants.$.lastReadAt': new Date() } },
+        ).exec();
+    }
+
     /** My conversation with HoroHouse support (made on first use) */
     async createSupportConversation(userId: string): Promise<Conversation> {
         const supportId = await this.supportAccountId();
@@ -334,6 +354,9 @@ export class ChatService implements OnModuleInit {
                     },
                 },
             };
+
+            // The support inbox: only chats with support
+            if ((query as any).onlySupport) matchQuery.isSupport = true;
 
             // Filter unread conversations
             if (filter === 'unread') {

@@ -6,6 +6,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt.auth.guard';
 import { Roles, RolesGuard } from '../auth/guards/roles.guard';
 import { UserRole } from '../users/schemas/user.schema';
 import { AdminReviewService, ReviewSource } from './admin-review.service';
+import { Area, assertCanRefund } from '../auth/team-areas';
 
 class RefundDto {
   /** XAF; leave out for a full refund */
@@ -32,7 +33,7 @@ class ResolveDto {
 @ApiBearerAuth('JWT-auth')
 @Controller('admin/review')
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles(UserRole.ADMIN)
+@Roles(UserRole.ADMIN) @Area('finance_view')
 export class AdminReviewController {
   constructor(private readonly review: AdminReviewService) {}
 
@@ -48,12 +49,16 @@ export class AdminReviewController {
     return this.review.list(state === 'resolved' ? 'resolved' : 'open', Number(limit) || 50);
   }
 
+  @Area('finance_view', 'finance_refunds')
   @Post('payments/:source/:id/refund')
   @ApiOperation({ summary: 'Refund the guest through CamerPay (once only) (Admin)' })
   refund(@Param('source') source: ReviewSource, @Param('id') id: string, @Body() dto: RefundDto, @Req() req: any) {
+    // Team members: up to their limit, with the amount written out; above that, the owner
+    assertCanRefund(req.user, dto.amount);
     return this.review.refund(source, id, req.user, dto.amount, dto.note);
   }
 
+  @Area('finance_view', 'finance_refunds')
   @Post('payments/:source/:id/resolve')
   @ApiOperation({ summary: 'Close by hand: refunded outside the app, or no refund needed (Admin)' })
   resolve(@Param('source') source: ReviewSource, @Param('id') id: string, @Body() dto: ResolveDto, @Req() req: any) {

@@ -491,6 +491,8 @@ export class AuthController {
           email: req.user.email || '',
           phoneNumber: req.user.phoneNumber || '',
           role: req.user.role || 'guest',
+          // Team access: parts of the admin side this person may use
+          staffPermissions: Array.isArray((req.user as any).staffPermissions) ? (req.user as any).staffPermissions : [],
           profilePicture: req.user.profilePicture,
           emailVerified: req.user.emailVerified || false,
           phoneVerified: req.user.phoneVerified || false,

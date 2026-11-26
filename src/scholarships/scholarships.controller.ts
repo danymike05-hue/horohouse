@@ -6,6 +6,7 @@ import { Roles, RolesGuard } from '../auth/guards/roles.guard';
 import { UserRole } from '../users/schemas/user.schema';
 import { ScholarshipsService } from './scholarships.service';
 import { CreateScholarshipDto, ScholarshipQueryDto, UpdateScholarshipDto } from './dto/scholarship.dto';
+import { Area } from '../auth/team-areas';
 
 class AdminScholarshipQueryDto {
   @IsOptional() @IsString() @MaxLength(80) q?: string;
@@ -24,28 +25,28 @@ export class ScholarshipsController {
   // ── Admins (before ":id" so these paths aren't read as an id) ──
 
   @Get('admin/all')
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN) @Area('content')
   @ApiOperation({ summary: 'All scholarships, drafts and expired included (admin)' })
   adminList(@Query() q: AdminScholarshipQueryDto) {
     return this.service.adminList(q);
   }
 
   @Post('admin')
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN) @Area('content')
   @ApiOperation({ summary: 'Add a scholarship (admin)' })
   create(@Req() req: any, @Body() dto: CreateScholarshipDto) {
     return this.service.create(uid(req), dto);
   }
 
   @Patch('admin/:id')
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN) @Area('content')
   @ApiOperation({ summary: 'Edit, publish or unpublish a scholarship (admin)' })
   update(@Param('id') id: string, @Body() dto: UpdateScholarshipDto) {
     return this.service.update(id, dto);
   }
 
   @Delete('admin/:id')
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN) @Area('content')
   @ApiOperation({ summary: 'Delete a scholarship (admin)' })
   remove(@Param('id') id: string) {
     return this.service.remove(id);
