@@ -228,6 +228,10 @@ export class HostPayoutsService {
       this.logger.warn(`release: notification failed for ${bookingId}: ${err?.message}`);
     }
     void this.notificationsService.emailHost?.('payout', String(bookingId), { amount });
+    // Automatic withdrawal on: the new balance may have reached the threshold
+    void this.walletService
+      .autoWithdrawIfDue?.(String(claimed.hostId))
+      ?.catch((e: any) => this.logger.warn(`Auto-withdrawal check failed for ${String(claimed.hostId)}: ${e?.message}`));
     return true;
   }
 

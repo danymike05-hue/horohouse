@@ -1,6 +1,8 @@
 import { Injectable, Logger, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
+import { Cron } from '@nestjs/schedule';
+import { detectOperator, normalizeCmPhone } from '../../checkout/momo.util';
 import {
   Wallet,
   WalletDocument,
@@ -229,6 +231,7 @@ export class WalletService {
       accountName?: string;
       bankCode?: string;
     },
+    opts: { auto?: boolean } = {},
   ): Promise<any> {
     const wallet = await this.getOrCreateWallet(userId);
 
@@ -241,7 +244,7 @@ export class WalletService {
       throw new BadRequestException('Insufficient balance');
     }
 
-    const reference = `WD-${new Types.ObjectId().toHexString()}`;
+    const reference = `${opts.auto ? 'AWD' : 'WD'}-${new Types.ObjectId().toHexString()}`;
 
     // Reserve funds immediately (only from what's available, never from held earnings)
     await this.debitWallet(userId, amount, `Withdrawal via ${withdrawalMethod}`, reference, { availableOnly: true });
@@ -285,6 +288,7 @@ export class WalletService {
           accountName: accountDetails.accountName,
           bankCode: accountDetails.bankCode,
         },
+        ...(opts.auto ? { auto: true } : {}),
       },
     });
     await transaction.save();
@@ -581,6 +585,8 @@ export class WalletService {
     wallet.autoWithdrawalThreshold = threshold;
     await wallet.save();
     this.logger.log(`Auto-withdrawal enabled for user: ${userId}`);
+    // Already over the threshold: no need to wait for the morning check
+    void this.autoWithdrawIfDue(userId).catch((e: any) => this.logger.warn(`Auto-withdrawal check failed for ${userId}: ${e?.message}`));
     return wallet;
   }
 
@@ -590,6 +596,121 @@ export class WalletService {
     await wallet.save();
     this.logger.log(`Auto-withdrawal disabled for user: ${userId}`);
     return wallet;
+  }
+
+  // ─── Automatic withdrawals ──────────────────────────────────────────────────
+  // With the switch on, once the withdrawable balance reaches the host's threshold the whole
+  // of it is requested to their saved payout method, like a withdrawal they asked for.
+  // Checked when held earnings are released (host-payouts) and every morning.
+
+  /** Where an automatic withdrawal goes: the saved Mobile Money number, else the bank account */
+  private savedPayoutOf(wallet: any): { method: 'mtn_momo' | 'orange_money' | 'bank_transfer'; details: { phoneNumber?: string; accountNumber?: string; accountName?: string } } | null {
+    const local = normalizeCmPhone(wallet?.mobileMoneyNumber);
+    if (local) {
+      const provider = String(wallet.mobileMoneyProvider ?? '').toUpperCase();
+      const method = provider === 'MTN' ? 'mtn_momo' : provider === 'ORANGE' ? 'orange_money' : detectOperator(local);
+      if (method) return { method, details: { phoneNumber: local } };
+    }
+    if (wallet?.bankAccountNumber) {
+      return { method: 'bank_transfer', details: { accountNumber: wallet.bankAccountNumber, accountName: wallet.bankAccountName } };
+    }
+    return null;
+  }
+
+  /** Requests the automatic withdrawal when it's due. True when one was requested. */
+  async autoWithdrawIfDue(userId: string): Promise<boolean> {
+    const wallet: any = await this.walletModel.findOne({ userId: new Types.ObjectId(userId) }).lean();
+    if (!wallet?.autoWithdrawal) return false;
+    const threshold = Math.max(Number(wallet.autoWithdrawalThreshold) || 0, this.MIN_WITHDRAWAL);
+    const available = Math.floor(Number(wallet.availableBalance ?? wallet.balance) || 0);
+    if (available < threshold) return false;
+
+    // One at a time: the next one waits until this one is sent or given back
+    const waiting = await this.transactionModel.exists({
+      userId: new Types.ObjectId(userId),
+      type: TransactionType.WALLET_WITHDRAWAL,
+      status: 'pending',
+      'metadata.auto': true,
+    });
+    if (waiting) return false;
+
+    const to = this.savedPayoutOf(wallet);
+    if (!to) {
+      // Nowhere to send it: tell the host once a day at most (the daily check comes back)
+      const lastAsked = wallet.autoWithdrawalNeedsMethodAt ? new Date(wallet.autoWithdrawalNeedsMethodAt).getTime() : 0;
+      if (Date.now() - lastAsked > 20 * 3_600_000) {
+        await this.walletModel.updateOne({ _id: wallet._id }, { $set: { autoWithdrawalNeedsMethodAt: new Date() } });
+        await this.notificationsService
+          .create(
+            {
+              userId,
+              type: NotificationType.SYSTEM,
+              title: 'Add a payout method',
+              message: 'Automatic withdrawal is on, but there is no Mobile Money number or bank account to send your earnings to.',
+              link: '/settings/payments',
+            } as any,
+            {
+              title: 'Ajoutez un moyen de versement',
+              message: 'Le retrait automatique est activé, mais aucun numéro Mobile Money ni compte bancaire n’est enregistré pour recevoir vos revenus.',
+            },
+          )
+          .catch((e: any) => this.logger.warn(`Auto-withdrawal notice failed for ${userId}: ${e?.message}`));
+      }
+      return false;
+    }
+
+    try {
+      await this.requestWithdrawal(userId, available, to.method, to.details, { auto: true });
+    } catch (err: any) {
+      // Two checks at once: the second finds the balance already taken (atomic debit)
+      this.logger.warn(`Auto-withdrawal skipped for ${userId}: ${err?.message}`);
+      return false;
+    }
+    this.logger.log(`Auto-withdrawal requested for ${userId}: ${available} XAF via ${to.method}`);
+    await this.notificationsService
+      .create(
+        {
+          userId,
+          type: NotificationType.SYSTEM,
+          title: 'Automatic withdrawal requested',
+          message: `${available.toLocaleString('fr-FR')} XAF reached your threshold and is being sent to your payout method.`,
+          link: '/host/withdraw',
+          metadata: { amount: available, auto: true },
+        } as any,
+        {
+          title: 'Retrait automatique demandé',
+          message: `${available.toLocaleString('fr-FR')} XAF ont atteint votre seuil et sont envoyés vers votre moyen de versement.`,
+        },
+      )
+      .catch((e: any) => this.logger.warn(`Auto-withdrawal notice failed for ${userId}: ${e?.message}`));
+    return true;
+  }
+
+  /** Every morning (Cameroon time): hosts whose balance reached their threshold */
+  @Cron('0 9 * * *', { timeZone: 'Africa/Douala' })
+  async runAutoWithdrawals(): Promise<void> {
+    const due: any[] = await this.walletModel
+      .find({
+        autoWithdrawal: true,
+        $expr: {
+          $gte: [
+            { $ifNull: ['$availableBalance', '$balance'] },
+            { $max: [{ $ifNull: ['$autoWithdrawalThreshold', 0] }, this.MIN_WITHDRAWAL] },
+          ],
+        },
+      })
+      .select('userId')
+      .limit(500)
+      .lean();
+    let requested = 0;
+    for (const w of due) {
+      try {
+        if (await this.autoWithdrawIfDue(String(w.userId))) requested++;
+      } catch (e: any) {
+        this.logger.error(`Auto-withdrawal failed for ${String(w.userId)}: ${e?.message}`);
+      }
+    }
+    if (due.length) this.logger.log(`Auto-withdrawals: ${requested} requested of ${due.length} due`);
   }
 
   // ─── Queries / stats ────────────────────────────────────────────────────────

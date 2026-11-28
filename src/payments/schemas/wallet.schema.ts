@@ -69,6 +69,10 @@ export class Wallet {
   @Prop({ enum: ['MTN', 'ORANGE'] })
   mobileMoneyProvider?: string;
 
+  /** Automatic withdrawal had nowhere to send the money: when the host was last told */
+  @Prop()
+  autoWithdrawalNeedsMethodAt?: Date;
+
   // Auto-withdrawal settings
   @Prop({ default: false })
   autoWithdrawal?: boolean;
