@@ -29,6 +29,8 @@ export enum PaymentMethod {
   CARD          = 'card',
   BANK_TRANSFER = 'bank_transfer',
   WALLET        = 'wallet',
+  APP_STORE     = 'app_store',
+  GOOGLE_PLAY   = 'google_play',
 }
 
 export enum Currency {

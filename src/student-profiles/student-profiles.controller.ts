@@ -38,6 +38,7 @@ import { Roles, RolesGuard } from '../auth/guards/roles.guard';
 import { IsVerifiedStudentGuard } from './guards/is-verified-student.guard';
 import { User, UserRole } from '../users/schemas/user.schema';
 import { Area } from '../auth/team-areas';
+import { signPrivateLinks } from '../common/private-files';
 
 @ApiTags('Student Profiles')
 @ApiBearerAuth('JWT-auth')
@@ -78,7 +79,7 @@ export class StudentProfilesController {
   @ApiResponse({ status: 200, description: 'Student profile returned' })
   @ApiResponse({ status: 404, description: 'No profile found — complete onboarding first' })
   async getMyProfile(@Req() req: FastifyRequest & { user: User }) {
-    return this.studentProfilesService.findMyProfile(req.user._id.toString());
+    return signPrivateLinks(await this.studentProfilesService.findMyProfile(req.user._id.toString()), ['studentIdUrl']);
   }
 
   /**
@@ -252,7 +253,7 @@ export class StudentProfilesController {
   @ApiOperation({ summary: 'Admin: list all student profiles with filters' })
   @ApiResponse({ status: 200, description: 'Paginated list of student profiles' })
   async adminFindAll(@Query() query: GetStudentProfilesQueryDto) {
-    return this.studentProfilesService.findAll(query);
+    return signPrivateLinks(await this.studentProfilesService.findAll(query), ['studentIdUrl']);
   }
 
   /**
@@ -278,7 +279,7 @@ export class StudentProfilesController {
   @ApiResponse({ status: 200, description: 'Profile returned' })
   @ApiResponse({ status: 404, description: 'Profile not found' })
   async adminFindOne(@Param('id') id: string) {
-    return this.studentProfilesService.findById(id);
+    return signPrivateLinks(await this.studentProfilesService.findById(id), ['studentIdUrl']);
   }
 
   /**

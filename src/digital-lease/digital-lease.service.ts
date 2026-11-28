@@ -30,6 +30,7 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { NotificationType } from '../notifications/schemas/notification.schema';
 import { AmbassadorReferralsService } from '../student-profiles/ambassador-referrals.service';
 import { SplitPaymentsService } from '../split-payments/split-payments.service';
+import { PRIVATE_IMAGE } from '../common/private-files';
 
 @Injectable()
 export class DigitalLeaseService {
@@ -398,7 +399,8 @@ export class DigitalLeaseService {
           const stream = cloudinary.uploader.upload_stream(
             {
               folder: `horohouse/leases/${leaseId}/condition`,
-              resource_type: 'image',
+              // Private: only the people on the lease get (signed) links
+              ...PRIVATE_IMAGE,
               transformation: [{ quality: 75, fetch_format: 'auto' }],
             },
             (error, result) => {
@@ -591,7 +593,8 @@ export class DigitalLeaseService {
       const stream = cloudinary.uploader.upload_stream(
         {
           folder: `horohouse/leases/${leaseId}/signatures`,
-          resource_type: 'image',
+          // Private: only the people on the lease get (signed) links
+          ...PRIVATE_IMAGE,
           public_id: `sig_${userId}_${Date.now()}`,
           transformation: [{ quality: 90 }],
         },

@@ -100,7 +100,7 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
             return next(new Error('Authentication error: session ended'));
           }
 
-          this.logger.log(`✅ Token verified - User ID: ${payload.sub || payload.userId}, Email: ${payload.email}`);
+          this.logger.log(`✅ Token verified - User ID: ${payload.sub || payload.userId}`);
           next();
         } catch (error) {
           this.logger.error(`❌ Token verification failed: ${error.message}`);

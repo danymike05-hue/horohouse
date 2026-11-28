@@ -19,7 +19,7 @@ import { InjectModel } from '@nestjs/mongoose';
 import { isValidObjectId, Model, Types } from 'mongoose';
 import { BookingPaymentGateway, FulfilmentResult } from './booking-payment.gateway';
 import { CamerPayClient, CamerPayError, CamerPayTransaction } from './camerpay.client';
-import { CheckoutQuoteQueryDto, CreateCheckoutPaymentDto } from './dto/create-checkout-payment.dto';
+import { CheckoutQuoteQueryDto, CreateCheckoutPaymentDto, StorePurchaseDto } from './dto/create-checkout-payment.dto';
 import { PurchaseGateway, PurchaseQuote, QuoteView } from './purchase.gateway';
 import { detectOperator, normalizeCmPhone, toInternational } from './momo.util';
 import {
@@ -30,6 +30,8 @@ import {
   CheckoutStatus,
 } from './schemas/checkout-payment.schema';
 import { NotificationsService } from '../notifications/notifications.service';
+import { accountTokenFor, StorePurchaseRejected, StoreVerifyService, VerifiedStorePurchase } from './store-verify.service';
+import { parseStoreProductId } from './store-products';
 
 /** CamerPay amount limits (XAF) — https://camerpay.biz/docs/endpoints */
 const LIMITS = {
@@ -90,6 +92,8 @@ export class CheckoutService implements OnModuleInit {
     // For admin alerts on payments that need a refund. Add NotificationsModule to
     // CheckoutModule's imports; without it, alerts are logged only.
     @Optional() private readonly notifications?: NotificationsService,
+    // Apple / Google purchase checks (plans and boosts bought in the phone apps)
+    @Optional() private readonly store?: StoreVerifyService,
   ) {
     // Public HTTPS URL of this API including the global prefix, e.g. https://api.horohouse.com/api/v1
     this.publicApiUrl = (config.get<string>('CHECKOUT_PUBLIC_API_URL') ?? config.get<string>('BACKEND_URL') ?? '').replace(/\/+$/, '');
@@ -174,7 +178,7 @@ export class CheckoutService implements OnModuleInit {
   async createPayment(userId: string, dto: CreateCheckoutPaymentDto): Promise<CheckoutPaymentView> {
     const purpose: CheckoutPurpose = dto.purpose ?? 'booking';
     if (purpose !== 'booking') return this.createPurchasePayment(userId, dto, purpose);
-    if (dto.method === 'wallet' || dto.method === 'plan_credit') {
+    if (dto.method === 'wallet' || dto.method === 'plan_credit' || dto.method === 'app_store' || dto.method === 'google_play') {
       throw new BadRequestException({ code: 'METHOD_NOT_ALLOWED', message: 'Ce moyen de paiement n’est pas disponible pour une réservation.' });
     }
     if (!dto.bookingId) throw new BadRequestException('bookingId requis');
@@ -300,6 +304,10 @@ export class CheckoutService implements OnModuleInit {
       throw new BadRequestException({ code: 'METHOD_NOT_ALLOWED', message: 'Choisissez Mobile Money ou la carte pour ce paiement.' });
     }
     if (dto.method === 'wallet' || dto.method === 'plan_credit') return this.payInstantly(userId, dto, purpose, q);
+    // Apple / Google purchases come through POST /checkout/store-purchase, already paid
+    if (dto.method === 'app_store' || dto.method === 'google_play') {
+      throw new BadRequestException({ code: 'METHOD_NOT_ALLOWED', message: 'Use the store purchase for this.' });
+    }
 
     const method = dto.method;
     const { phone, operator } = this.resolveMomo(dto);
@@ -438,6 +446,103 @@ export class CheckoutService implements OnModuleInit {
   private samePurchase(a?: CheckoutPurchase, b?: CheckoutPurchase): boolean {
     const k = (p?: CheckoutPurchase) => [p?.planName, p?.billingCycle, p?.propertyId, p?.boostType, p?.duration, p?.orderId].join('|');
     return k(a) === k(b);
+  }
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // Plans and boosts bought in the phone apps (Apple / Google billing)
+  // ───────────────────────────────────────────────────────────────────────────
+
+  /**
+   * The app bought a plan or a boost through Apple or Google: check it with the store, tie it
+   * to this account, then switch it on like any paid checkout. A purchase is used once
+   * (its store reference is unique): sending it again returns the same result.
+   */
+  async storePurchase(userId: string, dto: StorePurchaseDto): Promise<CheckoutPaymentView> {
+    if (!this.store) throw new ServiceUnavailableException('In-app purchases aren’t set up on this server.');
+    const product = parseStoreProductId(dto.productId);
+    if (!product) throw new BadRequestException({ code: 'UNKNOWN_PRODUCT', message: 'Unknown product.' });
+    // A boost without its listing (a purchase finished after the app was closed) is still
+    // checked and recorded: the quote below fails and it's flagged for a refund
+    const proof = dto.platform === 'ios' ? dto.transactionId : dto.purchaseToken;
+    if (!proof) throw new BadRequestException(dto.platform === 'ios' ? 'transactionId is required.' : 'purchaseToken is required.');
+
+    let verified: VerifiedStorePurchase;
+    try {
+      verified = await this.store.verify(dto.platform, dto.productId, proof);
+    } catch (err) {
+      if (err instanceof StorePurchaseRejected) throw new BadRequestException({ code: err.code, message: err.message });
+      throw err;
+    }
+    // Made for this account (the app sends its token with every purchase)
+    if (!verified.accountToken || verified.accountToken !== accountTokenFor(userId)) {
+      throw new ForbiddenException({ code: 'OTHER_ACCOUNT', message: 'This purchase was made from another HoroHouse account.' });
+    }
+
+    const finishGoogle = async () => {
+      if (dto.platform === 'android') await this.store!.consumeGoogle(dto.productId, proof).catch(() => undefined);
+    };
+
+    // Already used: same answer again (the app retries until it can finish the purchase)
+    const used = await this.payments.findOne({ providerReference: verified.reference });
+    if (used) {
+      if (String(used.userId) !== String(userId)) throw new ForbiddenException({ code: 'OTHER_ACCOUNT', message: 'This purchase belongs to another account.' });
+      await finishGoogle();
+      return this.toView(used);
+    }
+
+    const req = product.purpose === 'subscription'
+      ? { purpose: 'subscription' as const, planName: product.planName, billingCycle: product.billingCycle as 'monthly' | 'quarterly' | 'yearly' }
+      : { purpose: 'boost' as const, propertyId: dto.propertyId, boostType: product.boostType, duration: product.duration };
+
+    const _id = new Types.ObjectId();
+    const now = new Date();
+    let q: PurchaseQuote | null = null;
+    let quoteError: string | null = null;
+    try {
+      q = await this.purchases.quote(userId, req as any);
+    } catch (err: any) {
+      // Paid at the store, but it can't be switched on (listing boosted meanwhile, plan gone…)
+      quoteError = String(err?.response?.code ?? err?.message ?? err);
+    }
+
+    let payment: CheckoutPaymentDocument;
+    try {
+      payment = await this.payments.create({
+        _id,
+        purpose: product.purpose,
+        purchase: q?.purchase ?? { label: dto.productId },
+        userId: new Types.ObjectId(userId),
+        method: dto.platform === 'ios' ? 'app_store' : 'google_play',
+        // The plan's price in FCFA, for HoroHouse's records; what the buyer paid in their own
+        // currency is in storePrice (Apple says it, Google doesn't)
+        amount: q?.amount ?? 0,
+        currency: 'XAF',
+        status: 'paid',
+        paidAt: now,
+        providerReference: verified.reference,
+        providerStatus: verified.environment ?? 'store',
+        storePrice: verified.price,
+        merchantInvoiceId: `HH-${_id.toHexString()}`,
+        expiresAt: now,
+      });
+    } catch (err: any) {
+      if (err?.code === 11000) {
+        // The same purchase arrived twice at once
+        const again = await this.payments.findOne({ providerReference: verified.reference });
+        if (again) return this.toView(again);
+      }
+      throw err;
+    }
+
+    if (quoteError) {
+      await this.flag(payment, `store_purchase_not_activated: ${quoteError} — refund it in ${dto.platform === 'ios' ? 'App Store Connect (or the buyer asks Apple)' : 'Google Play Console'}`);
+      await this.payments.updateOne({ _id: payment._id }, { $set: { fulfilledAt: new Date() } });
+    } else {
+      await this.fulfil(payment);
+    }
+    await finishGoogle();
+    this.logger.log(`Store purchase ${verified.reference} (${dto.productId}) → payment ${payment.id}`);
+    return this.toView((await this.payments.findById(payment._id))!);
   }
 
   // ───────────────────────────────────────────────────────────────────────────

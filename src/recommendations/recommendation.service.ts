@@ -161,8 +161,8 @@ export class RecommendationService {
       // Fetch full property details from database
       const properties = await this.propertyModel
         .find({ _id: { $in: propertyIds } })
-        .populate('ownerId', 'name profilePicture email')
-        .populate('agentId', 'name profilePicture agency email')
+        .populate('ownerId', 'name profilePicture')
+        .populate('agentId', 'name profilePicture agency')
         .exec();
 
       // Create a map for quick lookup

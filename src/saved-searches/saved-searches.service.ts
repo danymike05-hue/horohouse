@@ -238,8 +238,8 @@ export class SavedSearchesService {
     const [properties, total] = await Promise.all([
       this.propertyModel
         .find(query)
-        .populate('ownerId', 'name email phoneNumber profilePicture')
-        .populate('agentId', 'name email phoneNumber profilePicture agency')
+        .populate('ownerId', 'name profilePicture')
+        .populate('agentId', 'name profilePicture agency')
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit)

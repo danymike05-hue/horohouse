@@ -519,8 +519,8 @@ export class AiChatService {
       // Fetch full property details
       const properties = await this.propertyModel
         .find({ _id: { $in: recommendations } })
-        .populate('ownerId', 'name email phoneNumber profilePicture')
-        .populate('agentId', 'name email phoneNumber profilePicture agency')
+        .populate('ownerId', 'name profilePicture')
+        .populate('agentId', 'name profilePicture agency')
         .limit(limit)
         .exec();
 

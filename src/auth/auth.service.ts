@@ -4,8 +4,7 @@ import {
   BadRequestException,
   ConflictException,
   Logger,
-  NotFoundException,
-} from '@nestjs/common';
+  NotFoundException, ServiceUnavailableException } from '@nestjs/common';
 import { JwtSignOptions, JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
@@ -155,11 +154,20 @@ export class AuthService {
   ) { }
 
 
+  /** Phone codes need a real SMS provider (SmsService): until then, these features are off */
+  private smsUnavailable() {
+    return new ServiceUnavailableException({
+      code: 'SMS_UNAVAILABLE',
+      message: 'Text message codes aren’t available yet. Sign in with email, Google or Apple.',
+    });
+  }
+
   /**
    * Send phone verification code
    */
   async sendPhoneVerificationCode(dto: SendPhoneCodeDto): Promise<{ message: string }> {
     try {
+      if (!this.smsService.isAvailable()) throw this.smsUnavailable();
       const { phoneNumber } = dto;
 
       if (!this.smsService.isValidPhoneNumber(phoneNumber)) {
@@ -323,7 +331,7 @@ async registerWithEmail(dto: RegisterWithEmailDto, req?: any): Promise<AuthToken
       onboardingStatus: OnboardingStatus.COMPLETED,
     });
 
-      this.logger.log(`New user registered with email: ${normalizedEmail}`);
+      this.logger.log(`New user registered with email (user ${String((user as any)?._id ?? '')})`);
 
       // Send both welcome email and verification email
       const verificationToken = crypto.randomBytes(32).toString('hex');
@@ -357,6 +365,7 @@ async registerWithEmail(dto: RegisterWithEmailDto, req?: any): Promise<AuthToken
    */
   async loginWithPhone(dto: LoginWithPhoneDto, req?: any): Promise<AuthTokens> {
     try {
+      if (!this.smsService.isAvailable()) throw this.smsUnavailable();
       const { phoneNumber, verificationCode } = dto;
 
       const formattedPhone = this.smsService.formatPhoneNumber(phoneNumber);
@@ -424,7 +433,7 @@ async registerWithEmail(dto: RegisterWithEmailDto, req?: any): Promise<AuthToken
         throw new UnauthorizedException({ message: 'This account is deactivated', code: 'ACCOUNT_DEACTIVATED' });
       }
 
-      this.logger.log(`User logged in with email: ${normalizedEmail}`);
+      this.logger.log(`User ${String((user as any)?._id ?? '')} logged in with email`);
 
       const tokens = await this.generateTokens(user, req);
 
@@ -821,6 +830,7 @@ async registerWithEmail(dto: RegisterWithEmailDto, req?: any): Promise<AuthToken
    */
   async verifyPhone(dto: VerifyPhoneDto): Promise<{ message: string }> {
     try {
+      if (!this.smsService.isAvailable()) throw this.smsUnavailable();
       const { phoneNumber, verificationCode } = dto;
 
       const formattedPhone = this.smsService.formatPhoneNumber(phoneNumber);
@@ -1194,6 +1204,7 @@ async registerWithEmail(dto: RegisterWithEmailDto, req?: any): Promise<AuthToken
    */
   async resendPhoneVerification(user: User): Promise<{ message: string }> {
     try {
+      if (!this.smsService.isAvailable()) throw this.smsUnavailable();
       if (user.phoneVerified) {
         throw new BadRequestException('Phone number is already verified');
       }
@@ -1555,13 +1566,15 @@ async registerWithEmail(dto: RegisterWithEmailDto, req?: any): Promise<AuthToken
    */
   /**
    * City, country from the IP (ip-api.com, free tier, no key). Returns ''
-   * when unknown so the app simply shows nothing. Turn off with SESSION_GEOIP=off.
+   * when unknown so the app simply shows nothing. Off unless SESSION_GEOIP=on.
    * Results are cached for a day; a slow lookup never holds up sign-in for more than 1.5 s.
    */
   private static geoCache = new Map<string, { at: number; value: string }>();
   private async getLocationFromIp(ipAddress: string): Promise<string> {
     const ip = String(ipAddress ?? '').replace(/^::ffff:/, '');
-    if (!ip || ip === 'Unknown' || this.configService.get<string>('SESSION_GEOIP') === 'off') return '';
+    // Off unless SESSION_GEOIP=on: ip-api's free plan is plain http (the IP travels unencrypted)
+    // and not for commercial use. Turn on only with an HTTPS provider or a paid key.
+    if (!ip || ip === 'Unknown' || this.configService.get<string>('SESSION_GEOIP') !== 'on') return '';
     // Private / proxy ranges have no location
     if (/^(127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.|169\.254\.)/.test(ip) || ip === '::1' || /^f[cd]/i.test(ip)) return '';
 
@@ -1801,7 +1814,7 @@ async registerWithEmail(dto: RegisterWithEmailDto, req?: any): Promise<AuthToken
     user.onboardingStatus = OnboardingStatus.PHONE_PROVIDED;
     await user.save();
 
-    this.logger.log(`Onboarding phone set for user ${userId}: ${formattedPhone}`);
+    this.logger.log(`Onboarding phone set for user ${userId}`);
 
     return {
       onboardingStatus: user.onboardingStatus,

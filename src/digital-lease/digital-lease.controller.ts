@@ -34,6 +34,10 @@ import { LeaseStatus } from './schemas/digital-lease.schema';
 import { JwtAuthGuard } from '../auth/guards/jwt.auth.guard';
 import { Roles, RolesGuard } from '../auth/guards/roles.guard';
 import { User, UserRole } from '../users/schemas/user.schema';
+import { signPrivateLinks } from '../common/private-files';
+
+/** Lease fields that hold private files (signatures, move-in photos) */
+const LEASE_FILES = ['signatureUrl', 'landlordSignatureUrl', 'photoUrls'];
 
 @ApiTags('Digital Leases')
 @ApiBearerAuth('JWT-auth')
@@ -51,11 +55,11 @@ export class DigitalLeaseController {
   @Roles(UserRole.LANDLORD, UserRole.AGENT, UserRole.ADMIN)
   @ApiOperation({ summary: 'Create a lease draft (landlord/agent)' })
   @ApiResponse({ status: 201, description: 'Lease draft created with standard HoroHouse clauses' })
-  create(
+  async create(
     @Req() req: FastifyRequest & { user: User },
     @Body() dto: CreateDigitalLeaseDto,
   ) {
-    return this.digitalLeaseService.create(req.user._id.toString(), dto);
+    return signPrivateLinks(await this.digitalLeaseService.create(req.user._id.toString(), dto), LEASE_FILES);
   }
 
   // ── Read ──────────────────────────────────────────────────────────────────
@@ -81,27 +85,27 @@ export class DigitalLeaseController {
   @Roles(UserRole.LANDLORD, UserRole.AGENT, UserRole.ADMIN)
   @ApiOperation({ summary: 'Get all leases where I am the landlord' })
   @ApiQuery({ name: 'status', enum: LeaseStatus, required: false })
-  getLandlordLeases(
+  async getLandlordLeases(
     @Req() req: FastifyRequest & { user: User },
     @Query('status') status?: LeaseStatus,
   ) {
-    return this.digitalLeaseService.findByLandlord(
+    return signPrivateLinks(await this.digitalLeaseService.findByLandlord(
       req.user._id.toString(),
       status,
-    );
+    ), LEASE_FILES);
   }
 
   @Get('mine/tenant')
   @ApiOperation({ summary: 'Get all leases where I am a tenant' })
-  getTenantLeases(@Req() req: FastifyRequest & { user: User }) {
-    return this.digitalLeaseService.findByTenant(req.user._id.toString());
+  async getTenantLeases(@Req() req: FastifyRequest & { user: User }) {
+    return signPrivateLinks(await this.digitalLeaseService.findByTenant(req.user._id.toString()), LEASE_FILES);
   }
 
   @Get(':leaseId')
   @ApiOperation({ summary: 'Get a lease by ID' })
   @ApiParam({ name: 'leaseId' })
-  findOne(@Param('leaseId') leaseId: string, @Req() req: FastifyRequest & { user: User }) {
-    return this.digitalLeaseService.findByIdFor(leaseId, req.user._id.toString(), (req.user as any).role);
+  async findOne(@Param('leaseId') leaseId: string, @Req() req: FastifyRequest & { user: User }) {
+    return signPrivateLinks(await this.digitalLeaseService.findByIdFor(leaseId, req.user._id.toString(), (req.user as any).role), LEASE_FILES);
   }
 
   // ── E-signature ───────────────────────────────────────────────────────────
@@ -110,16 +114,16 @@ export class DigitalLeaseController {
   @ApiOperation({ summary: 'Sign the lease (landlord or tenant) — uploads signature to Cloudinary' })
   @ApiParam({ name: 'leaseId' })
   @ApiResponse({ status: 200, description: 'Signed. If all parties signed, lease becomes ACTIVE and first billing cycle is created.' })
-  sign(
+  async sign(
     @Param('leaseId') leaseId: string,
     @Req() req: FastifyRequest & { user: User },
     @Body() dto: SignLeaseDto,
   ) {
-    return this.digitalLeaseService.sign(
+    return signPrivateLinks(await this.digitalLeaseService.sign(
       leaseId,
       req.user._id.toString(),
       dto,
-    );
+    ), LEASE_FILES);
   }
 
   // ── Condition log ─────────────────────────────────────────────────────────
@@ -128,16 +132,16 @@ export class DigitalLeaseController {
   @ApiOperation({ summary: 'Add a move-in or move-out condition log' })
   @ApiParam({ name: 'leaseId' })
   @ApiResponse({ status: 201, description: 'Log recorded. Add photos separately via /condition-photos.' })
-  addConditionLog(
+  async addConditionLog(
     @Param('leaseId') leaseId: string,
     @Req() req: FastifyRequest & { user: User },
     @Body() dto: AddConditionLogDto,
   ) {
-    return this.digitalLeaseService.addConditionLog(
+    return signPrivateLinks(await this.digitalLeaseService.addConditionLog(
       leaseId,
       req.user._id.toString(),
       dto,
-    );
+    ), LEASE_FILES);
   }
 
   @Post(':leaseId/condition-photos')
@@ -174,13 +178,13 @@ export class DigitalLeaseController {
       throw new BadRequestException('No files uploaded.');
     }
 
-    return this.digitalLeaseService.uploadConditionPhotos(
+    return signPrivateLinks(await this.digitalLeaseService.uploadConditionPhotos(
       leaseId,
       logType,
       itemLabel,
       files,
       req.user._id.toString(),
-    );
+    ), LEASE_FILES);
   }
 
   // ── Termination ───────────────────────────────────────────────────────────
@@ -189,15 +193,15 @@ export class DigitalLeaseController {
   @ApiOperation({ summary: 'Terminate a lease early (any party)' })
   @ApiParam({ name: 'leaseId' })
   @ApiResponse({ status: 200, description: 'Lease terminated — other party notified' })
-  terminate(
+  async terminate(
     @Param('leaseId') leaseId: string,
     @Req() req: FastifyRequest & { user: User },
     @Body() dto: TerminateLeaseDto,
   ) {
-    return this.digitalLeaseService.terminate(
+    return signPrivateLinks(await this.digitalLeaseService.terminate(
       leaseId,
       req.user._id.toString(),
       dto,
-    );
+    ), LEASE_FILES);
   }
 }

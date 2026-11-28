@@ -6,6 +6,9 @@ import {
     Logger,
     OnModuleInit, Optional } from '@nestjs/common';
 import { HostPlansService } from '../host-plans/host-plans.service';
+import { ModuleRef } from '@nestjs/core';
+import { NotificationsService } from '../notifications/notifications.service';
+import { offPlatformReason, OFF_PLATFORM_ALERT_AT, OffPlatformReason } from './off-platform';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 
@@ -41,6 +44,7 @@ export class ChatService implements OnModuleInit {
         @InjectModel(Property.name) private propertyModel: Model<PropertyDocument>,
         @InjectModel(User.name) private userModel: Model<UserDocument>,
         @Optional() private readonly hostPlans?: HostPlansService,
+        @Optional() private readonly moduleRef?: ModuleRef,
     ) { }
 
     async onModuleInit() {
@@ -514,6 +518,12 @@ export class ChatService implements OnModuleInit {
                 }
             }
 
+            // Trust & safety: a phone number, email, WhatsApp or "pay me by MoMo" before a
+            // booking is paid. The message still goes; both people see a safety banner.
+            const recipientId = String((recipient.userId as any)?._id ?? recipient.userId);
+            const safety = conversation.isSupport ? null : offPlatformReason(content);
+            const flagged = safety && !(await this.havePaidBooking(userId, recipientId)) ? safety : null;
+
             // Create message
             const message = await this.messageModel.create({
                 conversationId: new Types.ObjectId(conversationId),
@@ -525,7 +535,9 @@ export class ChatService implements OnModuleInit {
                 propertyReference,
                 replyTo: replyTo ? new Types.ObjectId(replyTo) : undefined,
                 status: MessageStatus.SENT,
+                ...(flagged ? { metadata: { offPlatform: flagged } } : {}),
             });
+            if (flagged) await this.noteOffPlatform(conversationId, userId, flagged);
 
             // Update conversation
             await this.conversationModel.findByIdAndUpdate(conversationId, {
@@ -554,6 +566,53 @@ export class ChatService implements OnModuleInit {
         } catch (error) {
             this.logger.error('Error sending message:', error);
             throw error;
+        }
+    }
+
+    /** A paid (not cancelled) booking between these two people: they may share contact then */
+    private async havePaidBooking(a: string, b: string): Promise<boolean> {
+        try {
+            const Booking = this.messageModel.db.models['Booking'];
+            if (!Booking || !Types.ObjectId.isValid(a) || !Types.ObjectId.isValid(b)) return false;
+            const A = new Types.ObjectId(a);
+            const B = new Types.ObjectId(b);
+            const found = await Booking.exists({
+                $or: [{ guestId: A, hostId: B }, { guestId: B, hostId: A }],
+                paymentStatus: 'paid',
+                status: { $nin: ['cancelled', 'rejected'] },
+            });
+            return !!found;
+        } catch {
+            return false;
+        }
+    }
+
+    /** Mark the chat (safety banner for both) and tell the team about repeat senders */
+    private async noteOffPlatform(conversationId: string, senderId: string, reason: OffPlatformReason) {
+        try {
+            await this.conversationModel.updateOne(
+                { _id: new Types.ObjectId(conversationId) },
+                { $set: { 'metadata.offPlatformAt': new Date(), 'metadata.offPlatformReason': reason } },
+            );
+            const since = new Date(Date.now() - 30 * 24 * 3600 * 1000);
+            const count = await this.messageModel.countDocuments({
+                senderId: new Types.ObjectId(senderId),
+                'metadata.offPlatform': { $exists: true },
+                createdAt: { $gte: since },
+            });
+            if (count !== OFF_PLATFORM_ALERT_AT) return;
+            let notifications: NotificationsService | null = null;
+            try { notifications = this.moduleRef?.get(NotificationsService, { strict: false }) ?? null; } catch { notifications = null; }
+            const sender = await this.userModel.findById(senderId).select('name role').lean().exec();
+            await notifications?.notifyAdmins({
+                title: 'Chat: asking to talk or pay outside HoroHouse',
+                message: `${(sender as any)?.name ?? 'Someone'} (${(sender as any)?.role ?? 'user'}) sent ${count} messages in 30 days with a phone number, email, WhatsApp or a request to pay outside the app, before any paid booking. Check the account.`,
+                link: `/admin/users/${senderId}`,
+                metadata: { kind: 'off_platform_chat', userId: senderId, count, lastReason: reason, conversationId },
+            });
+            this.logger.warn(`Off-platform chat alert for user ${senderId} (${count} in 30 days)`);
+        } catch (e: any) {
+            this.logger.error(`Off-platform note failed: ${e?.message}`);
         }
     }
 

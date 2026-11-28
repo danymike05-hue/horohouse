@@ -102,3 +102,31 @@ export class CheckoutQuoteQueryDto {
   @IsIn([24, 168, 720])
   duration?: number;
 }
+
+/** POST /checkout/store-purchase — a plan or boost bought in the app with Apple / Google billing */
+export class StorePurchaseDto {
+  @IsIn(['ios', 'android'])
+  platform!: 'ios' | 'android';
+
+  /** e.g. com.horohouse.app.plan.host_growth.monthly — see checkout/store-products.ts */
+  @IsString()
+  @MaxLength(120)
+  productId!: string;
+
+  /** iPhone: the StoreKit transaction id */
+  @ValidateIf((o: StorePurchaseDto) => o.platform === 'ios')
+  @IsString()
+  @MaxLength(40)
+  transactionId?: string;
+
+  /** Android: the Play Billing purchase token */
+  @ValidateIf((o: StorePurchaseDto) => o.platform === 'android')
+  @IsString()
+  @MaxLength(4096)
+  purchaseToken?: string;
+
+  /** Boosts: the listing */
+  @IsOptional()
+  @IsMongoId()
+  propertyId?: string;
+}

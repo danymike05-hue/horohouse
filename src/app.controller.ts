@@ -1,4 +1,4 @@
-import { Controller, Get, UseGuards } from '@nestjs/common';
+import { Controller, Get, ServiceUnavailableException, UseGuards } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import { AppService } from './app.service';
 import { Public, Roles, RolesGuard } from './auth/guards/roles.guard';
@@ -14,8 +14,11 @@ export class AppController {
   @Get('health')
   @ApiOperation({ summary: 'Health check endpoint' })
   @ApiResponse({ status: 200, description: 'Service is healthy' })
-  getHealth() {
-    return this.appService.getHealthStatus();
+  async getHealth() {
+    const health = await this.appService.getHealthStatus();
+    // 503 when the database is down, so Railway (and any uptime monitor) sees the outage
+    if (health.status !== 'ok') throw new ServiceUnavailableException(health);
+    return health;
   }
 
   @Public()

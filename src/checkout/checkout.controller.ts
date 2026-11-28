@@ -18,7 +18,7 @@ import type { FastifyRequest } from 'fastify';
 // ⚠ Adjust to your existing guard path.
 import { JwtAuthGuard } from 'src/auth/guards/jwt.auth.guard';
 import { CheckoutService } from './checkout.service';
-import { CheckoutQuoteQueryDto, CreateCheckoutPaymentDto } from './dto/create-checkout-payment.dto';
+import { CheckoutQuoteQueryDto, CreateCheckoutPaymentDto, StorePurchaseDto } from './dto/create-checkout-payment.dto';
 
 const userIdOf = (req: any): string => String(req.user?.id ?? req.user?._id ?? req.user?.sub ?? req.user?.userId);
 
@@ -44,6 +44,14 @@ export class CheckoutController {
    * included-boost payments are settled immediately.
    */
   @UseGuards(JwtAuthGuard)
+  /** A plan or boost bought in the phone app (Apple / Google billing): checked, then switched on */
+  @UseGuards(JwtAuthGuard)
+  @Post('store-purchase')
+  @HttpCode(200)
+  storePurchase(@Req() req: FastifyRequest, @Body() dto: StorePurchaseDto) {
+    return this.checkout.storePurchase(userIdOf(req), dto);
+  }
+
   @Post('payments')
   create(@Req() req: any, @Body() dto: CreateCheckoutPaymentDto) {
     return this.checkout.createPayment(userIdOf(req), dto);

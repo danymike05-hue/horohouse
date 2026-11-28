@@ -1,3 +1,5 @@
+// Error reporting first, so it sees everything that loads after it
+import './instrument';
 import { NestFactory } from '@nestjs/core';
 import { FastifyAdapter, NestFastifyApplication } from '@nestjs/platform-fastify';
 import { ValidationPipe, Logger, BadRequestException } from '@nestjs/common';
@@ -9,6 +11,8 @@ import multipart from '@fastify/multipart';
 import cookie from '@fastify/cookie';
 import mongoose from 'mongoose';
 import { AppModule } from './app.module';
+import * as Sentry from '@sentry/nestjs';
+import { SentryLogger } from './common/sentry-logger';
 import { webcrypto } from 'crypto';
 
 if (!globalThis.crypto) {
@@ -115,12 +119,18 @@ async function bootstrap() {
   const app = await NestFactory.create<NestFastifyApplication>(
     AppModule,
     fastifyAdapter,
-    { rawBody: true },
+    { rawBody: true, logger: new SentryLogger() },
   );
 
   const configService = app.get(ConfigService);
   const port = configService.get<number>('PORT', 3000);
   const isProduction = configService.get('NODE_ENV') === 'production';
+
+  // Without the signing secret, logins and cookies would use a guessable default: refuse to run
+  const jwtSecret = configService.get<string>('JWT_SECRET');
+  if (!jwtSecret && isProduction) {
+    throw new Error('JWT_SECRET is not set: the API will not start without it in production');
+  }
   const customOrigins = configService.get<string>('ALLOWED_ORIGINS');
   const allowedOrigins = getAllowedOrigins(isProduction, customOrigins);
 
@@ -145,7 +155,7 @@ async function bootstrap() {
   await app.register(cors as any, corsOptions);
   await app.register(multipart as any, MULTIPART_OPTIONS);
   await app.register(cookie as any, {
-    secret: configService.get<string>('JWT_SECRET', 'horohouse_cookie_secret'),
+    secret: jwtSecret || 'horohouse_dev_cookie_secret',
   });
 
   // No MongoDB operators from outside: a body or query with a key like "$ne" or "$where"
@@ -161,6 +171,15 @@ async function bootstrap() {
   app.getHttpAdapter().getInstance().addHook('preValidation', async (req: any, reply: any) => {
     if (hasOperatorKey(req.body) || hasOperatorKey(req.query) || hasOperatorKey(req.params)) {
       return reply.code(400).send({ statusCode: 400, message: 'Invalid characters in request' });
+    }
+    // Page size: at most 1000 items per request (the app's map asks for 1000). Without a cap,
+    // ?limit=1000000 made the server load the whole collection into memory.
+    const q = req.query;
+    if (q && typeof q === 'object' && q.limit !== undefined) {
+      const n = Number(q.limit);
+      if (!Number.isFinite(n)) q.limit = '20';
+      else if (n > 1000) q.limit = '1000';
+      else if (n < 1) q.limit = '1';
     }
   });
 
@@ -191,6 +210,10 @@ async function bootstrap() {
 
   setupMongoEvents(logger);
 
+  // On a redeploy Railway stops the old server with SIGTERM: finish open requests, stop the
+  // scheduled jobs and close the database cleanly instead of being cut mid-way.
+  app.enableShutdownHooks();
+
   await app.listen(port, '0.0.0.0');
 
   logger.log(`🚀 HoroHouse Backend running on port ${port}`);
@@ -199,6 +222,13 @@ async function bootstrap() {
   logger.log(`🔑 JWT Secret configured: ${!!configService.get('JWT_SECRET')}`);
   logger.log(`💳 CamerPay webhook: POST /api/v1/payments/webhook/camerpay`);
 }
+
+// A promise that fails with nobody waiting for it used to crash the whole API (Node's default):
+// one stray error in a notification or a background task took every user offline. Log it instead.
+process.on('unhandledRejection', (reason: any) => {
+  new Logger('Process').error(`Unhandled promise rejection: ${reason?.message ?? reason}`, reason?.stack);
+  Sentry.captureException(reason);
+});
 
 bootstrap().catch((error) => {
   console.error('Failed to start server:', error);

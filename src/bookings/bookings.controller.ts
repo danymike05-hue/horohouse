@@ -1,3 +1,4 @@
+import { Throttle } from '@nestjs/throttler';
 import {
   Controller,
   Get,
@@ -47,6 +48,8 @@ export class BookingsController {
   // ════════════════════════════════════════════════════════════════════════════
 
   @Post()
+  // Trust & safety: no more than 10 booking attempts a minute (blocks scripts that hold dates)
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Roles(UserRole.REGISTERED_USER, UserRole.STUDENT, UserRole.GUEST, UserRole.HOST, UserRole.AGENT, UserRole.LANDLORD, UserRole.ADMIN)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Request a booking for a short-term property' })

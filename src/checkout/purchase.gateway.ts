@@ -433,6 +433,8 @@ export class PurchaseGateway {
 
   private methodOf(payment: CheckoutPaymentDocument): PaymentMethod {
     if (payment.method === 'card') return PaymentMethod.CARD;
+    if (payment.method === 'app_store') return PaymentMethod.APP_STORE;
+    if (payment.method === 'google_play') return PaymentMethod.GOOGLE_PLAY;
     if (payment.method === 'wallet' || payment.method === 'plan_credit') return PaymentMethod.WALLET;
     return payment.operator === 'orange_money' ? PaymentMethod.ORANGE_MONEY : PaymentMethod.MTN_MOMO;
   }

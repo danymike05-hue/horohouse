@@ -18,6 +18,7 @@ import { CheckoutExpiryJob } from './checkout-expiry.job';
 import { CheckoutController } from './checkout.controller';
 import { CheckoutService } from './checkout.service';
 import { CheckoutPayment, CheckoutPaymentSchema } from './schemas/checkout-payment.schema';
+import { StoreVerifyService } from './store-verify.service';
 
 @Module({
   imports: [
@@ -40,7 +41,7 @@ import { CheckoutPayment, CheckoutPaymentSchema } from './schemas/checkout-payme
     forwardRef(() => BookingsModule),
   ],
   controllers: [CheckoutController],
-  providers: [CheckoutService, CamerPayClient, BookingPaymentGateway, PurchaseGateway, CheckoutExpiryJob],
+  providers: [CheckoutService, CamerPayClient, BookingPaymentGateway, PurchaseGateway, CheckoutExpiryJob, StoreVerifyService],
   exports: [CheckoutService],
 })
 export class CheckoutModule {}

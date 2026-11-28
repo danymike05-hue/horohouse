@@ -1,9 +1,12 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Types } from 'mongoose';
 
-/** wallet = HoroHouse wallet balance; plan_credit = a free boost included in the host's plan */
-export type CheckoutMethod = 'mobile_money' | 'card' | 'wallet' | 'plan_credit';
-export const CHECKOUT_METHODS: CheckoutMethod[] = ['mobile_money', 'card', 'wallet', 'plan_credit'];
+/**
+ * wallet = HoroHouse wallet balance; plan_credit = a free boost included in the host's plan;
+ * app_store / google_play = bought inside the phone app with Apple's or Google's billing
+ */
+export type CheckoutMethod = 'mobile_money' | 'card' | 'wallet' | 'plan_credit' | 'app_store' | 'google_play';
+export const CHECKOUT_METHODS: CheckoutMethod[] = ['mobile_money', 'card', 'wallet', 'plan_credit', 'app_store', 'google_play'];
 /** What the payment is for */
 export type CheckoutPurpose = 'booking' | 'subscription' | 'boost' | 'date_change' | 'essentials';
 
@@ -97,6 +100,10 @@ export class CheckoutPayment {
   status!: CheckoutStatus;
 
   /** Our reference sent to CamerPay as merchant_invoice_id ("HH-<_id>"). */
+  /** Apple / Google: what the buyer paid in their own currency, as the store reports it */
+  @Prop({ type: Object })
+  storePrice?: { amount: number; currency: string };
+
   @Prop({ type: String, required: true, unique: true })
   merchantInvoiceId!: string;
 

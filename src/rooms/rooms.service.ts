@@ -229,7 +229,7 @@ export class RoomsService {
                     publicId,
                     folder: 'horohouse/rooms/images',
                     resourceType: 'image',
-                    transformation: [{ quality: 'auto', fetch_format: 'auto' }],
+                    transformation: [{ width: 2048, height: 2048, crop: 'limit', quality: 'auto', fetch_format: 'auto' }],
                 });
                 return { url: result.secure_url, publicId: result.public_id };
             })

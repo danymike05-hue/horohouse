@@ -1224,8 +1224,8 @@ export class UsersService {
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit)
-        .populate('ownerId', 'name email phoneNumber profilePicture')
-        .populate('agentId', 'name email phoneNumber profilePicture agency')
+        .populate('ownerId', 'name profilePicture')
+        .populate('agentId', 'name profilePicture agency')
         .exec(),
       this.propertyModel.countDocuments(query),
     ]);
@@ -2083,6 +2083,9 @@ export class UsersService {
       city: host.city,
       country: host.country,
       languages: host.languages,
+      // Confirmed contact, as yes/no only: the address and number stay private
+      hasEmail: !!host.email,
+      hasPhone: !!host.phoneNumber,
       averageRating: reviewStats.averageRating,
       reviewCount: reviewStats.totalReviews,
       // Listing stats

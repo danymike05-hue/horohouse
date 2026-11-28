@@ -7,6 +7,7 @@ import {
   Optional,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
+import { Cron } from '@nestjs/schedule';
 import { Model, Types } from 'mongoose';
 import { v2 as cloudinary } from 'cloudinary';
 import { User, UserDocument, UserRole } from '../users/schemas/user.schema';
@@ -150,6 +151,90 @@ export class TrustService {
         expires_at: Math.floor(Date.now() / 1000) + 600,
       } as any),
     };
+  }
+
+  // ── ID photos are kept 30 days after the decision ─────────────────────────────
+  // Long enough to answer a question about an approval or rejection; after that only the
+  // result stays (verified / rejected, the date, the reason). Covers the in-app ID check,
+  // the host ID and the student card. Pending ones are never touched.
+
+  /** Days an ID photo is kept after it was approved or rejected */
+  static readonly ID_PHOTO_DAYS = 30;
+
+  @Cron('0 3 * * *', { timeZone: 'Africa/Douala' })
+  async deleteOldIdPhotos(now = new Date()): Promise<number> {
+    const before = new Date(now.getTime() - TrustService.ID_PHOTO_DAYS * 86_400_000);
+    const destroy = async (publicId: string) => {
+      // Private now, public before: one of the two exists
+      await cloudinary.uploader.destroy(publicId, { type: 'authenticated', resource_type: 'image' }).catch(() => undefined);
+      await cloudinary.uploader.destroy(publicId, { resource_type: 'image' }).catch(() => undefined);
+    };
+    let removed = 0;
+
+    // In-app ID check (Verify your identity)
+    const checked: any[] = await this.userModel
+      .find({
+        'identityVerification.documentPublicId': { $exists: true, $nin: [null, ''] },
+        'identityVerification.status': { $in: ['verified', 'rejected'] },
+        'identityVerification.reviewedAt': { $lt: before },
+      })
+      .select('identityVerification.documentPublicId')
+      .limit(500)
+      .lean()
+      .exec();
+    for (const u of checked) {
+      await destroy(u.identityVerification.documentPublicId);
+      await this.userModel.updateOne({ _id: u._id }, { $unset: { 'identityVerification.documentPublicId': 1 } }).exec();
+      removed++;
+    }
+
+    // Host ID (older host verification)
+    const hosts: any[] = await this.userModel
+      .find({
+        'hostProfile.governmentIdPublicId': { $exists: true, $nin: [null, ''] },
+        'hostProfile.verificationStatus': { $in: ['verified', 'rejected'] },
+        'hostProfile.verificationReviewedAt': { $lt: before },
+      })
+      .select('hostProfile.governmentIdPublicId')
+      .limit(500)
+      .lean()
+      .exec();
+    for (const u of hosts) {
+      await destroy(u.hostProfile.governmentIdPublicId);
+      await this.userModel
+        .updateOne({ _id: u._id }, { $unset: { 'hostProfile.governmentIdPublicId': 1, 'hostProfile.governmentIdUrl': 1 } })
+        .exec();
+      removed++;
+    }
+
+    // Student cards
+    let students: any[] = [];
+    try {
+      const profiles = this.userModel.db.model('StudentProfile');
+      students = await profiles
+        .find({
+          studentIdPublicId: { $exists: true, $nin: [null, ''] },
+          verificationStatus: { $in: ['verified', 'rejected'] },
+          verificationReviewedAt: { $lt: before },
+        })
+        .select('studentIdPublicId userId')
+        .limit(500)
+        .lean()
+        .exec();
+      for (const p of students) {
+        await destroy(p.studentIdPublicId);
+        await profiles.updateOne({ _id: p._id }, { $unset: { studentIdPublicId: 1, studentIdUrl: 1 } }).exec();
+        await this.userModel
+          .updateOne({ _id: p.userId }, { $unset: { 'studentProfile.studentIdPublicId': 1, 'studentProfile.studentIdUrl': 1 } })
+          .exec();
+        removed++;
+      }
+    } catch (e: any) {
+      this.logger.warn(`Student cards not cleaned: ${e?.message}`);
+    }
+
+    if (removed) this.logger.log(`ID photos deleted ${TrustService.ID_PHOTO_DAYS} days after the decision: ${removed}`);
+    return removed;
   }
 
   async review(userId: string, approve: boolean, reason: string | undefined, admin: User): Promise<IdentityStatus> {

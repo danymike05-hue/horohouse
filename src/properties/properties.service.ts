@@ -368,8 +368,8 @@ export class PropertiesService implements OnModuleInit {
         this.propertyModel
           .find(query)
           .select(this.listingProjection())
-          .populate('ownerId', 'name email phoneNumber profilePicture')
-          .populate('agentId', 'name email phoneNumber profilePicture agency')
+          .populate('ownerId', 'name profilePicture')
+          .populate('agentId', 'name profilePicture agency')
           .sort(sort)
           .skip(skip)
           .limit(limit)
@@ -423,8 +423,8 @@ export class PropertiesService implements OnModuleInit {
           ...listingKindQuery(kind),
         })
         .select(this.listingProjection())
-        .populate('ownerId', 'name email phoneNumber')
-        .populate('agentId', 'name email phoneNumber agency')
+        .populate('ownerId', 'name profilePicture')
+        .populate('agentId', 'name profilePicture agency')
         .limit(limit)
         .lean()
         .exec();
@@ -507,6 +507,17 @@ export class PropertiesService implements OnModuleInit {
     if (!isOwner && !isAgent && !isAdmin) {
       delete (property as any).externalCalendars;
       delete (property as any).icalExportToken;
+      // Trust & safety: guests talk and pay through HoroHouse, so no phone or email on listings
+      delete (property as any).contactPhone;
+      delete (property as any).contactWhatsApp;
+      delete (property as any).contactEmail;
+      for (const who of ['ownerId', 'agentId']) {
+        const person = (property as any)[who];
+        if (person && typeof person === 'object') {
+          delete person.email;
+          delete person.phoneNumber;
+        }
+      }
     }
     return property as unknown as Property;
   } catch (error) {
@@ -811,7 +822,7 @@ export class PropertiesService implements OnModuleInit {
         publicId,
         folder: 'horohouse/properties/images',
         resourceType: 'image',
-        transformation: [{ quality: 'auto', fetch_format: 'auto' }],
+        transformation: [{ width: 2048, height: 2048, crop: 'limit', quality: 'auto', fetch_format: 'auto' }],
       });
       return { url: result.secure_url, publicId: result.public_id };
     }),
@@ -1128,8 +1139,8 @@ export class PropertiesService implements OnModuleInit {
       const properties = await this.propertyModel
         .find({ _id: { $in: favoriteIds }, isActive: true, approvalStatus: ApprovalStatus.APPROVED })
         .select(this.listingProjection())
-        .populate('ownerId', 'name email phoneNumber profilePicture')
-        .populate('agentId', 'name email phoneNumber profilePicture agency')
+        .populate('ownerId', 'name profilePicture')
+        .populate('agentId', 'name profilePicture agency')
         .sort(sort)
         .skip(skip)
         .limit(limit)
@@ -1212,7 +1223,7 @@ export class PropertiesService implements OnModuleInit {
         this.propertyModel
           .find(query)
           // The owner also sees why it was not approved
-          .select({ ...this.listingProjection(), rejectionReason: 1 })
+          .select({ ...this.listingProjection(), rejectionReason: 1, contactPhone: 1, contactWhatsApp: 1, contactEmail: 1 })
           .populate('ownerId', 'name email phoneNumber profilePicture')
           .populate('agentId', 'name email phoneNumber profilePicture agency')
           .sort(sort)
@@ -1386,8 +1397,8 @@ export class PropertiesService implements OnModuleInit {
       this.propertyModel
         .find(query)
         .select(this.listingProjection())
-        .populate('ownerId', 'name email phoneNumber profilePicture')
-        .populate('agentId', 'name email phoneNumber profilePicture agency')
+        .populate('ownerId', 'name profilePicture')
+        .populate('agentId', 'name profilePicture agency')
         .sort(sort)
         .skip(skip)
         .limit(limit)
@@ -1897,8 +1908,8 @@ export class PropertiesService implements OnModuleInit {
         isActive: true,
         approvalStatus: ApprovalStatus.APPROVED,
       })
-      .populate('ownerId', 'name email phoneNumber profilePicture')
-      .populate('agentId', 'name email phoneNumber profilePicture agency')
+      .populate('ownerId', 'name profilePicture')
+      .populate('agentId', 'name profilePicture agency')
       .lean()
       .exec();
 
@@ -1906,6 +1917,9 @@ export class PropertiesService implements OnModuleInit {
     // Public route: the host's imported iCal links and export token stay private.
     delete (property as any).externalCalendars;
     delete (property as any).icalExportToken;
+    delete (property as any).contactPhone;
+    delete (property as any).contactWhatsApp;
+    delete (property as any).contactEmail;
 
     return {
       ...property,
@@ -1947,7 +1961,8 @@ export class PropertiesService implements OnModuleInit {
     return {
       title: 1,
       slug: 1,
-      description: 1,
+      // Cards only show the start: the full text comes with the listing itself
+      description: { $substrCP: [{ $ifNull: ['$description', ''] }, 0, 300] },
       price: 1,
       originalPrice: 1,
       pricingUnit: 1,
@@ -1961,7 +1976,8 @@ export class PropertiesService implements OnModuleInit {
       address: 1,
       neighborhood: 1,
       country: 1,
-      images: 1,
+      // Enough for a card's photo swipe; the listing page loads them all
+      images: { $slice: 10 },
       amenities: 1,
       shortTermAmenities: 1,
       isInstantBookable: 1,
@@ -1990,9 +2006,6 @@ export class PropertiesService implements OnModuleInit {
       totalFloors: 1,
       depositAmount: 1,
       maintenanceFee: 1,
-      contactPhone: 1,
-      contactWhatsApp: 1,
-      contactEmail: 1,
       yearBuilt: 1,
       pricePerSqm: 1,
     };

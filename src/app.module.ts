@@ -3,7 +3,8 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { MongooseModule } from '@nestjs/mongoose';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { ScheduleModule } from '@nestjs/schedule';
-import { APP_GUARD } from '@nestjs/core';
+import { APP_GUARD, APP_FILTER } from '@nestjs/core';
+import { SentryModule, SentryGlobalFilter } from '@sentry/nestjs/setup';
 
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
@@ -62,6 +63,8 @@ import { TeamModule } from './team/team.module';
 
 @Module({
   imports: [
+    // Error reporting (does nothing until SENTRY_DSN is set)
+    SentryModule.forRoot(),
     ConfigModule.forRoot({
       isGlobal: true,
       envFilePath: '.env',
@@ -166,6 +169,11 @@ import { TeamModule } from './team/team.module';
     {
       provide: APP_GUARD,
       useClass: ThrottlerGuard,
+    },
+    {
+      // Unexpected server errors (not 4xx answers) go to Sentry
+      provide: APP_FILTER,
+      useClass: SentryGlobalFilter,
     },
   ],
 })

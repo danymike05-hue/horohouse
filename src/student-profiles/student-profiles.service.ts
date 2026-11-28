@@ -26,6 +26,7 @@ import { User, UserDocument, UserRole, StudentVerificationStatus } from '../user
 import { NotificationsService } from '../notifications/notifications.service';
 import { NotificationType } from '../notifications/schemas/notification.schema';
 import { escapeRegex } from '../common/regex.util';
+import { PRIVATE_IMAGE } from '../common/private-files';
 
 @Injectable()
 export class StudentProfilesService {
@@ -251,6 +252,8 @@ export class StudentProfilesService {
 
     if (profile.studentIdPublicId) {
       try {
+        // Older cards were public, newer ones private: try both
+        await cloudinary.uploader.destroy(profile.studentIdPublicId, { type: 'authenticated' });
         await cloudinary.uploader.destroy(profile.studentIdPublicId);
       } catch (err) {
         this.logger.warn(`Could not delete old student ID asset: ${profile.studentIdPublicId}`);
@@ -261,7 +264,8 @@ export class StudentProfilesService {
       const stream = cloudinary.uploader.upload_stream(
         {
           folder: 'horohouse/student-ids',
-          resource_type: 'image',
+          // Private: a student card shows a name, a photo and a number (signed links only)
+          ...PRIVATE_IMAGE,
           transformation: [{ quality: 80, fetch_format: 'auto' }],
           tags: ['student-id', 'pending-review'],
         },
