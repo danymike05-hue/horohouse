@@ -107,7 +107,7 @@ export class StudentProfilesController {
   @ApiResponse({ status: 201, description: 'ID uploaded — status set to PENDING' })
   @ApiResponse({ status: 400, description: 'No file provided or unsupported format' })
   async uploadStudentId(@Req() req: FastifyRequest & { user: User }) {
-    const data = await (req as any).file();
+    const data = await (req as any).file({ limits: { fileSize: 15 * 1024 * 1024 } }); // 15 MB at most
 
     if (!data) {
       throw new BadRequestException('No file uploaded');

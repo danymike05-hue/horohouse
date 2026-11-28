@@ -30,7 +30,7 @@ export class TrustController {
   @ApiOperation({ summary: 'Upload an ID photo (?documentType=national_id|passport|residence_permit|driving_licence)' })
   async submitIdentity(@Req() req: any, @Query('documentType') documentType?: string) {
     const type = (ID_DOCUMENT_TYPES as readonly string[]).includes(String(documentType)) ? (documentType as IdDocumentType) : 'national_id';
-    const data = await req.file();
+    const data = await req.file({ limits: { fileSize: 15 * 1024 * 1024 } }); // photos: 15 MB at most
     if (!data) throw new BadRequestException('No file uploaded');
     if (!ID_MIME_TYPES.includes(String(data.mimetype).toLowerCase())) {
       throw new BadRequestException('Upload a photo of your ID (JPG, PNG, WEBP or HEIC)');

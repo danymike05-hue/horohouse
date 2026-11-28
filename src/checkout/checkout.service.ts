@@ -583,6 +583,8 @@ export class CheckoutService implements OnModuleInit {
       await this.flag(claimed, 'duplicate_payment: booking already paid by another attempt — refund this one');
     } else if (result === 'not_payable') {
       await this.flag(claimed, 'paid_after_booking_closed — refund or rebook');
+    } else if (result === 'amount_changed') {
+      await this.flag(claimed, 'booking_price_changed_after_payment_started — booking not confirmed, refund this payment');
     }
     await this.payments.updateOne(
       { _id: claimed._id },

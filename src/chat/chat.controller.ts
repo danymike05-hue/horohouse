@@ -170,7 +170,7 @@ export class ChatController {
         const files: { buffer: Buffer; originalname: string; mimetype: string; size: number }[] = [];
         const dto: Partial<SendMessageDto> = {};
 
-        for await (const part of req.parts()) {
+        for await (const part of req.parts({ limits: { fileSize: MAX_BYTES } })) {
             if (part.type === 'file') {
                 if (files.length >= MAX_FILES) { await part.toBuffer(); continue; }
                 const mimetype = String(part.mimetype || '').toLowerCase();
@@ -342,8 +342,8 @@ export class ChatController {
      */
     @Get('calls/:id')
     @ApiOperation({ summary: 'Get call by ID' })
-    async getCall(@Param('id') id: string) {
-        return this.callService.getCall(id);
+    async getCall(@Request() req, @Param('id') id: string) {
+        return this.callService.getCallFor(id, req.user.userId);
     }
 
     /**

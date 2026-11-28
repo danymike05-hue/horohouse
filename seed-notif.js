@@ -1,6 +1,8 @@
 const mongoose = require('mongoose');
 
-const MONGODB_URI = 'mongodb+srv://danwe:danwebasga05@cluster0.yoxyv.mongodb.net/horohouse?appName=Cluster0';
+// Never write the connection string here: it ends up on GitHub
+const MONGODB_URI = process.env.MONGODB_URI;
+if (!MONGODB_URI) { console.error('Set MONGODB_URI first'); process.exit(1); }
 
 async function seed() {
   try {

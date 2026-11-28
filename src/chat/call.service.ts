@@ -343,6 +343,17 @@ export class CallService {
   /**
    * Get call by ID
    */
+  /** A call, for one of the two people on it only (who called whom, and when, is private) */
+  async getCallFor(callId: string, userId: string): Promise<Call> {
+    const call: any = await this.getCall(callId);
+    const idOf = (u: any) => String(u?._id ?? u ?? '');
+    if (idOf(call.initiatorId) !== String(userId) && idOf(call.recipientId) !== String(userId)) {
+      // Same answer as a call that doesn't exist: nothing to learn by trying ids
+      throw new NotFoundException('Call not found');
+    }
+    return call;
+  }
+
   async getCall(callId: string): Promise<Call> {
     const call = await this.callModel
       .findById(callId)

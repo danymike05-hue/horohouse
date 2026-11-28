@@ -56,7 +56,7 @@ export class EssentialsController {
   @ApiConsumes('multipart/form-data')
   @ApiOperation({ summary: 'Upload one photo or document (shop documents may be PDF)' })
   async upload(@Req() req: any, @Query('kind') kind?: string) {
-    const data = await req.file();
+    const data = await req.file({ limits: { fileSize: 15 * 1024 * 1024 } }); // photos: 15 MB at most
     if (!data) throw new BadRequestException('No file uploaded');
     const isDoc = kind === 'document';
     const mime = String(data.mimetype).toLowerCase();

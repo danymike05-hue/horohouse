@@ -962,8 +962,16 @@ async reconcileTransaction(transaction: TransactionDocument): Promise<'success' 
       this.logger.log(`Auto-confirmed instant booking: ${booking._id}`);
     }
 
-    // Paid, so the payment deadline no longer applies.
-    await this.bookingModel.findByIdAndUpdate(booking._id, { $set: update, $unset: { expiresAt: 1 } });
+    // Paid, so the payment deadline no longer applies. Only if still unpaid: two payments
+    // landing at the same moment must not both count (the second gets refunded instead).
+    const marked = await this.bookingModel.findOneAndUpdate(
+      { _id: booking._id, paymentStatus: { $ne: PaymentStatus.PAID } },
+      { $set: update, $unset: { expiresAt: 1 } },
+    );
+    if (!marked) {
+      this.logger.warn(`Booking ${booking._id} was paid by another payment meanwhile — tx ${transaction._id} not counted`);
+      return;
+    }
 
     const totalPaid = booking.priceBreakdown.totalAmount;
     const platformCut = Math.round(totalPaid * this.BOOKING_PLATFORM_FEE_RATE);

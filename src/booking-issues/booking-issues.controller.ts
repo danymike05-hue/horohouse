@@ -52,7 +52,7 @@ export class BookingIssuesController {
   @ApiConsumes('multipart/form-data')
   @ApiOperation({ summary: 'Upload one photo for a problem report' })
   async uploadPhoto(@Req() req: any) {
-    const data = await req.file();
+    const data = await req.file({ limits: { fileSize: 15 * 1024 * 1024 } }); // photos: 15 MB at most
     if (!data) throw new BadRequestException('No file uploaded');
     if (!PHOTO_MIME_TYPES.includes(String(data.mimetype).toLowerCase())) {
       throw new BadRequestException('Upload a photo (JPG, PNG, WEBP or HEIC)');

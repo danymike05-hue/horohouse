@@ -299,7 +299,7 @@ export class UsersController {
   @ApiConsumes('multipart/form-data')
   @ApiOperation({ summary: 'Upload a government ID photo for review (sets status to pending)' })
   async uploadGovernmentId(@Req() req: any) {
-    const data = await req.file();
+    const data = await req.file({ limits: { fileSize: 15 * 1024 * 1024 } }); // photos: 15 MB at most
     if (!data) throw new BadRequestException('No file uploaded');
     if (!GOVERNMENT_ID_MIME_TYPES.includes(String(data.mimetype).toLowerCase())) {
       throw new BadRequestException('Upload a photo of your ID (JPG, PNG, WEBP or HEIC)');

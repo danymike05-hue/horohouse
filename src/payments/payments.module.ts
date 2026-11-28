@@ -1,3 +1,4 @@
+import { AdminWithdrawalsController } from './controllers/admin-withdrawals.controller';
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { ConfigModule } from '@nestjs/config';
@@ -56,6 +57,7 @@ import { PaymentsScheduler } from 'src/bookings/payments.scheduler';
     ListingBoostController,
     WalletController,
     RevenueAnalyticsController,
+    AdminWithdrawalsController,
   ],
   providers: [
     PaymentsService,

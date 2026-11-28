@@ -1,3 +1,4 @@
+import { Throttle } from '@nestjs/throttler';
 import {
   Controller,
   Post,
@@ -11,6 +12,7 @@ import {
   Param,
   Logger,
   ForbiddenException,
+  BadRequestException,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
 import { JwtAuthGuard } from 'src/auth/guards/jwt.auth.guard';
@@ -90,6 +92,8 @@ export class AiChatController {
   }
 
   @Post('chat/guest')
+// No account: every answer costs an AI call, so a few a minute per address
+@Throttle({ default: { limit: 8, ttl: 60000 } })
 @HttpCode(HttpStatus.OK)
 @ApiOperation({ 
   summary: 'Send chat message as guest (no authentication required)',
@@ -105,6 +109,14 @@ async chatGuest(@Body() chatRequest: ChatRequest): Promise<ChatResponse> {
 
     // Process chat without user authentication
     chatRequest.userId = undefined;
+    // No account: keep what reaches the AI small (each word is paid for)
+    if (typeof chatRequest?.message !== 'string' || !chatRequest.message.trim()) {
+      throw new BadRequestException('message is required');
+    }
+    chatRequest.message = chatRequest.message.slice(0, 1000);
+    chatRequest.conversationHistory = (Array.isArray(chatRequest.conversationHistory) ? chatRequest.conversationHistory : [])
+      .slice(-10)
+      .map((m: any) => ({ ...m, role: m?.role === 'assistant' ? 'assistant' : 'user', content: typeof m?.content === 'string' ? m.content.slice(0, 1000) : '' }));
     const response = await this.aiChatService.processChat(chatRequest, undefined);
 
     return response;

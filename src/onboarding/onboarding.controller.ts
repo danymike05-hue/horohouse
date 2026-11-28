@@ -15,6 +15,9 @@ import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagg
 import { OnboardingService } from './onboarding.service';
 import { UpdateOnboardingStepDto, CompleteOnboardingDto } from './dto/onboarding.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt.auth.guard';
+import { Roles, RolesGuard } from '../auth/guards/roles.guard';
+import { Area } from '../auth/team-areas';
+import { UserRole } from '../users/schemas/user.schema';
 
 @ApiTags('Onboarding')
 @Controller('onboarding')
@@ -93,10 +96,13 @@ export class OnboardingController {
 
   // Admin endpoints
   @Get('admin/incomplete')
+  // Names and emails of other people: the team only
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.ADMIN)
+  @Area('users')
   @ApiOperation({ summary: 'Get incomplete onboardings (Admin only)' })
   @ApiResponse({ status: 200, description: 'Incomplete onboardings retrieved successfully' })
-  async getIncompleteOnboardings(@Request() req) {
-    // TODO: Add admin guard
+  async getIncompleteOnboardings() {
     const limit = 10;
     return this.onboardingService.getIncompleteOnboardings(limit);
   }

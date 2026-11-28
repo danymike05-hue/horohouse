@@ -1,3 +1,4 @@
+import { unsubscribeToken } from '../newsletter/unsubscribe-token';
 import { Injectable, Logger, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
@@ -846,7 +847,7 @@ private async safeSendMail(options: SendMailOptions): Promise<void> {
       <div style="margin-top:24px;">${this.btn(this.frontendUrl, t('Browse Properties', 'Voir les logements'))}</div>
       <p style="margin-top:24px;font-size:13px;color:#64748b;">
         ${t('You can unsubscribe at any time by clicking', 'Vous pouvez vous désinscrire à tout moment en cliquant')}
-        <a href="${this.frontendUrl}/unsubscribe?email=${recipientEmail}" style="color:${BRAND_BLUE};">${t('here', 'ici')}</a>.
+        <a href="${this.apiUrl}/api/v1/newsletter/unsubscribe?email=${encodeURIComponent(recipientEmail)}&token=${unsubscribeToken(recipientEmail)}" style="color:${BRAND_BLUE};">${t('here', 'ici')}</a>.
       </p>
       <p style="margin-top:8px;">${this.signoff(t)}</p>
     `),

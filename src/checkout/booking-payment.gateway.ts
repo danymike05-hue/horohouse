@@ -40,7 +40,7 @@ export interface PayableBooking {
   expiresAt?: Date;
 }
 
-export type FulfilmentResult = 'confirmed' | 'already_paid_same' | 'already_paid_other' | 'not_payable';
+export type FulfilmentResult = 'confirmed' | 'already_paid_same' | 'already_paid_other' | 'not_payable' | 'amount_changed';
 
 /**
  * The bridge between checkout and your existing booking/payments code.
@@ -129,6 +129,9 @@ export class BookingPaymentGateway {
       return booking.paymentReference === payment.merchantInvoiceId ? 'already_paid_same' : 'already_paid_other';
     }
     if (CLOSED.includes(booking.status)) return 'not_payable';
+    // The booking's price changed after this payment started (new dates or guests): it
+    // can't confirm the booking at the old price. Flagged for a refund instead.
+    if (Math.round(Number(booking.priceBreakdown?.totalAmount)) !== payment.amount) return 'amount_changed';
 
     const paymentMethod =
       payment.method === 'card'
@@ -167,6 +170,13 @@ export class BookingPaymentGateway {
     // Existing logic: paymentStatus=paid, instant-book → confirmed, commission tx,
     // host wallet credit, host notification.
     await this.paymentsService.processSuccessfulPayment(tx);
+
+    // Another payment may have confirmed the booking at the same moment: only the one whose
+    // reference the booking kept counts; this one gets flagged for a refund.
+    const after = await this.bookings.findById(booking._id).select('paymentStatus paymentReference').lean();
+    if (after?.paymentStatus === PaymentStatus.PAID && after.paymentReference !== payment.merchantInvoiceId) {
+      return 'already_paid_other';
+    }
 
     // Make sure the booking scheduler can't auto-cancel a paid booking.
     await this.bookings.updateOne({ _id: booking._id, paymentStatus: PaymentStatus.PAID }, { $unset: { expiresAt: 1 } });

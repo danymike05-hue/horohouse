@@ -241,7 +241,7 @@ export class WalletService {
       throw new BadRequestException('Insufficient balance');
     }
 
-    const reference = `WD-${Date.now()}`;
+    const reference = `WD-${new Types.ObjectId().toHexString()}`;
 
     // Reserve funds immediately (only from what's available, never from held earnings)
     await this.debitWallet(userId, amount, `Withdrawal via ${withdrawalMethod}`, reference, { availableOnly: true });
@@ -276,6 +276,16 @@ export class WalletService {
       paymentMethod: withdrawalMethod,
       description: `Withdrawal to ${withdrawalMethod}`,
       flutterwaveReference: reference,
+      // Where the money goes: the team needs it to send a payout by hand
+      metadata: {
+        destination: {
+          method: withdrawalMethod,
+          phoneNumber: accountDetails.phoneNumber,
+          accountNumber: accountDetails.accountNumber,
+          accountName: accountDetails.accountName,
+          bankCode: accountDetails.bankCode,
+        },
+      },
     });
     await transaction.save();
 
@@ -341,6 +351,31 @@ export class WalletService {
         narration: 'HoroHouse withdrawal',
       });
 
+      // CamerPay payouts aren't wired up yet (initiatePayout answers success: false).
+      // Before, the withdrawal was marked successful anyway: the host's balance went down
+      // and no money left. Now it stays pending and the team sends it by hand.
+      if (!response?.success) {
+        await this.transactionModel.findByIdAndUpdate(transactionId, {
+          $set: {
+            paymentProviderResponse: response?._raw ?? response ?? null,
+            'metadata.manualPayoutNeeded': true,
+          },
+        });
+        const to =
+          withdrawalMethod === 'bank_transfer'
+            ? `bank account ${accountDetails.accountNumber ?? '?'} (${accountDetails.accountName ?? ''})`
+            : `${withdrawalMethod} ${accountDetails.phoneNumber ?? '?'}`;
+        await this.notificationsService
+          .notifyAdmins({
+            title: 'Withdrawal to send by hand',
+            message: `${amount.toLocaleString('fr-FR')} XAF to ${to}, reference ${reference}. Automatic payouts aren't connected yet: send it, then mark transaction ${String(transactionId)} as paid.`,
+            metadata: { transactionId: String(transactionId), reference, amount, withdrawalMethod },
+          })
+          .catch((e: any) => this.logger.error(`Could not alert admins about withdrawal ${reference}: ${e?.message}`));
+        this.logger.warn(`Withdrawal ${reference} waits for a manual payout`);
+        return;
+      }
+
       this.logger.log(`CamerPay payout accepted: ${reference}`);
 
       await this.transactionModel.findByIdAndUpdate(transactionId, {
@@ -358,6 +393,150 @@ export class WalletService {
       });
       throw error;
     }
+  }
+
+  // ─── Withdrawals sent by hand (admin) ───────────────────────────────────────
+  // CamerPay payouts aren't connected yet: a withdrawal waits as "pending" until the team
+  // sends the money and marks it here, or gives it back to the host's balance.
+
+  /** Withdrawals; `pending` = still to send (oldest first), the others newest first */
+  async adminListWithdrawals(status: 'pending' | 'success' | 'failed' = 'pending', limit = 100) {
+    const rows: any[] = await this.transactionModel
+      .find({ type: TransactionType.WALLET_WITHDRAWAL, status })
+      .sort({ createdAt: status === 'pending' ? 1 : -1 })
+      .limit(Math.min(Math.max(limit, 1), 200))
+      .populate('userId', 'name email phoneNumber profilePicture')
+      .lean();
+    // Older withdrawals didn't save where they go: the host's saved payout method instead
+    const wallets: any[] = await this.walletModel
+      .find({ userId: { $in: rows.map((r) => r.userId?._id ?? r.userId) } })
+      .select('userId mobileMoneyNumber mobileMoneyProvider bankAccountNumber bankAccountName bankName')
+      .lean();
+    const walletOf = new Map(wallets.map((w) => [String(w.userId), w]));
+    return rows.map((r) => {
+      const w: any = walletOf.get(String(r.userId?._id ?? r.userId)) ?? {};
+      const d = r.metadata?.destination;
+      const method: string = d?.method ?? r.paymentMethod;
+      const bank = method === 'bank_transfer';
+      return {
+        id: String(r._id),
+        reference: r.flutterwaveReference,
+        amount: r.amount,
+        currency: r.currency ?? 'XAF',
+        status: r.status,
+        createdAt: r.createdAt,
+        completedAt: r.completedAt,
+        host:
+          r.userId && typeof r.userId === 'object'
+            ? { id: String(r.userId._id), name: r.userId.name, email: r.userId.email, phoneNumber: r.userId.phoneNumber, photo: r.userId.profilePicture }
+            : { id: String(r.userId) },
+        destination: {
+          method,
+          phoneNumber: d?.phoneNumber ?? (bank ? undefined : w.mobileMoneyNumber),
+          accountNumber: d?.accountNumber ?? (bank ? w.bankAccountNumber : undefined),
+          accountName: d?.accountName ?? (bank ? w.bankAccountName : undefined),
+          bankName: bank ? w.bankName : undefined,
+          /** True when it comes from the saved payout method, not the withdrawal itself */
+          saved: !d,
+        },
+        manual: r.metadata?.manual,
+      };
+    });
+  }
+
+  /** The team sent the money: the withdrawal is done */
+  async adminMarkWithdrawalSent(transactionId: string, adminId: string, providerReference?: string, note?: string) {
+    if (!Types.ObjectId.isValid(transactionId)) throw new NotFoundException('Withdrawal not found');
+    const now = new Date();
+    const tx = await this.transactionModel.findOneAndUpdate(
+      { _id: transactionId, type: TransactionType.WALLET_WITHDRAWAL, status: 'pending' },
+      {
+        $set: {
+          status: 'success',
+          completedAt: now,
+          'metadata.manualPayoutNeeded': false,
+          'metadata.manual': {
+            action: 'sent',
+            by: adminId,
+            at: now,
+            providerReference: providerReference?.trim() || undefined,
+            note: note?.trim() || undefined,
+          },
+        },
+      },
+      { new: true },
+    );
+    if (!tx) throw new BadRequestException('This withdrawal is not waiting any more (already sent or given back).');
+    const amount = Math.round(tx.amount).toLocaleString('fr-FR');
+    await this.notificationsService
+      .create(
+        {
+          userId: String(tx.userId),
+          type: NotificationType.SYSTEM,
+          title: 'Your withdrawal was sent',
+          message: `${amount} XAF is on its way to your account.`,
+          link: '/host/withdraw',
+          metadata: { transactionId: String(tx._id), amount: tx.amount },
+        } as any,
+        { title: 'Votre retrait a été envoyé', message: `${amount} XAF est en route vers votre compte.` },
+      )
+      .catch((e: any) => this.logger.warn(`Withdrawal sent notice failed for ${String(tx._id)}: ${e?.message}`));
+    this.logger.log(`Withdrawal ${tx.flutterwaveReference} marked sent by ${adminId}`);
+    return { id: String(tx._id), status: tx.status };
+  }
+
+  /** The money couldn't be sent: it goes back to the host's balance */
+  async adminRefundWithdrawal(transactionId: string, adminId: string, reason?: string) {
+    if (!Types.ObjectId.isValid(transactionId)) throw new NotFoundException('Withdrawal not found');
+    const now = new Date();
+    // Claimed first, so two clicks can't give the money back twice
+    const tx = await this.transactionModel.findOneAndUpdate(
+      { _id: transactionId, type: TransactionType.WALLET_WITHDRAWAL, status: 'pending' },
+      {
+        $set: {
+          status: 'failed',
+          'metadata.manualPayoutNeeded': false,
+          'metadata.manual': { action: 'given_back', by: adminId, at: now, note: reason?.trim() || undefined },
+        },
+      },
+      { new: true },
+    );
+    if (!tx) throw new BadRequestException('This withdrawal is not waiting any more (already sent or given back).');
+    const userId = String(tx.userId);
+    try {
+      await this.creditWallet(userId, tx.amount, `Withdrawal not sent — back in your balance (${tx.flutterwaveReference})`, `${tx.flutterwaveReference}-REFUND`);
+      // Not new earnings, and not withdrawn after all
+      await this.walletModel.updateOne(
+        { userId: new Types.ObjectId(userId) },
+        { $inc: { totalWithdrawn: -tx.amount, totalEarned: -tx.amount } },
+      );
+    } catch (err) {
+      await this.transactionModel.updateOne(
+        { _id: tx._id, status: 'failed' },
+        { $set: { status: 'pending', 'metadata.manualPayoutNeeded': true }, $unset: { 'metadata.manual': 1 } },
+      );
+      throw err;
+    }
+    const amount = Math.round(tx.amount).toLocaleString('fr-FR');
+    const why = reason?.trim() ? ` ${reason.trim()}` : '';
+    await this.notificationsService
+      .create(
+        {
+          userId,
+          type: NotificationType.SYSTEM,
+          title: 'Your withdrawal could not be sent',
+          message: `${amount} XAF is back in your balance.${why} Check your payout details and try again.`,
+          link: '/settings/payments',
+          metadata: { transactionId: String(tx._id), amount: tx.amount },
+        } as any,
+        {
+          title: 'Votre retrait n’a pas pu être envoyé',
+          message: `${amount} XAF est de nouveau dans votre solde.${why} Vérifiez vos informations de versement et réessayez.`,
+        },
+      )
+      .catch((e: any) => this.logger.warn(`Withdrawal give-back notice failed for ${String(tx._id)}: ${e?.message}`));
+    this.logger.log(`Withdrawal ${tx.flutterwaveReference} given back to the host by ${adminId}`);
+    return { id: String(tx._id), status: tx.status };
   }
 
   // ─── Account details ────────────────────────────────────────────────────────
