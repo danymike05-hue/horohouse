@@ -10,6 +10,7 @@ import {
   RawBodyRequest,
   Redirect,
   Req,
+  UnauthorizedException,
   UseGuards,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -20,7 +21,12 @@ import { JwtAuthGuard } from 'src/auth/guards/jwt.auth.guard';
 import { CheckoutService } from './checkout.service';
 import { CheckoutQuoteQueryDto, CreateCheckoutPaymentDto, StorePurchaseDto } from './dto/create-checkout-payment.dto';
 
-const userIdOf = (req: any): string => String(req.user?.id ?? req.user?._id ?? req.user?.sub ?? req.user?.userId);
+// No signed-in user → 401, never a query with "undefined" (that was a 500 for every payment)
+const userIdOf = (req: any): string => {
+  const id = req.user?.id ?? req.user?._id ?? req.user?.sub ?? req.user?.userId;
+  if (!id) throw new UnauthorizedException('Sign in to continue.');
+  return String(id);
+};
 
 @Controller('checkout')
 export class CheckoutController {
@@ -38,12 +44,6 @@ export class CheckoutController {
     return this.checkout.quote(userIdOf(req), dto);
   }
 
-  /**
-   * Start (or resume) a payment: a booking (amount from the booking), a subscription
-   * (amount from the plan) or a boost (amount from the boost pricing). Wallet and
-   * included-boost payments are settled immediately.
-   */
-  @UseGuards(JwtAuthGuard)
   /** A plan or boost bought in the phone app (Apple / Google billing): checked, then switched on */
   @UseGuards(JwtAuthGuard)
   @Post('store-purchase')
@@ -52,6 +52,14 @@ export class CheckoutController {
     return this.checkout.storePurchase(userIdOf(req), dto);
   }
 
+  /**
+   * Start (or resume) a payment: a booking (amount from the booking), a subscription
+   * (amount from the plan) or a boost (amount from the boost pricing). Wallet and
+   * included-boost payments are settled immediately.
+   */
+  // (The sign-in check had slipped onto store-purchase above, leaving this route without
+  // one: every payment then failed with "Cast to ObjectId failed for value undefined".)
+  @UseGuards(JwtAuthGuard)
   @Post('payments')
   create(@Req() req: any, @Body() dto: CreateCheckoutPaymentDto) {
     return this.checkout.createPayment(userIdOf(req), dto);
