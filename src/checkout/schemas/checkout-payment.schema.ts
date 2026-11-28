@@ -8,7 +8,7 @@ import { HydratedDocument, Types } from 'mongoose';
 export type CheckoutMethod = 'mobile_money' | 'card' | 'wallet' | 'plan_credit' | 'app_store' | 'google_play';
 export const CHECKOUT_METHODS: CheckoutMethod[] = ['mobile_money', 'card', 'wallet', 'plan_credit', 'app_store', 'google_play'];
 /** What the payment is for */
-export type CheckoutPurpose = 'booking' | 'subscription' | 'boost' | 'date_change' | 'essentials';
+export type CheckoutPurpose = 'booking' | 'subscription' | 'boost' | 'date_change' | 'essentials' | 'rent';
 
 /** Subscription / boost details, fixed when the payment starts (price never comes from the app) */
 export interface CheckoutPurchase {
@@ -37,6 +37,9 @@ export interface CheckoutPurchase {
   /** Essential kits: the order being paid */
   orderId?: string;
   orderNumber?: string;
+  /** Shared rent: the cycle whose share the tenant pays, and its lease */
+  cycleId?: string;
+  leaseId?: string;
 }
 export type MomoOperator = 'orange_money' | 'mtn_momo';
 export type CheckoutStatus = 'pending' | 'paid' | 'failed' | 'expired';
@@ -59,7 +62,7 @@ export type ReviewResolution = 'refunded_camerpay' | 'refunded_manually' | 'no_r
  */
 @Schema({ collection: 'checkout_payments', timestamps: true })
 export class CheckoutPayment {
-  @Prop({ type: String, enum: ['booking', 'subscription', 'boost', 'date_change', 'essentials'], default: 'booking', index: true })
+  @Prop({ type: String, enum: ['booking', 'subscription', 'boost', 'date_change', 'essentials', 'rent'], default: 'booking', index: true })
   purpose!: CheckoutPurpose;
 
   /** Bookings only */

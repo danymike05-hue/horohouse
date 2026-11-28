@@ -289,8 +289,9 @@ export class CheckoutService implements OnModuleInit {
     purpose: CheckoutPurpose,
   ): Promise<CheckoutPaymentView> {
     const q = await this.purchases.quote(userId, {
-      purpose: purpose as 'subscription' | 'boost' | 'date_change' | 'essentials',
+      purpose: purpose as 'subscription' | 'boost' | 'date_change' | 'essentials' | 'rent',
       changeId: dto.changeId,
+      cycleId: dto.cycleId,
       orderId: dto.orderId,
       planName: dto.planName,
       billingCycle: dto.billingCycle,
@@ -300,7 +301,7 @@ export class CheckoutService implements OnModuleInit {
     });
 
     // A date-change payment has to be refundable through CamerPay like the rest of the booking.
-    if ((purpose === 'date_change' || purpose === 'essentials') && (dto.method === 'wallet' || dto.method === 'plan_credit')) {
+    if ((purpose === 'date_change' || purpose === 'essentials' || purpose === 'rent') && (dto.method === 'wallet' || dto.method === 'plan_credit')) {
       throw new BadRequestException({ code: 'METHOD_NOT_ALLOWED', message: 'Choisissez Mobile Money ou la carte pour ce paiement.' });
     }
     if (dto.method === 'wallet' || dto.method === 'plan_credit') return this.payInstantly(userId, dto, purpose, q);

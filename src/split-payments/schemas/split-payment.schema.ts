@@ -47,6 +47,9 @@ export interface TenantShare {
   momoProvider?: MoMoProvider;
   /** External MoMo transaction reference returned by the gateway */
   momoTransactionId?: string;
+  /** Paid by the tenant through checkout (card or Mobile Money): that payment, and how */
+  checkoutPaymentId?: string;
+  paymentMethod?: string;
   paidAt?: Date;
   dueDate: Date;
 }
@@ -105,6 +108,8 @@ export class SplitPayment {
         momoPhone: { type: String },
         momoProvider: { type: String, enum: Object.values(MoMoProvider) },
         momoTransactionId: { type: String },
+        checkoutPaymentId: { type: String },
+        paymentMethod: { type: String },
         paidAt: { type: Date },
         dueDate: { type: Date, required: true },
       },

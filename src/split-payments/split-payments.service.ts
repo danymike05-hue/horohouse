@@ -3,6 +3,7 @@ import {
   NotFoundException,
   BadRequestException,
   ForbiddenException,
+  ConflictException,
   Logger,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
@@ -247,11 +248,11 @@ export class SplitPaymentsService {
 
     const isLandlord = cycle.landlordUserId.toString() === requestingUserId;
     const isAdmin = requestingUser?.role === UserRole.ADMIN;
-    const isTenant = cycle.tenantShares.some(
-      (s) => s.tenantUserId.toString() === dto.tenantUserId,
-    );
 
-    if (!isLandlord && !isAdmin && !isTenant) {
+    // A tenant pays through checkout (payableShare); recording by hand is for the landlord.
+    // (This used to accept anyone who named a tenant of the cycle, so any landlord account
+    // could mark someone else's rent as paid.)
+    if (!isLandlord && !isAdmin) {
       throw new ForbiddenException('You are not authorised to record this payment.');
     }
 
@@ -297,26 +298,97 @@ export class SplitPaymentsService {
     await cycle.save();
 
     // Notify landlord when all tenants have paid
-    if (cycle.status === SplitPaymentStatus.COMPLETE) {
-      this.notificationsService.create({
-        userId: cycle.landlordUserId.toString(),
-        type: NotificationType.PAYMENT_RECEIVED,
-        title: 'All tenants have paid!',
-        message: `Full rent of ${cycle.totalRent.toLocaleString()} XAF collected for ${cycle.cycleLabel}. Ready for disbursement.`,
-        fr: { title: 'Tous les locataires ont payé !', message: `Loyer complet de ${cycle.totalRent.toLocaleString('fr-FR')} XAF encaissé pour ${cycle.cycleLabel}. Prêt pour le versement.` },
-        metadata: {
-          cycleId: (cycle._id as Types.ObjectId).toString(),
-          amount: cycle.totalRent,
-          currency: 'XAF',
-        },
-      }).catch((err) => this.logger.warn(`Notification failed: ${err.message}`));
-    }
+    this.notifyIfComplete(cycle);
 
     this.logger.log(
       `✅ Payment recorded: tenant ${dto.tenantUserId} paid ${dto.amountPaid} XAF in cycle ${cycleId}`,
     );
 
     return cycle;
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // TENANT PAYS THEIR OWN SHARE (checkout: card or Mobile Money, confirmed by webhook)
+  // ══════════════════════════════════════════════════════════════════════════
+
+  /** What the tenant still owes in a cycle, for the checkout quote. Only that tenant can pay it. */
+  async payableShare(cycleId: string, tenantUserId: string): Promise<{ amount: number; label: string; leaseId: string }> {
+    if (!Types.ObjectId.isValid(cycleId)) throw new BadRequestException('Invalid cycle ID');
+    const cycle: any = await this.splitPaymentModel.findById(cycleId).populate('propertyId', 'title').exec();
+    // Not in this cycle → same answer as a missing one
+    const share = cycle?.tenantShares?.find((s: any) => s.tenantUserId.toString() === tenantUserId);
+    if (!cycle || !share) throw new NotFoundException('Payment cycle not found');
+    if (cycle.status === SplitPaymentStatus.DISBURSED || share.status === TenantShareStatus.PAID || share.status === TenantShareStatus.WAIVED) {
+      throw new ConflictException({ code: 'RENT_ALREADY_PAID', message: 'Votre part de ce loyer est déjà réglée.' });
+    }
+    const amount = Math.round(Math.max(0, (share.amountDue ?? 0) - (share.amountPaid ?? 0)));
+    if (amount <= 0) throw new ConflictException({ code: 'RENT_ALREADY_PAID', message: 'Votre part de ce loyer est déjà réglée.' });
+    const title = cycle.propertyId?.title ? String(cycle.propertyId.title) : 'Loyer';
+    return { amount, label: `${title} · ${cycle.cycleLabel}`, leaseId: String(cycle.leaseId) };
+  }
+
+  /**
+   * Checkout confirmed the tenant's payment: add it to their share. Safe to call again for the
+   * same payment (webhook retries). 'not_possible' when the share was settled meanwhile (paid
+   * another way, waived): checkout then flags the payment for a refund.
+   */
+  async markSharePaidFromCheckout(
+    cycleId: string,
+    tenantUserId: string,
+    info: { amount: number; checkoutPaymentId: string; method?: string; providerReference?: string; paidAt?: Date },
+  ): Promise<'activated' | 'already_done' | 'not_possible'> {
+    if (!Types.ObjectId.isValid(cycleId)) return 'not_possible';
+    const cycle = await this.splitPaymentModel.findById(cycleId).exec();
+    if (!cycle) return 'not_possible';
+    const i = cycle.tenantShares.findIndex((s) => s.tenantUserId.toString() === tenantUserId);
+    if (i === -1) return 'not_possible';
+    const share = cycle.tenantShares[i];
+    if (share.checkoutPaymentId === info.checkoutPaymentId) return 'already_done';
+    if (share.status === TenantShareStatus.PAID || share.status === TenantShareStatus.WAIVED || cycle.status === SplitPaymentStatus.DISBURSED) {
+      return 'not_possible';
+    }
+
+    share.amountPaid = (share.amountPaid ?? 0) + info.amount;
+    share.status = share.amountPaid >= share.amountDue ? TenantShareStatus.PAID : share.status;
+    share.paidAt = info.paidAt ?? new Date();
+    share.checkoutPaymentId = info.checkoutPaymentId;
+    share.paymentMethod = info.method;
+    if (info.providerReference) share.momoTransactionId = info.providerReference;
+    cycle.totalCollected = cycle.tenantShares.reduce((s, t) => s + (t.amountPaid ?? 0), 0);
+    cycle.status = this.deriveCycleStatus(cycle.tenantShares);
+    cycle.markModified('tenantShares');
+    await cycle.save();
+
+    const cid = (cycle._id as Types.ObjectId).toString();
+    this.notificationsService.create({
+      userId: cycle.landlordUserId.toString(),
+      type: NotificationType.PAYMENT_RECEIVED,
+      title: `${share.tenantName} paid their rent`,
+      message: `${info.amount.toLocaleString()} XAF received for ${cycle.cycleLabel}.`,
+      fr: { title: `${share.tenantName} a payé son loyer`, message: `${info.amount.toLocaleString('fr-FR')} XAF reçus pour ${cycle.cycleLabel}.` },
+      metadata: { cycleId: cid, amount: info.amount, currency: 'XAF' },
+    }).catch((err) => this.logger.warn(`Notification failed: ${err.message}`));
+    this.notifyIfComplete(cycle);
+
+    this.logger.log(`✅ Rent paid through checkout: tenant ${tenantUserId}, ${info.amount} XAF, cycle ${cid}`);
+    return 'activated';
+  }
+
+  /** Tells the landlord when every tenant has paid */
+  private notifyIfComplete(cycle: SplitPaymentDocument): void {
+    if (cycle.status !== SplitPaymentStatus.COMPLETE) return;
+    this.notificationsService.create({
+      userId: cycle.landlordUserId.toString(),
+      type: NotificationType.PAYMENT_RECEIVED,
+      title: 'All tenants have paid!',
+      message: `Full rent of ${cycle.totalRent.toLocaleString()} XAF collected for ${cycle.cycleLabel}. Ready for disbursement.`,
+      fr: { title: 'Tous les locataires ont payé !', message: `Loyer complet de ${cycle.totalRent.toLocaleString('fr-FR')} XAF encaissé pour ${cycle.cycleLabel}. Prêt pour le versement.` },
+      metadata: {
+        cycleId: (cycle._id as Types.ObjectId).toString(),
+        amount: cycle.totalRent,
+        currency: 'XAF',
+      },
+    }).catch((err) => this.logger.warn(`Notification failed: ${err.message}`));
   }
 
   // ══════════════════════════════════════════════════════════════════════════

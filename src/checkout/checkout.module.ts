@@ -9,6 +9,7 @@ import { ListingBoost, ListingBoostSchema } from '../payments/schemas/listing-bo
 import { Subscription, SubscriptionSchema } from '../payments/schemas/subscription.schema';
 import { Wallet, WalletSchema } from '../payments/schemas/wallet.schema';
 import { Property, PropertySchema } from '../properties/schemas/property.schema';
+import { SplitPaymentsModule } from '../split-payments/split-payments.module';
 import { EssentialsModule } from '../essentials/essentials.module';
 import { BookingsModule } from '../bookings/bookings.module';
 import { PurchaseGateway } from './purchase.gateway';
@@ -36,6 +37,8 @@ import { StoreVerifyService } from './store-verify.service';
     ]),
     forwardRef(() => BookingChangesModule),
     EssentialsModule,
+    // Shared rent: tenants pay their share through checkout
+    SplitPaymentsModule,
     forwardRef(() => PaymentsModule), // must export PaymentsService (BookingsModule already relies on it)
     // Calendar holds: hold the dates while paying, free them when a payment fails
     forwardRef(() => BookingsModule),

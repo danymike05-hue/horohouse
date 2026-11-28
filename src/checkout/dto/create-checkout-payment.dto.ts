@@ -4,8 +4,13 @@ import type { CheckoutMethod, CheckoutPurpose, MomoOperator } from '../schemas/c
 export class CreateCheckoutPaymentDto {
   /** What is being paid. Omitted = booking (older app versions). */
   @IsOptional()
-  @IsIn(['booking', 'subscription', 'boost', 'date_change', 'essentials'])
+  @IsIn(['booking', 'subscription', 'boost', 'date_change', 'essentials', 'rent'])
   purpose?: CheckoutPurpose;
+
+  // ── Shared rent: the tenant's share of a cycle ─────────────────────────
+  @ValidateIf((o: CreateCheckoutPaymentDto) => o.purpose === 'rent')
+  @IsMongoId()
+  cycleId?: string;
 
   // ── Essential kits: the order ───────────────────────────────────────────
   @ValidateIf((o: CreateCheckoutPaymentDto) => o.purpose === 'essentials')
@@ -68,8 +73,12 @@ export class CreateCheckoutPaymentDto {
 
 /** POST /checkout/quote — what a subscription / boost costs and which ways to pay apply */
 export class CheckoutQuoteQueryDto {
-  @IsIn(['subscription', 'boost', 'date_change', 'essentials'])
-  purpose!: 'subscription' | 'boost' | 'date_change' | 'essentials';
+  @IsIn(['subscription', 'boost', 'date_change', 'essentials', 'rent'])
+  purpose!: 'subscription' | 'boost' | 'date_change' | 'essentials' | 'rent';
+
+  @ValidateIf((o: CheckoutQuoteQueryDto) => o.purpose === 'rent')
+  @IsMongoId()
+  cycleId?: string;
 
   @ValidateIf((o: CheckoutQuoteQueryDto) => o.purpose === 'essentials')
   @IsMongoId()

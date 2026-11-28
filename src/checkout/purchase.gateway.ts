@@ -31,6 +31,7 @@ import { Property, PropertyDocument } from '../properties/schemas/property.schem
 import { User, UserDocument } from '../users/schemas/user.schema';
 import { BookingChangesService } from '../booking-changes/booking-changes.service';
 import { EssentialsService } from '../essentials/essentials.service';
+import { SplitPaymentsService } from '../split-payments/split-payments.service';
 import { normalizeCmPhone } from './momo.util';
 import type { CheckoutPaymentDocument, CheckoutPurchase, CheckoutPurpose } from './schemas/checkout-payment.schema';
 
@@ -42,6 +43,7 @@ export interface PurchaseRequest {
   purpose: Exclude<CheckoutPurpose, 'booking'>;
   changeId?: string;
   orderId?: string;
+  cycleId?: string;
   planName?: string;
   billingCycle?: 'monthly' | 'quarterly' | 'yearly';
   propertyId?: string;
@@ -60,7 +62,7 @@ export interface PurchaseQuote {
 }
 
 export interface QuoteView {
-  purpose: 'subscription' | 'boost' | 'date_change' | 'essentials';
+  purpose: 'subscription' | 'boost' | 'date_change' | 'essentials' | 'rent';
   amount: number;
   currency: 'XAF';
   label: string;
@@ -97,6 +99,7 @@ export class PurchaseGateway {
     @Inject(forwardRef(() => WalletService)) private readonly walletService: WalletService,
     @Inject(forwardRef(() => BookingChangesService)) private readonly dateChanges: BookingChangesService,
     private readonly essentials: EssentialsService,
+    private readonly rent: SplitPaymentsService,
     private readonly hostPlans: HostPlansService,
   ) {}
 
@@ -109,6 +112,18 @@ export class PurchaseGateway {
     if (!user) throw new NotFoundException('Compte introuvable.');
     const local = normalizeCmPhone(user.phoneNumber);
     const base = { customerName: user.name, customerPhone: local ?? undefined };
+
+    if (req.purpose === 'rent') {
+      if (!req.cycleId || !isValidObjectId(req.cycleId)) throw new BadRequestException('Loyer invalide.');
+      const r = await this.rent.payableShare(req.cycleId, userId);
+      return {
+        ...base,
+        amount: r.amount,
+        // One pending attempt per tenant per cycle
+        key: `rent:${req.cycleId}:${userId}`,
+        purchase: { label: r.label, cycleId: req.cycleId, leaseId: r.leaseId },
+      };
+    }
 
     if (req.purpose === 'essentials') {
       if (!req.orderId || !isValidObjectId(req.orderId)) throw new BadRequestException('Commande invalide.');
@@ -247,7 +262,7 @@ export class PurchaseGateway {
       purchase: q.purchase,
       walletBalance,
       // Booking changes and kit orders can be refunded through CamerPay only
-      canUseWallet: req.purpose !== 'date_change' && req.purpose !== 'essentials' && walletBalance >= q.amount && q.amount > 0,
+      canUseWallet: req.purpose !== 'date_change' && req.purpose !== 'essentials' && req.purpose !== 'rent' && walletBalance >= q.amount && q.amount > 0,
       planBoostsLeft,
       canUsePlanCredit: req.purpose === 'boost' && planBoostsLeft !== 0,
     };
@@ -313,6 +328,18 @@ export class PurchaseGateway {
   ): Promise<{ result: PurchaseResult; purchase: CheckoutPurchase; reason?: string }> {
     const purchase: CheckoutPurchase = { ...(payment.purchase ?? {}) };
     const userId = String(payment.userId);
+
+    if (payment.purpose === 'rent') {
+      const result = await this.rent.markSharePaidFromCheckout(String(purchase.cycleId), userId, {
+        amount: payment.amount,
+        checkoutPaymentId: String(payment._id),
+        method: payment.operator ?? payment.method,
+        providerReference: payment.providerReference,
+        paidAt: payment.paidAt,
+      });
+      if (result === 'not_possible') return { result, purchase, reason: 'rent_share_not_payable' };
+      return { result, purchase: { ...purchase, endsAt: payment.paidAt ?? new Date() } };
+    }
 
     if (payment.purpose === 'essentials') {
       const result = await this.essentials.markPaid(String(purchase.orderId), {
