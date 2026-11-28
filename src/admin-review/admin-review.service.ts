@@ -10,6 +10,7 @@
 import { BadGatewayException, BadRequestException, ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { ModuleRef } from '@nestjs/core';
+import { Cron } from '@nestjs/schedule';
 import { isValidObjectId, Model, Types } from 'mongoose';
 import { CheckoutPayment, CheckoutPaymentDocument, ReviewResolution } from '../checkout/schemas/checkout-payment.schema';
 import { Transaction, TransactionDocument, TransactionStatus, TransactionType } from '../payments/schemas/transaction.schema';
@@ -79,6 +80,49 @@ export class AdminReviewService {
   }
   private notifications(): NotificationsService | null {
     try { return this.moduleRef.get(NotificationsService, { strict: false }); } catch { return null; }
+  }
+
+  // ════════════════════════════════════════════════════════════════════════
+  // Weekly reminder
+  // ════════════════════════════════════════════════════════════════════════
+
+  /**
+   * Monday morning (Cameroon time): payments still flagged (paid twice, paid after the
+   * booking closed, price changed…) and withdrawals still to send by hand. Each was
+   * notified once when it happened; this makes sure none is forgotten.
+   */
+  @Cron('0 9 * * 1', { timeZone: 'Africa/Douala' })
+  async weeklyReminder(): Promise<{ flagged: number; withdrawals: number }> {
+    const [flagged, flaggedOld, waiting] = await Promise.all([
+      this.checkouts.find({ needsReview: true }).select('amount').lean().exec(),
+      this.transactions.find({ 'metadata.needsReview': true }).select('amount').lean().exec(),
+      this.transactions
+        .find({ type: TransactionType.WALLET_WITHDRAWAL, status: 'pending' })
+        .select('amount createdAt')
+        .lean()
+        .exec(),
+    ]);
+    const flaggedCount = flagged.length + flaggedOld.length;
+    const flaggedTotal = [...flagged, ...flaggedOld].reduce((sum, x: any) => sum + (Number(x.amount) || 0), 0);
+    const waitingTotal = waiting.reduce((sum, x: any) => sum + (Number(x.amount) || 0), 0);
+    if (!flaggedCount && !waiting.length) return { flagged: 0, withdrawals: 0 };
+
+    const fcfa = (n: number) => `${Math.round(n).toLocaleString('fr-FR')} XAF`;
+    const parts: string[] = [];
+    if (flaggedCount) parts.push(`${flaggedCount} flagged payment${flaggedCount > 1 ? 's' : ''} (${fcfa(flaggedTotal)}) to check and refund in CamerPay`);
+    if (waiting.length) parts.push(`${waiting.length} withdrawal${waiting.length > 1 ? 's' : ''} (${fcfa(waitingTotal)}) to send by hand`);
+    try {
+      await this.notifications()?.notifyAdmins({
+        title: 'Weekly money check',
+        message: `Still open: ${parts.join(', and ')}. Admin → Finances (payments to review) and Admin → Withdrawals to send.`,
+        link: flaggedCount ? '/admin/finances' : '/admin/withdrawals',
+        metadata: { kind: 'weekly_money_check', flagged: flaggedCount, flaggedTotal, withdrawals: waiting.length, withdrawalsTotal: waitingTotal },
+      });
+    } catch (e: any) {
+      this.logger.error(`Weekly money check not sent: ${e?.message}`);
+    }
+    this.logger.log(`Weekly money check: ${flaggedCount} flagged, ${waiting.length} withdrawals waiting`);
+    return { flagged: flaggedCount, withdrawals: waiting.length };
   }
 
   // ════════════════════════════════════════════════════════════════════════
