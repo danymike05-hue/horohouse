@@ -405,23 +405,43 @@ export class WalletService {
 
   /** Withdrawals; `pending` = still to send (oldest first), the others newest first */
   async adminListWithdrawals(status: 'pending' | 'success' | 'failed' = 'pending', limit = 100) {
+    // Plain ids, then the people and wallets looked up directly: a populate that finds
+    // nobody turns the id into null, and the host and the saved account were lost with it.
     const rows: any[] = await this.transactionModel
       .find({ type: TransactionType.WALLET_WITHDRAWAL, status })
       .sort({ createdAt: status === 'pending' ? 1 : -1 })
       .limit(Math.min(Math.max(limit, 1), 200))
-      .populate('userId', 'name email phoneNumber profilePicture')
       .lean();
-    // Older withdrawals didn't save where they go: the host's saved payout method instead
+    const ids = [...new Set(rows.map((r) => String(r.userId ?? '')).filter((id) => Types.ObjectId.isValid(id)))].map(
+      (id) => new Types.ObjectId(id),
+    );
+    let users: any[] = [];
+    try {
+      users = await this.transactionModel.db
+        .model('User')
+        .find({ _id: { $in: ids } })
+        .select('name firstName lastName email phoneNumber profilePicture')
+        .lean();
+    } catch (e: any) {
+      this.logger.warn(`adminListWithdrawals: could not read users: ${e?.message}`);
+    }
     const wallets: any[] = await this.walletModel
-      .find({ userId: { $in: rows.map((r) => r.userId?._id ?? r.userId) } })
+      .find({ userId: { $in: ids } })
       .select('userId mobileMoneyNumber mobileMoneyProvider bankAccountNumber bankAccountName bankName')
       .lean();
+    const userOf = new Map(users.map((u) => [String(u._id), u]));
     const walletOf = new Map(wallets.map((w) => [String(w.userId), w]));
+
     return rows.map((r) => {
-      const w: any = walletOf.get(String(r.userId?._id ?? r.userId)) ?? {};
+      const uid = String(r.userId ?? '');
+      const u: any = userOf.get(uid);
+      const w: any = walletOf.get(uid) ?? {};
       const d = r.metadata?.destination;
       const method: string = d?.method ?? r.paymentMethod;
       const bank = method === 'bank_transfer';
+      const savedPhone = bank ? undefined : w.mobileMoneyNumber;
+      const savedAccount = bank ? w.bankAccountNumber : undefined;
+      const name = u?.name || [u?.firstName, u?.lastName].filter(Boolean).join(' ') || undefined;
       return {
         id: String(r._id),
         reference: r.flutterwaveReference,
@@ -430,18 +450,24 @@ export class WalletService {
         status: r.status,
         createdAt: r.createdAt,
         completedAt: r.completedAt,
-        host:
-          r.userId && typeof r.userId === 'object'
-            ? { id: String(r.userId._id), name: r.userId.name, email: r.userId.email, phoneNumber: r.userId.phoneNumber, photo: r.userId.profilePicture }
-            : { id: String(r.userId) },
+        auto: !!r.metadata?.auto,
+        host: {
+          id: uid,
+          name,
+          email: u?.email,
+          phoneNumber: u?.phoneNumber,
+          photo: u?.profilePicture,
+          /** No account with this id any more (deleted) */
+          missing: !u,
+        },
         destination: {
           method,
-          phoneNumber: d?.phoneNumber ?? (bank ? undefined : w.mobileMoneyNumber),
-          accountNumber: d?.accountNumber ?? (bank ? w.bankAccountNumber : undefined),
+          phoneNumber: d?.phoneNumber ?? savedPhone,
+          accountNumber: d?.accountNumber ?? savedAccount,
           accountName: d?.accountName ?? (bank ? w.bankAccountName : undefined),
           bankName: bank ? w.bankName : undefined,
-          /** True when it comes from the saved payout method, not the withdrawal itself */
-          saved: !d,
+          /** From the host's saved payout method, not the withdrawal itself */
+          saved: !d && !!(savedPhone || savedAccount),
         },
         manual: r.metadata?.manual,
       };
