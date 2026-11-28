@@ -164,3 +164,51 @@ describe('automatic withdrawal', () => {
     expect(notifications.create).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('withdrawals go to the saved payout method only', () => {
+  const wallet = (over: any = {}) => ({
+    availableBalance: 50000,
+    balance: 50000,
+    mobileMoneyNumber: '677123456',
+    mobileMoneyProvider: 'MTN',
+    ...over,
+  });
+  const setup = (w: any) => {
+    const b = build();
+    jest.spyOn(b.service, 'getOrCreateWallet').mockResolvedValue(w);
+    const debit = jest.spyOn(b.service, 'debitWallet').mockResolvedValue({} as any);
+    return { ...b, debit };
+  };
+  const codeOf = async (p: Promise<any>) => {
+    try {
+      await p;
+      return 'ok';
+    } catch (e: any) {
+      return e?.getResponse?.()?.code ?? e?.message;
+    }
+  };
+
+  it('refuses when nothing is saved', async () => {
+    const { service, debit } = setup(wallet({ mobileMoneyNumber: undefined }));
+    expect(await codeOf(service.requestWithdrawal(HOST, 10000, 'mtn_momo', { phoneNumber: '677123456' }))).toBe('NO_PAYOUT_METHOD');
+    expect(debit).not.toHaveBeenCalled();
+  });
+
+  it('refuses another number than the saved one', async () => {
+    const { service, debit } = setup(wallet());
+    expect(await codeOf(service.requestWithdrawal(HOST, 10000, 'mtn_momo', { phoneNumber: '+237 699 00 00 00' }))).toBe('USE_SAVED_METHOD');
+    expect(debit).not.toHaveBeenCalled();
+  });
+
+  it('waits a day after the payout method changed', async () => {
+    const { service, debit } = setup(wallet({ payoutMethodChangedAt: new Date(Date.now() - 3_600_000) }));
+    expect(await codeOf(service.requestWithdrawal(HOST, 10000, 'mtn_momo', { phoneNumber: '677123456' }))).toBe('PAYOUT_METHOD_NEW');
+    expect(debit).not.toHaveBeenCalled();
+  });
+
+  it('accepts the saved number, written any way', async () => {
+    const { service, debit } = setup(wallet({ payoutMethodChangedAt: new Date(Date.now() - 2 * 86_400_000) }));
+    await codeOf(service.requestWithdrawal(HOST, 10000, 'mtn_momo', { phoneNumber: '+237 6 77 12 34 56' }));
+    expect(debit).toHaveBeenCalledWith(HOST, 10000, 'Withdrawal via mtn_momo', expect.stringMatching(/^WD-/), { availableOnly: true });
+  });
+});

@@ -69,6 +69,10 @@ export class Wallet {
   @Prop({ enum: ['MTN', 'ORANGE'] })
   mobileMoneyProvider?: string;
 
+  /** When the payout method (Mobile Money number or bank account) last changed: withdrawals wait a day */
+  @Prop()
+  payoutMethodChangedAt?: Date;
+
   /** Automatic withdrawal had nowhere to send the money: when the host was last told */
   @Prop()
   autoWithdrawalNeedsMethodAt?: Date;

@@ -20,6 +20,8 @@ export class WalletService {
   private readonly logger = new Logger(WalletService.name);
 
   private readonly MIN_WITHDRAWAL = 5_000; // XAF
+  /** Withdrawals to a payout method open this long after it changed */
+  private readonly PAYOUT_METHOD_WAIT_MS = 24 * 3_600_000;
 
   private readonly COMMISSION_RATES = {
     PROPERTY_SALE: 0.05,
@@ -244,31 +246,43 @@ export class WalletService {
       throw new BadRequestException('Insufficient balance');
     }
 
+    // Only to the saved payout method. Before, any number typed here was paid (with an alert
+    // after the fact): a stolen session could empty the balance to its own number.
+    const to = this.savedPayoutFor(wallet, withdrawalMethod);
+    if (!to) {
+      throw new BadRequestException({
+        code: 'NO_PAYOUT_METHOD',
+        message: withdrawalMethod === 'bank_transfer'
+          ? 'Add your bank account in Settings → Payments first.'
+          : 'Add your Mobile Money number in Settings → Payments first.',
+      });
+    }
+    const typed = withdrawalMethod === 'bank_transfer' ? accountDetails.accountNumber : accountDetails.phoneNumber;
+    const same = (a?: string, b?: string) =>
+      String(a ?? '').replace(/\D/g, '').replace(/^237/, '') === String(b ?? '').replace(/\D/g, '').replace(/^237/, '');
+    const savedValue = withdrawalMethod === 'bank_transfer' ? to.details.accountNumber : to.details.phoneNumber;
+    if (typed && !same(typed, savedValue)) {
+      throw new BadRequestException({
+        code: 'USE_SAVED_METHOD',
+        message: 'Withdrawals only go to your saved payout method. Change it in Settings → Payments.',
+      });
+    }
+    // A new payout method waits a day: if it wasn't the host, they have time to react
+    const changedAt = wallet.payoutMethodChangedAt ? new Date(wallet.payoutMethodChangedAt).getTime() : 0;
+    const readyAt = changedAt + this.PAYOUT_METHOD_WAIT_MS;
+    if (readyAt > Date.now()) {
+      throw new BadRequestException({
+        code: 'PAYOUT_METHOD_NEW',
+        readyAt: new Date(readyAt).toISOString(),
+        message: 'Your payout method changed less than 24 hours ago. For your safety, withdrawals to it open 24 hours after the change.',
+      });
+    }
+    withdrawalMethod = to.method;
+    accountDetails = { ...to.details };
+
     const reference = `${opts.auto ? 'AWD' : 'WD'}-${new Types.ObjectId().toHexString()}`;
 
-    // Reserve funds immediately (only from what's available, never from held earnings)
     await this.debitWallet(userId, amount, `Withdrawal via ${withdrawalMethod}`, reference, { availableOnly: true });
-
-    // Sent somewhere other than the saved payout method: tell the owner, in case it isn't them
-    const digits = (v?: string) => String(v ?? '').replace(/\D/g, '').replace(/^237/, '');
-    const savedTo = withdrawalMethod === 'bank_transfer' ? wallet.bankAccountNumber : wallet.mobileMoneyNumber;
-    const sentTo = withdrawalMethod === 'bank_transfer' ? accountDetails.accountNumber : accountDetails.phoneNumber;
-    if (digits(sentTo) && digits(sentTo) !== digits(savedTo)) {
-      const masked = `•••• ${digits(sentTo).slice(-4)}`;
-      this.notificationsService.create(
-        {
-          userId,
-          type: NotificationType.SYSTEM,
-          title: 'Withdrawal to a new account',
-          message: `${amount.toLocaleString('fr-FR')} XAF is being sent to ${masked}, which isn't your saved payout method. If this wasn't you, change your password and contact support now.`,
-          link: '/settings/payments',
-        } as any,
-        {
-          title: 'Retrait vers un nouveau compte',
-          message: `${amount.toLocaleString('fr-FR')} XAF est envoyé vers ${masked}, qui n'est pas votre moyen de versement enregistré. Si ce n'est pas vous, changez votre mot de passe et contactez le support immédiatement.`,
-        },
-      ).catch((e: any) => this.logger.warn(`Withdrawal alert not sent for ${userId}: ${e?.message}`));
-    }
 
     const transaction = new this.transactionModel({
       userId: new Types.ObjectId(userId),
@@ -581,11 +595,15 @@ export class WalletService {
     },
   ): Promise<WalletDocument> {
     const wallet = await this.getOrCreateWallet(userId);
+    const changed = !!wallet.bankAccountNumber && wallet.bankAccountNumber !== bankDetails.accountNumber;
+    const added = !wallet.bankAccountNumber;
     wallet.bankAccountName = bankDetails.accountName;
     wallet.bankAccountNumber = bankDetails.accountNumber;
     wallet.bankName = bankDetails.bankName;
     wallet.bankCode = bankDetails.bankCode;
+    if (changed || added) wallet.payoutMethodChangedAt = new Date();
     await wallet.save();
+    if (changed || added) this.tellPayoutMethodChanged(userId, `•••• ${String(bankDetails.accountNumber).slice(-4)}`);
     this.logger.log(`Bank account updated for user: ${userId}`);
     return wallet;
   }
@@ -595,11 +613,34 @@ export class WalletService {
     mobileMoneyDetails: { phoneNumber: string; provider: 'MTN' | 'ORANGE' },
   ): Promise<WalletDocument> {
     const wallet = await this.getOrCreateWallet(userId);
+    const digits = (v?: string) => String(v ?? '').replace(/\D/g, '').replace(/^237/, '');
+    const changed = digits(wallet.mobileMoneyNumber) !== digits(mobileMoneyDetails.phoneNumber);
     wallet.mobileMoneyNumber = mobileMoneyDetails.phoneNumber;
     wallet.mobileMoneyProvider = mobileMoneyDetails.provider;
+    if (changed) wallet.payoutMethodChangedAt = new Date();
     await wallet.save();
+    if (changed) this.tellPayoutMethodChanged(userId, `•••• ${digits(mobileMoneyDetails.phoneNumber).slice(-4)}`);
     this.logger.log(`Mobile Money account updated for user: ${userId}`);
     return wallet;
+  }
+
+  /** The payout method changed: the host hears about it, in case it wasn't them */
+  private tellPayoutMethodChanged(userId: string, masked: string): void {
+    this.notificationsService
+      .create(
+        {
+          userId,
+          type: NotificationType.SYSTEM,
+          title: 'Payout method changed',
+          message: `Your earnings will now go to ${masked}. Withdrawals to it open in 24 hours. If this wasn't you, change your password and contact support now.`,
+          link: '/settings/payments',
+        } as any,
+        {
+          title: 'Moyen de versement modifié',
+          message: `Vos revenus iront désormais vers ${masked}. Les retraits vers ce compte ouvrent dans 24 heures. Si ce n'est pas vous, changez votre mot de passe et contactez le support immédiatement.`,
+        },
+      )
+      .catch((e: any) => this.logger.warn(`Payout method notice failed for ${userId}: ${e?.message}`));
   }
 
   async enableAutoWithdrawal(userId: string, threshold: number): Promise<WalletDocument> {
@@ -643,6 +684,12 @@ export class WalletService {
     return null;
   }
 
+  /** The saved destination for this kind of withdrawal (Mobile Money or bank) */
+  private savedPayoutFor(wallet: any, method: string) {
+    const to = this.savedPayoutOf(method === 'bank_transfer' ? { ...wallet, mobileMoneyNumber: undefined } : { ...wallet, bankAccountNumber: undefined });
+    return to;
+  }
+
   /** Requests the automatic withdrawal when it's due. True when one was requested. */
   async autoWithdrawIfDue(userId: string): Promise<boolean> {
     const wallet: any = await this.walletModel.findOne({ userId: new Types.ObjectId(userId) }).lean();
@@ -659,6 +706,11 @@ export class WalletService {
       'metadata.auto': true,
     });
     if (waiting) return false;
+
+    // A payout method changed in the last day: wait (requestWithdrawal would refuse it anyway)
+    if (wallet.payoutMethodChangedAt && Date.now() - new Date(wallet.payoutMethodChangedAt).getTime() < this.PAYOUT_METHOD_WAIT_MS) {
+      return false;
+    }
 
     const to = this.savedPayoutOf(wallet);
     if (!to) {
@@ -785,6 +837,7 @@ export class WalletService {
       bankCode: wallet.bankCode,
       mobileMoneyNumber: wallet.mobileMoneyNumber,
       mobileMoneyProvider: wallet.mobileMoneyProvider,
+      payoutMethodChangedAt: wallet.payoutMethodChangedAt,
       currency: 'XAF',
     };
   }
